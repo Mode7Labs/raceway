@@ -1,0 +1,31 @@
+{
+  "name": "causeway-cli",
+  "version": "0.1.0",
+  "description": "CLI tool for Causeway instrumentation",
+  "bin": {
+    "causeway": "./dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc --watch"
+  },
+  "keywords": [
+    "causeway",
+    "instrumentation",
+    "cli"
+  ],
+  "author": "Causeway",
+  "license": "MIT",
+  "dependencies": {
+    "@babel/core": "^7.23.0",
+    "@babel/preset-env": "^7.23.0",
+    "@babel/preset-typescript": "^7.23.0",
+    "babel-plugin-causeway": "file:../babel-plugin",
+    "commander": "^11.0.0",
+    "glob": "^10.3.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.0.0"
+  }
+}

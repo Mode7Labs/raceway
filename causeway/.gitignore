@@ -1,0 +1,82 @@
+# Rust
+target/
+**/*.rs.bk
+*.pdb
+
+# Keep Cargo.lock for binary crates (CLI app)
+# Cargo.lock
+
+# Node.js / Web
+node_modules/
+dist/
+*.log
+.npm
+.pnpm-store/
+*.tsbuildinfo
+.turbo/
+
+# Build outputs
+build/
+out/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+.venv
+.pytest_cache/
+*.egg-info/
+
+# IDEs
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.vs/
+
+# OS
+.DS_Store
+Thumbs.db
+*.bak
+
+# Causeway/Raceway data
+*.causeway
+traces/
+*.trace
+
+# Logs
+*.log
+debug.log
+server.log
+server-verbose.log
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Test artifacts
+coverage/
+.nyc_output/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Lock files (keep only the ones you need)
+# yarn.lock
+# pnpm-lock.yaml
+# package-lock.json
+
+# Build artifacts
+*.wasm
+*.wasm.gz
+
+# Claude Code
+.claude/
