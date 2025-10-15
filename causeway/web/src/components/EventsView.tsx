@@ -1,4 +1,7 @@
 import { type Event } from '../types';
+import { cn } from '@/lib/utils';
+import { Badge } from './ui/badge';
+import { getEventKindBadgeColor, getThreadIdColor } from '@/lib/event-colors';
 
 interface EventsViewProps {
   events: Event[];
@@ -14,6 +17,10 @@ export function EventsView({ events, selectedEventId, onEventSelect }: EventsVie
       const key = keys[0];
       const value = kind[key];
       if (typeof value === 'object' && value !== null) {
+        // For StateChange, extract the access_type value and format nicely
+        if (key === 'StateChange' && value.access_type) {
+          return `StateChange | ${value.access_type}`;
+        }
         const subKeys = Object.keys(value);
         if (subKeys.length > 0) {
           return `${key}::${subKeys[0]}`;
@@ -34,22 +41,42 @@ export function EventsView({ events, selectedEventId, onEventSelect }: EventsVie
   };
 
   return (
-    <div className="events-list">
+    <div className="space-y-1.5">
       {events.map((event) => {
         const isSelected = event.id === selectedEventId;
         const eventKind = getEventKind(event.kind);
         const timestamp = formatTimestamp(event.timestamp);
 
         return (
-          <div
+          <button
             key={event.id}
-            className={`event-item ${isSelected ? 'selected' : ''}`}
             onClick={() => onEventSelect(event.id)}
+            className={cn(
+              "w-full text-left px-3 py-2.5 rounded-md transition-all flex items-center justify-between gap-3 cursor-pointer",
+              "hover:bg-accent/50",
+              isSelected ? "bg-muted" : "bg-card/50"
+            )}
           >
-            <span className="event-timestamp">[{timestamp}]</span>
-            <span className="event-kind">{eventKind}</span>
-            <span className="event-thread">Thread: {event.metadata.thread_id}</span>
-          </div>
+            <div className="flex items-center gap-2 flex-wrap text-xs min-w-0">
+              <span className="font-mono text-muted-foreground text-[11px]">
+                {timestamp}
+              </span>
+              <Badge className={cn("font-mono text-[10px] border", getEventKindBadgeColor(eventKind))}>
+                {eventKind}
+              </Badge>
+              <span className="text-[11px]">
+                <span className="text-muted-foreground">Thread </span>
+                <span className={cn("font-mono", getThreadIdColor(event.metadata.thread_id))}>
+                  {event.metadata.thread_id}
+                </span>
+              </span>
+            </div>
+            {isSelected && (
+              <svg className="w-3 h-3 flex-shrink-0 text-primary" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M4 2L8 6L4 10" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+              </svg>
+            )}
+          </button>
         );
       })}
     </div>

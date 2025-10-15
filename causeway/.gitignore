@@ -80,3 +80,6 @@ temp/
 
 # Claude Code
 .claude/
+
+# Local configuration (use raceway.toml.example as template)
+raceway.toml

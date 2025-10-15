@@ -1,4 +1,8 @@
+import { useState } from 'react';
 import { type Event } from '../types';
+import { cn } from '@/lib/utils';
+import { Badge } from './ui/badge';
+import { getEventKindColor } from '@/lib/event-colors';
 
 interface TreeViewProps {
   events: Event[];
@@ -10,10 +14,11 @@ interface TreeNode {
   event: Event;
   children: TreeNode[];
   depth: number;
-  isLastChild: boolean[];
 }
 
 export function TreeView({ events, selectedEventId, onEventSelect }: TreeViewProps) {
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+
   const getEventKind = (kind: Record<string, any>): string => {
     if (typeof kind === 'string') return kind;
     const keys = Object.keys(kind);
@@ -55,56 +60,96 @@ export function TreeView({ events, selectedEventId, onEventSelect }: TreeViewPro
       }
     }
 
-    const buildNode = (event: Event, depth: number, isLastChild: boolean[]): TreeNode => {
+    const buildNode = (event: Event, depth: number): TreeNode => {
       const children = childrenMap.get(event.id) || [];
       return {
         event,
         depth,
-        isLastChild,
-        children: children.map((child, idx) =>
-          buildNode(child, depth + 1, [...isLastChild, idx === children.length - 1])
-        ),
+        children: children.map((child) => buildNode(child, depth + 1)),
       };
     };
 
-    return roots.map((root, idx) => buildNode(root, 0, [idx === roots.length - 1]));
+    return roots.map((root) => buildNode(root, 0));
+  };
+
+  const toggleCollapse = (eventId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setCollapsed((prev) => {
+      const newSet = new Set(prev);
+      if (newSet.has(eventId)) {
+        newSet.delete(eventId);
+      } else {
+        newSet.add(eventId);
+      }
+      return newSet;
+    });
   };
 
   const renderNode = (node: TreeNode): JSX.Element[] => {
     const isSelected = node.event.id === selectedEventId;
+    const isCollapsed = collapsed.has(node.event.id);
+    const hasChildren = node.children.length > 0;
     const eventKind = getEventKind(node.event.kind);
     const timestamp = formatTimestamp(node.event.timestamp);
 
-    let prefix = '';
-
-    // Build the tree visualization prefix
-    for (let i = 0; i < node.isLastChild.length - 1; i++) {
-      prefix += node.isLastChild[i] ? '    ' : '│   ';
-    }
-
-    if (node.depth > 0) {
-      prefix += node.isLastChild[node.isLastChild.length - 1] ? '└── ' : '├── ';
-    }
-
-    const childrenIndicator = node.children.length > 0 ? ` [${node.children.length}]` : '';
-
     const elements: JSX.Element[] = [
-      <div
+      <button
         key={node.event.id}
-        className={`tree-node ${isSelected ? 'selected' : ''}`}
         onClick={() => onEventSelect(node.event.id)}
-        style={{ paddingLeft: `${node.depth * 20}px` }}
+        className={cn(
+          "w-full text-left px-3 py-2 rounded-md font-mono text-xs transition-all hover:bg-accent/50 cursor-pointer flex items-center justify-between gap-2",
+          isSelected && "bg-muted"
+        )}
+        style={{ paddingLeft: `${node.depth * 20 + 12}px` }}
       >
-        <span className="tree-prefix">{prefix}</span>
-        <span className="event-timestamp">[{timestamp}]</span>
-        <span className="event-kind">{eventKind}{childrenIndicator}</span>
-      </div>
+        <div className="flex items-center gap-2 min-w-0">
+          {hasChildren ? (
+            <button
+              onClick={(e) => toggleCollapse(node.event.id, e)}
+              className="flex-shrink-0 w-3 h-3 flex items-center justify-center hover:bg-accent rounded transition-colors"
+            >
+              <svg
+                className={cn("w-2.5 h-2.5 transition-transform", isCollapsed && "-rotate-90")}
+                viewBox="0 0 12 12"
+                fill="none"
+                xmlns="http://www.w3.org/2000/svg"
+              >
+                <path
+                  d="M3 4.5L6 7.5L9 4.5"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            </button>
+          ) : (
+            <span className="flex-shrink-0 w-3 h-3 flex items-center justify-center text-muted-foreground/40 text-[10px]">
+              -
+            </span>
+          )}
+          <span className="text-muted-foreground text-[11px]">{timestamp}</span>
+          <span className={cn(getEventKindColor(eventKind))}>{eventKind}</span>
+          {hasChildren && (
+            <Badge variant="outline" className="text-[10px] text-yellow-400/90 border-yellow-500/20 bg-yellow-500/5">
+              {node.children.length}
+            </Badge>
+          )}
+        </div>
+        {isSelected && (
+          <svg className="w-3 h-3 flex-shrink-0 text-primary" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M4 2L8 6L4 10" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+          </svg>
+        )}
+      </button>
     ];
 
-    // Recursively render children
-    node.children.forEach((child) => {
-      elements.push(...renderNode(child));
-    });
+    // Recursively render children if not collapsed
+    if (!isCollapsed) {
+      node.children.forEach((child) => {
+        elements.push(...renderNode(child));
+      });
+    }
 
     return elements;
   };
@@ -112,7 +157,7 @@ export function TreeView({ events, selectedEventId, onEventSelect }: TreeViewPro
   const tree = buildTree();
 
   return (
-    <div className="tree-view">
+    <div className="space-y-0.5">
       {tree.flatMap((root) => renderNode(root))}
     </div>
   );

@@ -61,6 +61,7 @@ const causeway = {
         duration_ns: null,
       },
       causality_vector: [],
+      lock_set: [],
     };
 
     trace.events.push(event);

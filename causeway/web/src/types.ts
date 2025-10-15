@@ -152,8 +152,37 @@ export interface VariableAccess {
   is_race: boolean;
 }
 
+// Global analysis response types (extends AnalysisResponse)
+export interface GlobalAnalysisResponse {
+  success: boolean;
+  data?: GlobalAnalysisData;
+}
+
+export interface GlobalAnalysisData {
+  total_traces: number;
+  total_events: number;
+  concurrent_events: number;
+  potential_races: number;
+  anomalies: string[];
+  race_details?: GlobalRaceDetail[];
+}
+
+export interface GlobalRaceDetail {
+  severity: string;
+  variable: string;
+  trace1_id: string;
+  trace2_id: string;
+  event1_thread: string;
+  event2_thread: string;
+  event1_location: string;
+  event2_location: string;
+  event1_timestamp: string;
+  event2_timestamp: string;
+  description: string;
+}
+
 // UI State Types
-export type ViewMode = 'events' | 'tree' | 'critical-path' | 'anomalies' | 'dependencies' | 'audit-trail';
+export type ViewMode = 'overview' | 'events' | 'critical-path' | 'dependencies' | 'audit-trail' | 'anomalies';
 
 export interface AppState {
   traces: string[];

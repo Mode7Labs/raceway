@@ -6,7 +6,7 @@ use axum::{
     routing::{get, post},
     Router,
 };
-use raceway_core::{RacewayEngine, Event};
+use raceway_core::{RacewayEngine, Event, Config};
 use raceway_core::engine::EngineConfig;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -59,29 +59,66 @@ struct ServerStatus {
     traces_active: usize,
 }
 
-pub async fn start_server(host: String, port: u16, verbose: bool) -> Result<()> {
-    // Initialize tracing
+pub async fn start_server(config: Config) -> Result<()> {
+    // Initialize tracing based on config
+    let log_level = match config.logging.level.to_lowercase().as_str() {
+        "trace" => tracing::Level::TRACE,
+        "debug" => tracing::Level::DEBUG,
+        "info" => tracing::Level::INFO,
+        "warn" => tracing::Level::WARN,
+        "error" => tracing::Level::ERROR,
+        _ => tracing::Level::INFO,
+    };
+
     tracing_subscriber::fmt()
-        .with_target(false)
+        .with_target(config.logging.include_modules)
+        .with_max_level(log_level)
         .compact()
         .init();
 
-    if verbose {
+    if config.server.verbose {
         println!("[{}] 🔍 Verbose logging enabled", chrono::Local::now().format("%H:%M:%S%.3f"));
+        println!("[{}] 📝 Loaded configuration from raceway.toml", chrono::Local::now().format("%H:%M:%S%.3f"));
+        println!("[{}] 💾 Storage backend: {}", chrono::Local::now().format("%H:%M:%S%.3f"), config.storage.backend);
     }
 
-    // Create engine
-    let config = EngineConfig::default();
-    let engine = Arc::new(RacewayEngine::new(config));
+    // Create engine config from main config
+    let engine_config = EngineConfig {
+        buffer_size: config.engine.buffer_size,
+        batch_size: config.engine.batch_size,
+        flush_interval_ms: config.engine.flush_interval_ms,
+        enable_anomaly_detection: config.anomaly_detection.enabled,
+        enable_race_detection: config.race_detection.enabled,
+    };
+
+    let engine = Arc::new(RacewayEngine::new(engine_config));
     engine.start().await?;
 
-    let state = AppState { engine, verbose };
+    let state = AppState {
+        engine,
+        verbose: config.server.verbose,
+    };
 
-    // Configure CORS
-    let cors = CorsLayer::new()
-        .allow_origin(Any)
-        .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
-        .allow_headers(Any);
+    // Configure CORS based on config
+    let cors = if config.server.cors_enabled {
+        if config.development.cors_allow_all || config.server.cors_origins.contains(&"*".to_string()) {
+            CorsLayer::new()
+                .allow_origin(Any)
+                .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
+                .allow_headers(Any)
+        } else {
+            // TODO: Parse specific origins from config.server.cors_origins
+            CorsLayer::new()
+                .allow_origin(Any)
+                .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
+                .allow_headers(Any)
+        }
+    } else {
+        CorsLayer::new()
+            .allow_origin(Any)
+            .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
+            .allow_headers(Any)
+    };
 
     // Build router
     let app = Router::new()
@@ -101,7 +138,7 @@ pub async fn start_server(host: String, port: u16, verbose: bool) -> Result<()> 
         .layer(cors)
         .with_state(state);
 
-    let addr = format!("{}:{}", host, port);
+    let addr = format!("{}:{}", config.server.host, config.server.port);
     let listener = tokio::net::TcpListener::bind(&addr).await?;
 
     println!("\n🏁 Raceway Server Started!");
@@ -113,6 +150,11 @@ pub async fn start_server(host: String, port: u16, verbose: bool) -> Result<()> 
     println!("   🎯 Get trace:     http://{}/api/traces/:id", addr);
     println!("   🤖 Analyze:       http://{}/api/traces/:id/analyze", addr);
     println!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    if config.server.verbose {
+        println!("   💾 Storage:       {} backend", config.storage.backend);
+        println!("   🔍 Race detect:   {}", if config.race_detection.enabled { "enabled" } else { "disabled" });
+        println!("   🚨 Anomalies:     {}", if config.anomaly_detection.enabled { "enabled" } else { "disabled" });
+    }
     println!("\n✨ Ready to detect races!\n");
 
     axum::serve(listener, app).await?;

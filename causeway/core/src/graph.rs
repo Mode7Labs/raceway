@@ -328,12 +328,9 @@ impl CausalGraph {
                             // Use vector clocks for happens-before check (more precise than graph path)
                             if !self.happens_before_vc(&events[i], &events[j])
                                && !self.happens_before_vc(&events[j], &events[i]) {
-                                // Check if events overlap in time
-                                if self.events_overlap_in_time(&events[i], &events[j]) {
-                                    // Check if accesses were protected by the same lock
-                                    if !self.protected_by_same_lock(&events[i], &events[j]) {
-                                        concurrent_pairs.push((events[i].clone(), events[j].clone()));
-                                    }
+                                // Check if accesses were protected by the same lock
+                                if !self.protected_by_same_lock(&events[i], &events[j]) {
+                                    concurrent_pairs.push((events[i].clone(), events[j].clone()));
                                 }
                             }
                         }
@@ -947,12 +944,9 @@ impl CausalGraph {
                             // Use vector clocks for happens-before check
                             if !self.happens_before_vc(event1, event2)
                                && !self.happens_before_vc(event2, event1) {
-                                // Check if events overlap in time
-                                if self.events_overlap_in_time(event1, event2) {
-                                    // Check if accesses were protected by the same lock
-                                    if !self.protected_by_same_lock(event1, event2) {
-                                        concurrent_pairs.push((event1.clone(), event2.clone()));
-                                    }
+                                // Check if accesses were protected by the same lock
+                                if !self.protected_by_same_lock(event1, event2) {
+                                    concurrent_pairs.push((event1.clone(), event2.clone()));
                                 }
                             }
                         }

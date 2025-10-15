@@ -1,5 +1,7 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
+use raceway_core::Config;
+use std::path::PathBuf;
 
 mod tui;
 mod server;
@@ -8,6 +10,10 @@ mod server;
 #[command(name = "causeway")]
 #[command(about = "AI-powered causal debugging for distributed systems", long_about = None)]
 struct Cli {
+    /// Path to configuration file
+    #[arg(short, long, default_value = "raceway.toml")]
+    config: PathBuf,
+
     #[command(subcommand)]
     command: Commands,
 }
@@ -16,20 +22,16 @@ struct Cli {
 enum Commands {
     /// Start the Causeway server
     Serve {
-        #[arg(short, long, default_value = "8080")]
-        port: u16,
-
-        #[arg(short, long, default_value = "127.0.0.1")]
-        host: String,
-
+        /// Override verbose setting from config
         #[arg(short, long)]
         verbose: bool,
     },
 
     /// Launch interactive TUI for trace visualization
     Tui {
-        #[arg(short, long, default_value = "http://localhost:8080")]
-        server: String,
+        /// Override server URL from config
+        #[arg(short, long)]
+        server: Option<String>,
     },
 
     /// Analyze a specific trace
@@ -37,8 +39,9 @@ enum Commands {
         #[arg(short, long)]
         trace_id: String,
 
-        #[arg(short, long, default_value = "http://localhost:8080")]
-        server: String,
+        /// Override server URL from config
+        #[arg(short, long)]
+        server: Option<String>,
     },
 
     /// Export trace data
@@ -49,8 +52,9 @@ enum Commands {
         #[arg(short, long)]
         output: String,
 
-        #[arg(short, long, default_value = "http://localhost:8080")]
-        server: String,
+        /// Override server URL from config
+        #[arg(short, long)]
+        server: Option<String>,
     },
 }
 
@@ -58,22 +62,45 @@ enum Commands {
 async fn main() -> Result<()> {
     let cli = Cli::parse();
 
+    // Load configuration
+    let mut config = if cli.config.exists() {
+        println!("📝 Loading configuration from {:?}", cli.config);
+        Config::from_file(&cli.config)?
+    } else {
+        println!("⚠️  Config file not found at {:?}, using defaults", cli.config);
+        Config::default()
+    };
+
+    // Validate configuration
+    config.validate()?;
+
+    // Build server URL from config
+    let server_url = format!("http://{}:{}", config.server.host, config.server.port);
+
     match cli.command {
-        Commands::Serve { port, host, verbose } => {
-            println!("🚀 Starting Causeway server on {}:{}", host, port);
-            server::start_server(host, port, verbose).await?;
+        Commands::Serve { verbose } => {
+            // Allow CLI flag to override config
+            if verbose {
+                config.server.verbose = true;
+            }
+
+            println!("🚀 Starting Raceway server on {}:{}", config.server.host, config.server.port);
+            server::start_server(config).await?;
         }
         Commands::Tui { server } => {
-            println!("🎨 Launching Causeway TUI...");
-            tui::launch_tui(&server).await?;
+            let server_url = server.unwrap_or(server_url);
+            println!("🎨 Launching Causeway TUI (connecting to {})...", server_url);
+            tui::launch_tui(&server_url).await?;
         }
         Commands::Analyze { trace_id, server } => {
-            println!("🔍 Analyzing trace {}...", trace_id);
-            analyze_trace(&trace_id, &server).await?;
+            let server_url = server.unwrap_or(server_url);
+            println!("🔍 Analyzing trace {} (server: {})...", trace_id, server_url);
+            analyze_trace(&trace_id, &server_url).await?;
         }
         Commands::Export { trace_id, output, server } => {
-            println!("📦 Exporting trace {} to {}...", trace_id, output);
-            export_trace(&trace_id, &output, &server).await?;
+            let server_url = server.unwrap_or(server_url);
+            println!("📦 Exporting trace {} to {} (server: {})...", trace_id, output, server_url);
+            export_trace(&trace_id, &output, &server_url).await?;
         }
     }
 

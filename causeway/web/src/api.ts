@@ -46,4 +46,8 @@ export class RacewayAPI {
   static async getAuditTrail(traceId: string, variable: string): Promise<AuditTrailResponse> {
     return this.fetchJSON<AuditTrailResponse>(`${API_BASE}/api/traces/${traceId}/audit-trail/${encodeURIComponent(variable)}`);
   }
+
+  static async analyzeGlobal(): Promise<AnalysisResponse> {
+    return this.fetchJSON<AnalysisResponse>(`${API_BASE}/api/analyze/global`);
+  }
 }
