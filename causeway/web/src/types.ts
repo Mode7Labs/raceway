@@ -38,6 +38,26 @@ export interface AnomaliesResponse {
   data?: AnomaliesData;
 }
 
+export interface FullTraceAnalysisResponse {
+  success: boolean;
+  data?: FullTraceAnalysisData;
+}
+
+export interface FullTraceAnalysisData {
+  trace_id: string;
+  events: Event[];
+  audit_trails: Record<string, VariableAccess[]>;
+  analysis: {
+    concurrent_events: number;
+    potential_races: number;
+    anomalies: string[];
+    race_details: RaceDetail[];
+  };
+  critical_path: CriticalPathData | null;
+  anomalies: DetectedAnomaly[];
+  dependencies: DependenciesData | null;
+}
+
 // Data Types
 export interface Event {
   id: string;

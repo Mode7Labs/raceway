@@ -174,6 +174,7 @@ app.get('/balance/:account', (req, res) => {
         old_value: null,
         new_value: balance,
         location: 'index.js:145',
+        access_type: 'Read',
       },
     },
     trace
@@ -217,6 +218,7 @@ app.post('/transfer', async (req, res) => {
         old_value: null,
         new_value: currentBalance,
         location: 'index.js:190 (READ)',
+        access_type: 'Read',
       },
     },
     trace
@@ -243,6 +245,7 @@ app.post('/transfer', async (req, res) => {
         old_value: currentBalance,
         new_value: newBalance,
         location: 'index.js:217 (WRITE)',
+        access_type: 'Write',
       },
     },
     trace
@@ -259,6 +262,7 @@ app.post('/transfer', async (req, res) => {
         old_value: accounts[to].balance - amount,
         new_value: accounts[to].balance,
         location: 'index.js:233',
+        access_type: 'Write',
       },
     },
     trace

@@ -6,6 +6,7 @@ import {
   AnomaliesResponse,
   DependenciesResponse,
   AuditTrailResponse,
+  FullTraceAnalysisResponse,
 } from './types';
 
 const API_BASE = '';  // Empty because we're using Vite proxy
@@ -49,5 +50,9 @@ export class RacewayAPI {
 
   static async analyzeGlobal(): Promise<AnalysisResponse> {
     return this.fetchJSON<AnalysisResponse>(`${API_BASE}/api/analyze/global`);
+  }
+
+  static async getFullTraceAnalysis(traceId: string): Promise<FullTraceAnalysisResponse> {
+    return this.fetchJSON<FullTraceAnalysisResponse>(`${API_BASE}/api/traces/${traceId}`);
   }
 }

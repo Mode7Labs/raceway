@@ -1,6 +1,6 @@
 use crate::event::Event;
-use crossbeam::channel::{bounded, Sender, Receiver};
 use anyhow::Result;
+use crossbeam::channel::{bounded, Receiver, Sender};
 
 /// High-performance event capture system with lock-free queues
 pub struct EventCapture {
@@ -11,15 +11,13 @@ pub struct EventCapture {
 impl EventCapture {
     pub fn new(buffer_size: usize) -> Self {
         let (sender, receiver) = bounded(buffer_size);
-        Self {
-            sender,
-            receiver,
-        }
+        Self { sender, receiver }
     }
 
     /// Capture an event (non-blocking)
     pub fn capture(&self, event: Event) -> Result<()> {
-        self.sender.try_send(event)
+        self.sender
+            .try_send(event)
             .map_err(|e| anyhow::anyhow!("Failed to capture event: {}", e))
     }
 

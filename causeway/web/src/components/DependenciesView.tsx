@@ -79,20 +79,12 @@ export function DependenciesView({ data }: DependenciesViewProps) {
     setServiceFilter('all');
   };
 
-  if (!data) {
-    return (
-      <div className="flex items-center justify-center h-64 text-muted-foreground">
-        Loading dependencies data...
-      </div>
-    );
-  }
-
-  if (data.services.length === 0) {
+  if (!data || data.services.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center h-64 text-center space-y-2">
-        <h3 className="text-lg font-semibold">No services found</h3>
+        <h3 className="text-lg font-semibold">No Service Dependencies</h3>
         <p className="text-sm text-muted-foreground">
-          This trace doesn't contain any service information.
+          This trace doesn't contain any service dependency information
         </p>
       </div>
     );

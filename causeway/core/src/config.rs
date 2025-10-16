@@ -1,6 +1,6 @@
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-use anyhow::{Context, Result};
 
 /// Main configuration structure for Raceway
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -801,11 +801,10 @@ impl Default for Config {
 impl Config {
     /// Load configuration from a TOML file
     pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self> {
-        let contents = std::fs::read_to_string(path.as_ref())
-            .context("Failed to read config file")?;
+        let contents =
+            std::fs::read_to_string(path.as_ref()).context("Failed to read config file")?;
 
-        let config: Config = toml::from_str(&contents)
-            .context("Failed to parse config file")?;
+        let config: Config = toml::from_str(&contents).context("Failed to parse config file")?;
 
         Ok(config)
     }
@@ -827,8 +826,7 @@ impl Config {
 
     /// Load configuration from a TOML string
     pub fn from_str(s: &str) -> Result<Self> {
-        let config: Config = toml::from_str(s)
-            .context("Failed to parse config")?;
+        let config: Config = toml::from_str(s).context("Failed to parse config")?;
 
         Ok(config)
     }
@@ -836,8 +834,7 @@ impl Config {
     /// Get the default configuration as a TOML string
     pub fn default_toml() -> Result<String> {
         let config = Self::default();
-        toml::to_string_pretty(&config)
-            .context("Failed to serialize default config")
+        toml::to_string_pretty(&config).context("Failed to serialize default config")
     }
 
     /// Validate the configuration
@@ -882,7 +879,8 @@ impl Config {
 
         // Validate confidence threshold
         if self.race_detection.confidence_threshold < 0.0
-            || self.race_detection.confidence_threshold > 1.0 {
+            || self.race_detection.confidence_threshold > 1.0
+        {
             anyhow::bail!("Confidence threshold must be between 0.0 and 1.0");
         }
 

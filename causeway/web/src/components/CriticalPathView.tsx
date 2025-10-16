@@ -21,8 +21,11 @@ export function CriticalPathView({ data, events = [] }: CriticalPathViewProps) {
   const [showFilters, setShowFilters] = useState(false);
   if (!data) {
     return (
-      <div className="flex items-center justify-center h-64 text-muted-foreground">
-        Loading critical path data...
+      <div className="flex flex-col items-center justify-center h-64 text-center space-y-2">
+        <h3 className="text-lg font-semibold">Critical Path Not Available</h3>
+        <p className="text-sm text-muted-foreground">
+          Critical path analysis is not yet implemented for this trace
+        </p>
       </div>
     );
   }

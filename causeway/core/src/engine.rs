@@ -1,15 +1,15 @@
 use crate::capture::EventCapture;
-use crate::graph::CausalGraph;
+use crate::storage::StorageBackend;
+use anyhow::Result;
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tokio::task;
-use anyhow::Result;
-use serde::{Deserialize, Serialize};
 
 /// Main engine that coordinates event capture and graph building
 pub struct RacewayEngine {
     capture: Arc<EventCapture>,
-    graph: Arc<CausalGraph>,
+    storage: Arc<dyn StorageBackend>,
     config: EngineConfig,
     running: Arc<RwLock<bool>>,
 }
@@ -36,13 +36,12 @@ impl Default for EngineConfig {
 }
 
 impl RacewayEngine {
-    pub fn new(config: EngineConfig) -> Self {
+    pub fn new(config: EngineConfig, storage: Arc<dyn StorageBackend>) -> Self {
         let capture = Arc::new(EventCapture::new(config.buffer_size));
-        let graph = Arc::new(CausalGraph::new());
 
         Self {
             capture,
-            graph,
+            storage,
             config,
             running: Arc::new(RwLock::new(false)),
         }
@@ -59,12 +58,12 @@ impl RacewayEngine {
 
         // Spawn event processing task
         let capture = Arc::clone(&self.capture);
-        let graph = Arc::clone(&self.graph);
+        let storage = Arc::clone(&self.storage);
         let config = self.config.clone();
         let running = Arc::clone(&self.running);
 
         task::spawn(async move {
-            Self::process_events(capture, graph, config, running).await;
+            Self::process_events(capture, storage, config, running).await;
         });
 
         Ok(())
@@ -79,7 +78,7 @@ impl RacewayEngine {
     /// Process events and build the causal graph
     async fn process_events(
         capture: Arc<EventCapture>,
-        graph: Arc<CausalGraph>,
+        storage: Arc<dyn StorageBackend>,
         config: EngineConfig,
         running: Arc<RwLock<bool>>,
     ) {
@@ -102,10 +101,10 @@ impl RacewayEngine {
                 }
             }
 
-            // Add events to graph
+            // Add events to storage
             for event in batch {
-                if let Err(e) = graph.add_event(event) {
-                    eprintln!("Failed to add event to graph: {}", e);
+                if let Err(e) = storage.add_event(event).await {
+                    eprintln!("Failed to add event to storage: {}", e);
                 }
             }
 
@@ -119,27 +118,31 @@ impl RacewayEngine {
         Arc::clone(&self.capture)
     }
 
-    /// Get the causal graph
-    pub fn graph(&self) -> Arc<CausalGraph> {
-        Arc::clone(&self.graph)
+    /// Get the storage backend
+    pub fn storage(&self) -> Arc<dyn StorageBackend> {
+        Arc::clone(&self.storage)
     }
 
-    /// Export the graph to JSON
-    pub fn export_json(&self) -> Result<String> {
-        let stats = self.graph.stats();
+    /// Export the graph stats to JSON
+    pub async fn export_json(&self) -> Result<String> {
+        let stats = self.storage.stats().await?;
         serde_json::to_string_pretty(&stats)
-            .map_err(|e| anyhow::anyhow!("Failed to export graph: {}", e))
+            .map_err(|e| anyhow::anyhow!("Failed to export stats: {}", e))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::StorageConfig;
+    use crate::storage::MemoryBackend;
 
     #[tokio::test]
     async fn test_engine_start_stop() {
         let config = EngineConfig::default();
-        let engine = RacewayEngine::new(config);
+        let storage_config = StorageConfig::default();
+        let storage = Arc::new(MemoryBackend::new(&storage_config).unwrap());
+        let engine = RacewayEngine::new(config, storage);
 
         assert!(engine.start().await.is_ok());
         engine.stop().await;

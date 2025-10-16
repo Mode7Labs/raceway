@@ -1,0 +1,132 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+if [[ "${TRACE:-}" == "1" ]]; then
+  set -x
+fi
+
+readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "${SCRIPT_DIR}"
+
+# ─── Styling ────────────────────────────────────────────────────────────────────
+ESC=$'\033'
+RESET="${ESC}[0m"
+BOLD="${ESC}[1m"
+DIM="${ESC}[2m"
+
+CYAN="${ESC}[36m"
+GREEN="${ESC}[32m"
+YELLOW="${ESC}[33m"
+MAGENTA="${ESC}[35m"
+RED="${ESC}[31m"
+
+ICON_BUILD="🛠️ "
+ICON_SERVER="🚀"
+ICON_TUI="🎨"
+ICON_WEB="🌐"
+ICON_EXIT="👋"
+
+# ─── Helpers ────────────────────────────────────────────────────────────────────
+print_header() {
+  printf "\n${BOLD}${MAGENTA}Raceway Dev Menu${RESET}\n"
+  printf "${DIM}Workspace:${RESET} %s\n\n" "${SCRIPT_DIR}"
+}
+
+require_tool() {
+  local tool=$1
+  if ! command -v "${tool}" >/dev/null 2>&1; then
+    printf "${RED}Error:${RESET} required tool '${tool}' not found in PATH.\n"
+    exit 1
+  fi
+}
+
+run_step() {
+  local title=$1
+  local command=$2
+  local working_dir=${3:-"${SCRIPT_DIR}"}
+
+  printf "${CYAN}${BOLD}%s${RESET}\n" "${title}"
+  printf "${DIM}→ ${command}${RESET}\n\n"
+
+  (
+    cd "${working_dir}"
+    eval "${command}"
+  )
+}
+
+# ─── Actions ────────────────────────────────────────────────────────────────────
+action_build() {
+  require_tool cargo
+  run_step "${ICON_BUILD} Building (cargo build)" "cargo build"
+}
+
+action_server() {
+  require_tool cargo
+  run_step "${ICON_SERVER} Starting server (cargo run --release -- serve)" \
+    "cargo run --release -- serve"
+}
+
+action_tui() {
+  require_tool cargo
+  run_step "${ICON_TUI} Launching TUI (cargo run --release -- tui)" \
+    "cargo run --release -- tui"
+}
+
+action_web() {
+  # Prefer pnpm, then npm
+  local pkg_manager
+  if command -v pnpm >/dev/null 2>&1; then
+    pkg_manager="pnpm"
+  else
+    require_tool npm
+    pkg_manager="npm"
+  fi
+
+  local command
+  if [[ "${pkg_manager}" == "pnpm" ]]; then
+    command="pnpm run dev -- --port 3005"
+  else
+    command="npm run dev -- -- --port 3005"
+  fi
+
+  run_step "${ICON_WEB} Starting Web UI (${pkg_manager} dev --port 3005)" \
+    "${command}" \
+    "${SCRIPT_DIR}/web"
+}
+
+# ─── Menu ───────────────────────────────────────────────────────────────────────
+print_menu() {
+  print_header
+  cat <<EOF
+${GREEN}1)${RESET} ${ICON_BUILD} Rebuild core (cargo build)
+${GREEN}2)${RESET} ${ICON_SERVER} Start server (cargo run --release -- serve)
+${GREEN}3)${RESET} ${ICON_TUI} Launch TUI (cargo run --release -- tui)
+${GREEN}4)${RESET} ${ICON_WEB} Start Web UI (Vite on port 3005)
+${YELLOW}q)${RESET} ${ICON_EXIT} Quit
+EOF
+  printf "\nSelect an option: "
+}
+
+main_loop() {
+  while true; do
+    print_menu
+    read -r choice
+    printf "\n"
+
+    case "${choice}" in
+      1) action_build ;;
+      2) action_server ;;
+      3) action_tui ;;
+      4) action_web ;;
+      q|Q) printf "${ICON_EXIT} Bye!\n"; exit 0 ;;
+      *) printf "${RED}Invalid selection.${RESET} Try again.\n\n" ;;
+    esac
+
+    printf "\n${DIM}Press Enter to return to the menu...${RESET}"
+    read -r _
+    printf "\n"
+  done
+}
+
+main_loop

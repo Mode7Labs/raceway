@@ -1,14 +1,14 @@
-use crate::event::{Event, EventKind, AccessType};
+use crate::event::{AccessType, Event, EventKind};
+use anyhow::{anyhow, Result};
+use chrono::{DateTime, Utc};
 use dashmap::DashMap;
-use petgraph::graph::{DiGraph, NodeIndex};
 use petgraph::algo::is_cyclic_directed;
+use petgraph::graph::{DiGraph, NodeIndex};
 use petgraph::visit::EdgeRef;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashSet, HashMap};
+use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 use uuid::Uuid;
-use anyhow::{Result, anyhow};
-use chrono::{DateTime, Utc};
 
 /// Edge type representing the causal relationship between events
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -133,7 +133,7 @@ pub struct CausalGraph {
     trace_roots: DashMap<Uuid, Vec<Uuid>>, // trace_id -> root event IDs
     analysis_cache: DashMap<Uuid, Vec<(Event, Event)>>, // trace_id -> cached concurrent pairs
     anomaly_cache: DashMap<Uuid, Vec<Anomaly>>, // trace_id -> cached anomalies
-    vector_clocks: DashMap<String, u64>, // thread_id -> logical clock value
+    vector_clocks: DashMap<String, u64>,   // thread_id -> logical clock value
     lock_sets: DashMap<String, HashSet<String>>, // thread_id -> currently held locks
     baseline_metrics: DashMap<String, BaselineMetrics>, // event_kind -> metrics
     baseline_durations: DashMap<String, Vec<f64>>, // event_kind -> all observed durations
@@ -187,7 +187,10 @@ impl CausalGraph {
         });
 
         // Update or add this thread's entry
-        if let Some(existing) = causality_vector.iter_mut().find(|(id, _)| *id == thread_uuid) {
+        if let Some(existing) = causality_vector
+            .iter_mut()
+            .find(|(id, _)| *id == thread_uuid)
+        {
             existing.1 = current_clock;
         } else {
             causality_vector.push((thread_uuid, current_clock));
@@ -196,7 +199,8 @@ impl CausalGraph {
         event.causality_vector = causality_vector;
 
         // Capture the current lock set for this thread BEFORE modifying it
-        let current_locks: Vec<String> = self.lock_sets
+        let current_locks: Vec<String> = self
+            .lock_sets
             .get(&thread_id)
             .map(|locks| locks.value().iter().cloned().collect())
             .unwrap_or_else(Vec::new);
@@ -248,6 +252,59 @@ impl CausalGraph {
         Ok(())
     }
 
+    /// Returns true if the graph already contains the specified event
+    pub fn contains_event(&self, event_id: Uuid) -> bool {
+        self.nodes.contains_key(&event_id)
+    }
+
+    /// Bulk-ingest a collection of events into the graph
+    /// Events are replayed in timestamp order; children whose parents have not
+    /// arrived yet are retried in subsequent passes.
+    pub fn ingest_events(&self, mut events: Vec<Event>) -> Result<()> {
+        if events.is_empty() {
+            return Ok(());
+        }
+
+        events.sort_by_key(|event| event.timestamp);
+        let mut pending = events;
+
+        while !pending.is_empty() {
+            let mut remaining = Vec::new();
+            let mut progress = false;
+
+            for event in pending.drain(..) {
+                if let Some(parent_id) = event.parent_id {
+                    if !self.contains_event(parent_id) {
+                        remaining.push(event);
+                        continue;
+                    }
+                }
+
+                self.add_event(event)?;
+                progress = true;
+            }
+
+            if !progress {
+                // If no progress was made, insert remaining events anyway to avoid infinite loops.
+                for event in remaining.drain(..) {
+                    self.add_event(event)?;
+                }
+                break;
+            }
+
+            pending = remaining;
+        }
+
+        Ok(())
+    }
+
+    /// Construct a new causal graph by replaying the provided events.
+    pub fn from_events(events: Vec<Event>) -> Result<Self> {
+        let graph = Self::new();
+        graph.ingest_events(events)?;
+        Ok(graph)
+    }
+
     /// Infer the type of causal edge based on event kinds
     fn infer_edge_type(&self, event: &Event) -> CausalEdge {
         match &event.kind {
@@ -262,7 +319,8 @@ impl CausalGraph {
 
     /// Get all events in topological order (causal order)
     pub fn get_causal_order(&self, trace_id: Uuid) -> Result<Vec<Event>> {
-        let root_ids = self.trace_roots
+        let root_ids = self
+            .trace_roots
             .get(&trace_id)
             .ok_or_else(|| anyhow!("Trace not found: {}", trace_id))?;
 
@@ -276,7 +334,12 @@ impl CausalGraph {
         Ok(events)
     }
 
-    fn collect_events_dfs(&self, event_id: Uuid, events: &mut Vec<Event>, visited: &mut HashSet<Uuid>) {
+    fn collect_events_dfs(
+        &self,
+        event_id: Uuid,
+        events: &mut Vec<Event>,
+        visited: &mut HashSet<Uuid>,
+    ) {
         if visited.contains(&event_id) {
             return;
         }
@@ -313,9 +376,19 @@ impl CausalGraph {
         for i in 0..events.len() {
             for j in (i + 1)..events.len() {
                 // Check if both are state changes
-                if let (EventKind::StateChange { variable: var1, access_type: access1, .. },
-                        EventKind::StateChange { variable: var2, access_type: access2, .. }) = (&events[i].kind, &events[j].kind) {
-
+                if let (
+                    EventKind::StateChange {
+                        variable: var1,
+                        access_type: access1,
+                        ..
+                    },
+                    EventKind::StateChange {
+                        variable: var2,
+                        access_type: access2,
+                        ..
+                    },
+                ) = (&events[i].kind, &events[j].kind)
+                {
                     // Same variable access
                     if var1 == var2 {
                         // Skip safe access patterns
@@ -327,7 +400,8 @@ impl CausalGraph {
                         if events[i].metadata.thread_id != events[j].metadata.thread_id {
                             // Use vector clocks for happens-before check (more precise than graph path)
                             if !self.happens_before_vc(&events[i], &events[j])
-                               && !self.happens_before_vc(&events[j], &events[i]) {
+                                && !self.happens_before_vc(&events[j], &events[i])
+                            {
                                 // Check if accesses were protected by the same lock
                                 if !self.protected_by_same_lock(&events[i], &events[j]) {
                                     concurrent_pairs.push((events[i].clone(), events[j].clone()));
@@ -340,7 +414,8 @@ impl CausalGraph {
         }
 
         // Store in cache
-        self.analysis_cache.insert(trace_id, concurrent_pairs.clone());
+        self.analysis_cache
+            .insert(trace_id, concurrent_pairs.clone());
 
         Ok(concurrent_pairs)
     }
@@ -429,69 +504,23 @@ impl CausalGraph {
         !set1.is_disjoint(&set2)
     }
 
-    /// Check if there's a causal path between two events
-    fn has_causal_path(&self, from: Uuid, to: Uuid) -> bool {
-        let from_node = match self.nodes.get(&from) {
-            Some(n) => n,
-            None => return false,
-        };
-        let to_node = match self.nodes.get(&to) {
-            Some(n) => n,
-            None => return false,
-        };
-
-        let from_idx = from_node.value().0;
-        let to_idx = to_node.value().0;
-
-        let graph = self.graph.lock().unwrap();
-        petgraph::algo::has_path_connecting(&*graph, from_idx, to_idx, None)
-    }
-
-    /// Check if two events overlap in time
-    /// Events are considered to overlap if their time windows intersect
-    fn events_overlap_in_time(&self, event1: &Event, event2: &Event) -> bool {
-        use chrono::Duration;
-
-        // Calculate end times for both events
-        let event1_start = event1.timestamp;
-        let event1_end = if let Some(duration_ns) = event1.metadata.duration_ns {
-            event1_start + Duration::nanoseconds(duration_ns as i64)
-        } else {
-            // If no duration, assume instantaneous (1ms window for overlap detection)
-            event1_start + Duration::milliseconds(1)
-        };
-
-        let event2_start = event2.timestamp;
-        let event2_end = if let Some(duration_ns) = event2.metadata.duration_ns {
-            event2_start + Duration::nanoseconds(duration_ns as i64)
-        } else {
-            // If no duration, assume instantaneous (1ms window for overlap detection)
-            event2_start + Duration::milliseconds(1)
-        };
-
-        // Check if time windows overlap
-        // Two intervals [a1, a2] and [b1, b2] overlap if: a1 < b2 AND b1 < a2
-        event1_start < event2_end && event2_start < event1_end
-    }
-
     /// Find the causal path between two events
     pub fn find_causal_path(&self, from: Uuid, to: Uuid) -> Result<Vec<Event>> {
-        let from_node = self.nodes.get(&from)
+        let from_node = self
+            .nodes
+            .get(&from)
             .ok_or_else(|| anyhow!("Event not found: {}", from))?;
-        let to_node = self.nodes.get(&to)
+        let to_node = self
+            .nodes
+            .get(&to)
             .ok_or_else(|| anyhow!("Event not found: {}", to))?;
 
         let from_idx = from_node.value().0;
         let to_idx = to_node.value().0;
 
         let graph = self.graph.lock().unwrap();
-        let path = petgraph::algo::astar(
-            &*graph,
-            from_idx,
-            |finish| finish == to_idx,
-            |_| 1,
-            |_| 0,
-        );
+        let path =
+            petgraph::algo::astar(&*graph, from_idx, |finish| finish == to_idx, |_| 1, |_| 0);
 
         match path {
             Some((_, node_path)) => {
@@ -499,7 +528,9 @@ impl CausalGraph {
                     .into_iter()
                     .filter_map(|idx| {
                         let event_id = graph[idx];
-                        self.nodes.get(&event_id).map(|entry| entry.value().1.event.clone())
+                        self.nodes
+                            .get(&event_id)
+                            .map(|entry| entry.value().1.event.clone())
                     })
                     .collect();
                 Ok(events)
@@ -532,7 +563,8 @@ impl CausalGraph {
 
     /// Build a hierarchical tree view of events for a trace
     pub fn get_trace_tree(&self, trace_id: Uuid) -> Result<Vec<TreeNode>> {
-        let root_ids = self.trace_roots
+        let root_ids = self
+            .trace_roots
             .get(&trace_id)
             .ok_or_else(|| anyhow!("Trace not found: {}", trace_id))?;
 
@@ -569,8 +601,7 @@ impl CausalGraph {
         let location = self.get_event_location(event);
 
         // Calculate duration
-        let duration_ms = event.metadata.duration_ns
-            .map(|ns| ns as f64 / 1_000_000.0);
+        let duration_ms = event.metadata.duration_ns.map(|ns| ns as f64 / 1_000_000.0);
 
         Some(TreeNode {
             id: event.id.to_string(),
@@ -585,7 +616,12 @@ impl CausalGraph {
 
     fn get_event_location(&self, event: &Event) -> String {
         match &event.kind {
-            EventKind::FunctionCall { file, line, function_name, .. } => {
+            EventKind::FunctionCall {
+                file,
+                line,
+                function_name,
+                ..
+            } => {
                 format!("{}:{} ({})", file, line, function_name)
             }
             EventKind::StateChange { location, .. } => location.clone(),
@@ -600,7 +636,9 @@ impl CausalGraph {
 
     fn event_kind_name(&self, kind: &EventKind) -> String {
         match kind {
-            EventKind::FunctionCall { function_name, .. } => format!("FunctionCall({})", function_name),
+            EventKind::FunctionCall { function_name, .. } => {
+                format!("FunctionCall({})", function_name)
+            }
             EventKind::AsyncSpawn { .. } => "AsyncSpawn".to_string(),
             EventKind::AsyncAwait { .. } => "AsyncAwait".to_string(),
             EventKind::StateChange { variable, .. } => format!("StateChange({})", variable),
@@ -638,8 +676,6 @@ impl CausalGraph {
 
         // Process events in topological order
         for event in &events {
-            let current_duration = event.metadata.duration_ns.unwrap_or(0) as f64 / 1_000_000.0;
-
             // Get children from graph
             if let Some(entry) = self.nodes.get(&event.id) {
                 let (node_idx, _) = entry.value();
@@ -651,12 +687,14 @@ impl CausalGraph {
                 drop(graph);
 
                 // Update cumulative durations for children
-                let current_cumulative = cumulative_durations.get(&event.id).copied().unwrap_or(0.0);
+                let current_cumulative =
+                    cumulative_durations.get(&event.id).copied().unwrap_or(0.0);
 
                 for child_id in children {
                     if let Some(child_entry) = self.nodes.get(&child_id) {
                         let child_event = &child_entry.value().1.event;
-                        let child_duration = child_event.metadata.duration_ns.unwrap_or(0) as f64 / 1_000_000.0;
+                        let child_duration =
+                            child_event.metadata.duration_ns.unwrap_or(0) as f64 / 1_000_000.0;
                         let new_cumulative = current_cumulative + child_duration;
 
                         // Update if this path is longer
@@ -743,7 +781,10 @@ impl CausalGraph {
 
         // Add new durations to the cumulative baseline durations
         for (kind, new_durations) in new_durations_by_kind {
-            let mut entry = self.baseline_durations.entry(kind.clone()).or_insert_with(Vec::new);
+            let mut entry = self
+                .baseline_durations
+                .entry(kind.clone())
+                .or_insert_with(Vec::new);
             entry.extend(new_durations);
         }
 
@@ -768,7 +809,8 @@ impl CausalGraph {
             let variance: f64 = all_durations
                 .iter()
                 .map(|d| (d - mean).powi(2))
-                .sum::<f64>() / count as f64;
+                .sum::<f64>()
+                / count as f64;
             let std_dev = variance.sqrt();
 
             // Calculate p95
@@ -817,7 +859,7 @@ impl CausalGraph {
         // If not, we should not cache empty results
         let mut has_sufficient_baseline = false;
         for event in &events {
-            if let Some(duration_ns) = event.metadata.duration_ns {
+            if event.metadata.duration_ns.is_some() {
                 let kind = self.event_kind_name(&event.kind);
                 if let Some(baseline) = self.baseline_metrics.get(&kind) {
                     if baseline.value().count >= 5 {
@@ -853,12 +895,15 @@ impl CausalGraph {
 
                     // Calculate how many standard deviations away from mean
                     let (std_dev_from_mean, is_anomaly) = if baseline.std_dev > 0.0 {
-                        let sigma = (duration_ms - baseline.mean_duration_ms).abs() / baseline.std_dev;
+                        let sigma =
+                            (duration_ms - baseline.mean_duration_ms).abs() / baseline.std_dev;
                         (sigma, sigma > 1.5)
                     } else {
                         // When std_dev is 0 (all baseline values are identical),
                         // flag as anomaly if the value differs by more than 20% from the mean
-                        let percent_diff = ((duration_ms - baseline.mean_duration_ms).abs() / baseline.mean_duration_ms) * 100.0;
+                        let percent_diff = ((duration_ms - baseline.mean_duration_ms).abs()
+                            / baseline.mean_duration_ms)
+                            * 100.0;
                         (percent_diff / 10.0, percent_diff > 20.0) // Scale percent to pseudo-sigma
                     };
 
@@ -928,9 +973,19 @@ impl CausalGraph {
                 let event1 = &all_state_changes[i];
                 let event2 = &all_state_changes[j];
 
-                if let (EventKind::StateChange { variable: var1, access_type: access1, .. },
-                        EventKind::StateChange { variable: var2, access_type: access2, .. }) = (&event1.kind, &event2.kind) {
-
+                if let (
+                    EventKind::StateChange {
+                        variable: var1,
+                        access_type: access1,
+                        ..
+                    },
+                    EventKind::StateChange {
+                        variable: var2,
+                        access_type: access2,
+                        ..
+                    },
+                ) = (&event1.kind, &event2.kind)
+                {
                     // Same variable access
                     if var1 == var2 {
                         // Skip safe access patterns
@@ -939,11 +994,13 @@ impl CausalGraph {
                         }
 
                         // Different threads OR different traces
-                        if event1.metadata.thread_id != event2.metadata.thread_id ||
-                           event1.trace_id != event2.trace_id {
+                        if event1.metadata.thread_id != event2.metadata.thread_id
+                            || event1.trace_id != event2.trace_id
+                        {
                             // Use vector clocks for happens-before check
                             if !self.happens_before_vc(event1, event2)
-                               && !self.happens_before_vc(event2, event1) {
+                                && !self.happens_before_vc(event2, event1)
+                            {
                                 // Check if accesses were protected by the same lock
                                 if !self.protected_by_same_lock(event1, event2) {
                                     concurrent_pairs.push((event1.clone(), event2.clone()));
@@ -997,7 +1054,11 @@ impl CausalGraph {
 
         let deps: Vec<ServiceDependency> = dependencies
             .into_iter()
-            .map(|((from, to), call_count)| ServiceDependency { from, to, call_count })
+            .map(|((from, to), call_count)| ServiceDependency {
+                from,
+                to,
+                call_count,
+            })
             .collect();
 
         Ok(ServiceDependencies {
@@ -1035,8 +1096,9 @@ impl CausalGraph {
                 old_value,
                 new_value,
                 location,
-                access_type
-            } = &event.kind {
+                access_type,
+            } = &event.kind
+            {
                 // Check if there's a causal link to the previous access
                 let has_causal_link_to_previous = if i > 0 {
                     let prev_event = &variable_events[i - 1];
@@ -1056,8 +1118,14 @@ impl CausalGraph {
                     event.metadata.thread_id != prev_event.metadata.thread_id
                         && !has_causal_link_to_previous
                         && !self.protected_by_same_lock(prev_event, event)
-                        && (*access_type == AccessType::Write ||
-                            matches!(prev_event.kind, EventKind::StateChange { access_type: AccessType::Write, .. }))
+                        && (*access_type == AccessType::Write
+                            || matches!(
+                                prev_event.kind,
+                                EventKind::StateChange {
+                                    access_type: AccessType::Write,
+                                    ..
+                                }
+                            ))
                 } else {
                     false
                 };
@@ -1093,12 +1161,23 @@ impl CausalGraph {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GraphStats {
     pub total_events: usize,
     pub total_traces: usize,
     pub total_edges: usize,
     pub has_cycles: bool,
+}
+
+impl Default for GraphStats {
+    fn default() -> Self {
+        Self {
+            total_events: 0,
+            total_traces: 0,
+            total_edges: 0,
+            has_cycles: false,
+        }
+    }
 }
 
 impl Default for CausalGraph {

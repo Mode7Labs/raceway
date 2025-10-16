@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { RacewayAPI } from './api';
-import {type ViewMode, type Event, type AnomaliesData, type CriticalPathData, type DependenciesData, type AuditTrailData } from './types';
+import {type ViewMode, type Event, type AnomaliesData, type CriticalPathData, type DependenciesData, type VariableAccess } from './types';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import { TraceList } from './components/TraceList';
 import { EventsTabWithSwitcher } from './components/EventsTabWithSwitcher';
@@ -35,8 +35,7 @@ export default function App() {
   const [anomaliesData, setAnomaliesData] = useState<AnomaliesData | null>(null);
   const [criticalPathData, setCriticalPathData] = useState<CriticalPathData | null>(null);
   const [dependenciesData, setDependenciesData] = useState<DependenciesData | null>(null);
-  const [auditTrailData, setAuditTrailData] = useState<AuditTrailData | null>(null);
-  const [selectedVariable, setSelectedVariable] = useState<string | null>(null);
+  const [auditTrails, setAuditTrails] = useState<Record<string, VariableAccess[]>>({});
   const [raceCount, setRaceCount] = useState<number>(0);
   const [raceInfo, setRaceInfo] = useState<string[]>([]);
   const [tracesWithRaces, setTracesWithRaces] = useState<Set<string>>(new Set());
@@ -102,131 +101,57 @@ export default function App() {
     }
   }, [fetchGlobalAnalysis, fetchAllRaceCounts]);
 
-  // Check audit trails for races
-  const checkAuditTrailRaces = useCallback(async (traceId: string, events: Event[]) => {
-    const variables = new Set<string>();
 
-    // Extract all variables from StateChange events
-    for (const event of events) {
-      if (typeof event.kind === 'object' && 'StateChange' in event.kind) {
-        const stateChange = event.kind.StateChange;
-        variables.add(stateChange.variable);
-      }
-    }
-
-    // Check each variable's audit trail for races
-    const auditTrailRaces: string[] = [];
-    for (const variable of Array.from(variables)) {
-      try {
-        const response = await RacewayAPI.getAuditTrail(traceId, variable);
-        if (response.data) {
-          const racyAccesses = response.data.accesses.filter(access => access.is_race);
-          if (racyAccesses.length > 0) {
-            auditTrailRaces.push(
-              `⚠️ Race condition detected on variable "${variable}" (${racyAccesses.length} racy ${racyAccesses.length === 1 ? 'access' : 'accesses'})`
-            );
-          }
-        }
-      } catch (error) {
-        console.error(`Error checking audit trail for ${variable}:`, error);
-      }
-    }
-
-    return auditTrailRaces;
-  }, []);
-
-  // Fetch trace details
+  // Fetch trace details (optimized to use single /full endpoint)
   const fetchTraceDetails = useCallback(async (traceId: string) => {
     setLoading(true);
     try {
-      const [traceData, analysisData, criticalPath, anomalies] = await Promise.all([
-        RacewayAPI.getTrace(traceId),
-        RacewayAPI.analyzeTrace(traceId),
-        RacewayAPI.getCriticalPath(traceId),
-        RacewayAPI.getAnomalies(traceId),
-      ]);
+      // Single API call to fetch all trace data
+      const fullAnalysis = await RacewayAPI.getFullTraceAnalysis(traceId);
 
-      if (traceData.data) {
-        setEvents(traceData.data.events);
+      if (fullAnalysis.data) {
+        // Extract events
+        setEvents(fullAnalysis.data.events);
 
-        // Check audit trails for races (runs in background)
-        checkAuditTrailRaces(traceId, traceData.data.events).then(auditRaces => {
-          setRaceInfo(prev => {
-            const analyzeRaces = analysisData.data?.anomalies || [];
-            const combined = [...analyzeRaces, ...auditRaces];
-            if (combined.length > 0) {
-              setTracesWithRaces(prevTraces => new Set(prevTraces).add(traceId));
-            }
-            return combined;
-          });
-        });
-      }
-
-      if (analysisData.data) {
-        setRaceCount(analysisData.data.potential_races || 0);
-        setRaceInfo(analysisData.data.anomalies || []);
-        if (analysisData.data.potential_races && analysisData.data.potential_races > 0) {
+        // Extract race analysis
+        setRaceCount(fullAnalysis.data.analysis.potential_races || 0);
+        setRaceInfo(fullAnalysis.data.analysis.anomalies || []);
+        if (fullAnalysis.data.analysis.potential_races > 0) {
           setTracesWithRaces(prev => new Set(prev).add(traceId));
         }
-      }
 
-      if (criticalPath.data) {
-        setCriticalPathData(criticalPath.data);
-      }
+        // Extract critical path (if available)
+        if (fullAnalysis.data.critical_path) {
+          setCriticalPathData(fullAnalysis.data.critical_path);
+        }
 
-      if (anomalies.data) {
-        setAnomaliesData(anomalies.data);
+        // Extract anomalies (if available)
+        if (fullAnalysis.data.anomalies && fullAnalysis.data.anomalies.length > 0) {
+          setAnomaliesData({
+            trace_id: traceId,
+            anomaly_count: fullAnalysis.data.anomalies.length,
+            anomalies: fullAnalysis.data.anomalies,
+          });
+        }
+
+        // Extract dependencies (if available)
+        if (fullAnalysis.data.dependencies) {
+          setDependenciesData(fullAnalysis.data.dependencies);
+        }
+
+        // Extract audit trails (pre-fetched!)
+        if (fullAnalysis.data.audit_trails) {
+          setAuditTrails(fullAnalysis.data.audit_trails);
+        }
       }
     } catch (error) {
       console.error('Error fetching trace details:', error);
     } finally {
       setLoading(false);
     }
-  }, [checkAuditTrailRaces]);
-
-  // Fetch audit trail for a variable
-  const fetchAuditTrail = useCallback(async (traceId: string, variable: string) => {
-    try {
-      const response = await RacewayAPI.getAuditTrail(traceId, variable);
-      if (response.data) {
-        setAuditTrailData(response.data);
-      }
-    } catch (error) {
-      console.error('Error fetching audit trail:', error);
-      setAuditTrailData(null);
-    }
   }, []);
 
-  // Handle variable selection for audit trail
-  const handleVariableChange = useCallback((variable: string) => {
-    setSelectedVariable(variable);
-    if (selectedTraceId) {
-      fetchAuditTrail(selectedTraceId, variable);
-    }
-  }, [selectedTraceId, fetchAuditTrail]);
-
-  // Fetch view-specific data
-  const fetchViewData = useCallback(async (traceId: string, view: ViewMode) => {
-    try {
-      switch (view) {
-        case 'dependencies':
-          if (!dependenciesData) {
-            const response = await RacewayAPI.getDependencies(traceId);
-            if (response.data) {
-              setDependenciesData(response.data);
-            }
-          }
-          break;
-        case 'audit-trail':
-          if (selectedVariable) {
-            await fetchAuditTrail(traceId, selectedVariable);
-          }
-          break;
-      }
-    } catch (error) {
-      console.error('Error fetching view data:', error);
-    }
-  }, [dependenciesData, selectedVariable, fetchAuditTrail]);
+  // Note: No more lazy loading! All data is fetched upfront via /full endpoint
 
   // Auto-refresh effect
   useEffect(() => {
@@ -240,21 +165,15 @@ export default function App() {
   // Handle trace selection
   useEffect(() => {
     if (selectedTraceId) {
-      // Clear only data that needs to be refetched
+      // Clear data before refetching
       setDependenciesData(null);
-      setAuditTrailData(null);
-      setSelectedVariable(null);
-      // Fetch trace details (includes critical path and anomalies)
+      setAuditTrails({});
+      setCriticalPathData(null);
+      setAnomaliesData(null);
+      // Fetch ALL trace details in one call (no lazy loading!)
       fetchTraceDetails(selectedTraceId);
     }
   }, [selectedTraceId, fetchTraceDetails]);
-
-  // Fetch view-specific data when view changes
-  useEffect(() => {
-    if (selectedTraceId) {
-      fetchViewData(selectedTraceId, viewMode);
-    }
-  }, [selectedTraceId, viewMode, fetchViewData]);
 
   const handleTraceSelect = (traceId: string) => {
     setSelectedTraceId(traceId);
@@ -433,9 +352,9 @@ export default function App() {
                   </TabsContent>
                   <TabsContent value="audit-trail" className="h-full m-0 p-0">
                     <AuditTrailView
-                      data={auditTrailData}
-                      onVariableChange={handleVariableChange}
+                      auditTrails={auditTrails}
                       events={events}
+                      traceId={selectedTraceId || ''}
                       onTraceSelect={handleTraceSelect}
                     />
                   </TabsContent>

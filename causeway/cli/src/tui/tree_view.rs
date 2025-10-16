@@ -26,7 +26,8 @@ pub fn build_tree(events: &[serde_json::Value]) -> Vec<TreeNode> {
 
     for (idx, event) in events.iter().enumerate() {
         if let Some(parent_id) = event.get("parent_id").and_then(|p| p.as_str()) {
-            children_map.entry(parent_id.to_string())
+            children_map
+                .entry(parent_id.to_string())
                 .or_insert_with(Vec::new)
                 .push(idx);
         } else {
@@ -46,11 +47,13 @@ pub fn build_tree(events: &[serde_json::Value]) -> Vec<TreeNode> {
         is_last_child: Vec<bool>,
     ) {
         let event = &events[idx];
-        let event_id = event.get("id")
+        let event_id = event
+            .get("id")
             .and_then(|id| id.as_str())
             .unwrap_or("unknown");
 
-        let event_kind = event.get("kind")
+        let event_kind = event
+            .get("kind")
             .and_then(|k| {
                 if let Some(obj) = k.as_object() {
                     obj.keys().next().map(|s| s.as_str())
@@ -60,11 +63,15 @@ pub fn build_tree(events: &[serde_json::Value]) -> Vec<TreeNode> {
             })
             .unwrap_or("Unknown");
 
-        let timestamp = event.get("timestamp")
+        let timestamp = event
+            .get("timestamp")
             .and_then(|t| t.as_str())
             .unwrap_or("?");
 
-        let children = children_map.get(event_id).map(|v| v.as_slice()).unwrap_or(&[]);
+        let children = children_map
+            .get(event_id)
+            .map(|v| v.as_slice())
+            .unwrap_or(&[]);
 
         tree_nodes.push(TreeNode {
             event_id: event_id[..8.min(event_id.len())].to_string(),
@@ -84,14 +91,28 @@ pub fn build_tree(events: &[serde_json::Value]) -> Vec<TreeNode> {
             let is_last = i == children.len() - 1;
             let mut child_is_last = is_last_child.clone();
             child_is_last.push(is_last);
-            traverse(child_idx, events, children_map, tree_nodes, depth + 1, child_is_last);
+            traverse(
+                child_idx,
+                events,
+                children_map,
+                tree_nodes,
+                depth + 1,
+                child_is_last,
+            );
         }
     }
 
     // Start from root events
     for (i, &root_idx) in roots.iter().enumerate() {
         let is_last = i == roots.len() - 1;
-        traverse(root_idx, events, &children_map, &mut tree_nodes, 0, vec![is_last]);
+        traverse(
+            root_idx,
+            events,
+            &children_map,
+            &mut tree_nodes,
+            0,
+            vec![is_last],
+        );
     }
 
     tree_nodes
@@ -143,10 +164,7 @@ pub fn render_tree_view(
 
             let line = format!(
                 "{}[{}] {}{}",
-                prefix,
-                node.timestamp,
-                node.event_kind,
-                children_indicator
+                prefix, node.timestamp, node.event_kind, children_indicator
             );
 
             // Check if this event is involved in a race
@@ -155,7 +173,9 @@ pub fn render_tree_view(
 
             let style = match (is_selected, event_in_race) {
                 (true, true) => Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
-                (true, false) => Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+                (true, false) => Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
                 (false, true) => Style::default().fg(Color::Red),
                 (false, false) => Style::default(),
             };

@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect } from 'react';
-import { type AuditTrailData, type Event } from '../types';
+import { type AuditTrailData, type Event, type VariableAccess } from '../types';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Badge } from './ui/badge';
 import { Button } from './ui/button';
@@ -12,9 +12,9 @@ import { DebuggerView } from './audit-trail-views/DebuggerView';
 import { CrossTraceView } from './audit-trail-views/CrossTraceView';
 
 interface AuditTrailViewProps {
-  data: AuditTrailData | null;
-  onVariableChange: (variable: string) => void;
+  auditTrails: Record<string, VariableAccess[]>; // Pre-fetched audit trails for all variables
   events: Event[]; // Pass in all events to auto-discover variables
+  traceId: string; // Needed for constructing AuditTrailData
   onTraceSelect?: (traceId: string) => void;
 }
 
@@ -30,11 +30,23 @@ interface VariableSummary {
 
 type AuditViewMode = 'focus' | 'graph' | 'debugger' | 'cross-trace';
 
-export function AuditTrailView({ data, onVariableChange, events, onTraceSelect }: AuditTrailViewProps) {
+export function AuditTrailView({ auditTrails, events, traceId, onTraceSelect }: AuditTrailViewProps) {
   const [selectedVariable, setSelectedVariable] = useState<string | null>(null);
   const [currentStep, setCurrentStep] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [viewMode, setViewMode] = useState<AuditViewMode>('debugger');
+
+  // Construct data from auditTrails for the selected variable
+  const data: AuditTrailData | null = useMemo(() => {
+    if (!selectedVariable || !auditTrails[selectedVariable]) {
+      return null;
+    }
+    return {
+      trace_id: traceId,
+      variable: selectedVariable,
+      accesses: auditTrails[selectedVariable],
+    };
+  }, [selectedVariable, auditTrails, traceId]);
 
   // Auto-discover all variables from StateChange events
   const variableSummaries = useMemo(() => {
@@ -154,16 +166,13 @@ export function AuditTrailView({ data, onVariableChange, events, onTraceSelect }
 
   // Auto-select first variable if available and none selected
   useEffect(() => {
-    if (variableSummaries.length > 0 && !selectedVariable && !data) {
-      const firstVar = variableSummaries[0].name;
-      setSelectedVariable(firstVar);
-      onVariableChange(firstVar);
+    if (variableSummaries.length > 0 && !selectedVariable) {
+      setSelectedVariable(variableSummaries[0].name);
     }
-  }, [variableSummaries, selectedVariable, data, onVariableChange]);
+  }, [variableSummaries, selectedVariable]);
 
   const handleVariableSelect = (varName: string) => {
     setSelectedVariable(varName);
-    onVariableChange(varName);
   };
 
   const formatTimestamp = (timestamp: string) => {
@@ -321,9 +330,9 @@ export function AuditTrailView({ data, onVariableChange, events, onTraceSelect }
       <div className="col-span-3 flex flex-col overflow-hidden">
         {!data ? (
           <div className="flex flex-col items-center justify-center h-64 text-center space-y-2 px-4 py-3">
-            <h3 className="text-lg font-semibold">Loading audit trail...</h3>
+            <h3 className="text-lg font-semibold">Select a variable</h3>
             <p className="text-sm text-muted-foreground">
-              Fetching access history for selected variable
+              Choose a variable from the list to view its audit trail
             </p>
           </div>
         ) : data.accesses.length === 0 ? (

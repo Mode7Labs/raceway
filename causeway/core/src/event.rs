@@ -1,7 +1,7 @@
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use uuid::Uuid;
-use chrono::{DateTime, Utc};
 
 /// Type of memory access
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -33,7 +33,7 @@ pub struct Event {
     pub kind: EventKind,
     pub metadata: EventMetadata,
     pub causality_vector: Vec<(Uuid, u64)>, // Vector clock for causal ordering
-    pub lock_set: Vec<String>, // Locks held by the thread at the time of this event
+    pub lock_set: Vec<String>,              // Locks held by the thread at the time of this event
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -116,7 +116,12 @@ pub struct EventMetadata {
 }
 
 impl Event {
-    pub fn new(kind: EventKind, metadata: EventMetadata, trace_id: Uuid, parent_id: Option<Uuid>) -> Self {
+    pub fn new(
+        kind: EventKind,
+        metadata: EventMetadata,
+        trace_id: Uuid,
+        parent_id: Option<Uuid>,
+    ) -> Self {
         Self {
             id: Uuid::new_v4(),
             trace_id,
@@ -134,7 +139,8 @@ impl Event {
         if self.timestamp < other.timestamp {
             // Check vector clocks for concurrent events
             self.causality_vector.iter().all(|(id, clock)| {
-                other.causality_vector
+                other
+                    .causality_vector
                     .iter()
                     .find(|(other_id, _)| other_id == id)
                     .map(|(_, other_clock)| clock <= other_clock)

@@ -1,10 +1,10 @@
+use super::types::AuditTrailData;
 use ratatui::{
     layout::Rect,
-    style::{Color, Modifier, Style},
+    style::{Color, Style},
     widgets::{Block, Borders, Paragraph, Wrap},
     Frame,
 };
-use super::types::AuditTrailData;
 
 pub fn render_audit_trail_view(
     f: &mut Frame,
@@ -53,11 +53,12 @@ pub fn render_audit_trail_view(
 
         for (idx, access) in trail.accesses.iter().enumerate() {
             // Parse timestamp for display
-            let time_display = if let Ok(parsed) = chrono::DateTime::parse_from_rfc3339(&access.timestamp) {
-                parsed.format("%H:%M:%S%.3f").to_string()
-            } else {
-                access.timestamp.clone()
-            };
+            let time_display =
+                if let Ok(parsed) = chrono::DateTime::parse_from_rfc3339(&access.timestamp) {
+                    parsed.format("%H:%M:%S%.3f").to_string()
+                } else {
+                    access.timestamp.clone()
+                };
 
             // Access type indicator
             let type_indicator = match access.access_type.as_str() {
@@ -74,15 +75,14 @@ pub fn render_audit_trail_view(
 
             lines.push(format!(
                 "{} {} [{}] @ {}{}",
-                type_indicator,
-                access.access_type,
-                access.thread_id,
-                time_display,
-                race_marker
+                type_indicator, access.access_type, access.thread_id, time_display, race_marker
             ));
 
             // Service and location
-            lines.push(format!("   Service: {} | Location: {}", access.service_name, access.location));
+            lines.push(format!(
+                "   Service: {} | Location: {}",
+                access.service_name, access.location
+            ));
 
             // Value change
             if let Some(ref old_val) = access.old_value {
@@ -110,9 +110,7 @@ pub fn render_audit_trail_view(
         }
 
         let text = lines.join("\n");
-        let widget = Paragraph::new(text)
-            .block(block)
-            .wrap(Wrap { trim: true });
+        let widget = Paragraph::new(text).block(block).wrap(Wrap { trim: true });
         f.render_widget(widget, area);
     } else {
         let info_text = "No audit trail loaded.\nPress 'v' when viewing race conditions to load audit trail for a variable.";

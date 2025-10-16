@@ -3,8 +3,8 @@ use clap::{Parser, Subcommand};
 use raceway_core::Config;
 use std::path::PathBuf;
 
-mod tui;
 mod server;
+mod tui;
 
 #[derive(Parser)]
 #[command(name = "causeway")]
@@ -67,7 +67,10 @@ async fn main() -> Result<()> {
         println!("📝 Loading configuration from {:?}", cli.config);
         Config::from_file(&cli.config)?
     } else {
-        println!("⚠️  Config file not found at {:?}, using defaults", cli.config);
+        println!(
+            "⚠️  Config file not found at {:?}, using defaults",
+            cli.config
+        );
         Config::default()
     };
 
@@ -84,22 +87,38 @@ async fn main() -> Result<()> {
                 config.server.verbose = true;
             }
 
-            println!("🚀 Starting Raceway server on {}:{}", config.server.host, config.server.port);
+            println!(
+                "🚀 Starting Raceway server on {}:{}",
+                config.server.host, config.server.port
+            );
             server::start_server(config).await?;
         }
         Commands::Tui { server } => {
             let server_url = server.unwrap_or(server_url);
-            println!("🎨 Launching Causeway TUI (connecting to {})...", server_url);
+            println!(
+                "🎨 Launching Causeway TUI (connecting to {})...",
+                server_url
+            );
             tui::launch_tui(&server_url).await?;
         }
         Commands::Analyze { trace_id, server } => {
             let server_url = server.unwrap_or(server_url);
-            println!("🔍 Analyzing trace {} (server: {})...", trace_id, server_url);
+            println!(
+                "🔍 Analyzing trace {} (server: {})...",
+                trace_id, server_url
+            );
             analyze_trace(&trace_id, &server_url).await?;
         }
-        Commands::Export { trace_id, output, server } => {
+        Commands::Export {
+            trace_id,
+            output,
+            server,
+        } => {
             let server_url = server.unwrap_or(server_url);
-            println!("📦 Exporting trace {} to {} (server: {})...", trace_id, output, server_url);
+            println!(
+                "📦 Exporting trace {} to {} (server: {})...",
+                trace_id, output, server_url
+            );
             export_trace(&trace_id, &output, &server_url).await?;
         }
     }

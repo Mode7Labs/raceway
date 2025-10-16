@@ -1,9 +1,9 @@
-pub mod types;
-pub mod critical_path;
 pub mod anomalies_view;
-pub mod tree_view;
-pub mod dependencies_view;
 pub mod audit_trail_view;
+pub mod critical_path;
+pub mod dependencies_view;
+pub mod tree_view;
+pub mod types;
 
 pub use types::*;
 
@@ -17,7 +17,7 @@ use ratatui::{
     backend::{Backend, CrosstermBackend},
     layout::{Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
-    widgets::{Block, Borders, List, ListItem, Paragraph, Wrap, Clear},
+    widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap},
     Frame, Terminal,
 };
 use reqwest;
@@ -28,33 +28,34 @@ use std::time::Instant;
 struct App {
     server_url: String,
     traces: Vec<String>,
-    trace_ids: Vec<String>,  // Actual trace IDs for API calls
+    trace_ids: Vec<String>, // Actual trace IDs for API calls
     selected_trace: usize,
+    loaded_trace: usize, // The trace that's actually loaded (may lag behind selected_trace)
+    last_selection_change: Option<Instant>, // When did the user last change selection
     events: Vec<String>,
-    event_data: Vec<serde_json::Value>,  // Actual event data
+    event_data: Vec<serde_json::Value>, // Actual event data
     selected_event: usize,
     event_detail: String,
     anomalies: Vec<String>,
     status_message: String,
-    client: reqwest::blocking::Client,  // Reusable HTTP client
-    trace_cache: HashMap<usize, CachedTraceData>,  // Cache for all traces
-    auto_refresh: bool,  // Auto-refresh toggle
-    refresh_interval_secs: u64,  // Configurable refresh interval
-    last_refresh: Instant,  // Track last refresh time
-    show_help: bool,  // Show help modal
+    client: reqwest::blocking::Client, // Reusable HTTP client
+    trace_cache: HashMap<usize, CachedTraceData>, // Cache for all traces
+    auto_refresh: bool,                // Auto-refresh toggle
+    refresh_interval_secs: u64,        // Configurable refresh interval
+    last_refresh: Instant,             // Track last refresh time
+    show_help: bool,                   // Show help modal
 
     // Panel focus and scroll state
     focused_panel: Panel,
     traces_scroll: u16,
-    events_scroll: u16,
     details_scroll: u16,
     anomalies_scroll: u16,
 
     // Race condition tracking
-    traces_with_races: HashSet<usize>,  // Indices of traces with races
-    current_trace_has_races: bool,  // Does current trace have races
+    traces_with_races: HashSet<usize>, // Indices of traces with races
+    current_trace_has_races: bool,     // Does current trace have races
     events_in_races: HashSet<String>,  // Event IDs involved in races (short form - first 8 chars)
-    last_global_analysis_trace_count: usize,  // Track when we last did global analysis
+    last_global_analysis_trace_count: usize, // Track when we last did global analysis
 
     // View mode and additional data
     view_mode: ViewMode,
@@ -70,7 +71,7 @@ impl App {
         // Create a single reusable HTTP client
         let client = reqwest::blocking::Client::builder()
             .timeout(std::time::Duration::from_secs(2))
-            .pool_max_idle_per_host(1)  // Prevent connection leak
+            .pool_max_idle_per_host(1) // Prevent connection leak
             .build()
             .unwrap_or_else(|_| reqwest::blocking::Client::new());
 
@@ -79,6 +80,8 @@ impl App {
             traces: vec!["Loading...".to_string()],
             trace_ids: vec![],
             selected_trace: 0,
+            loaded_trace: 0,
+            last_selection_change: None,
             events: vec![
                 "Connecting to server...".to_string(),
                 "".to_string(),
@@ -88,21 +91,18 @@ impl App {
             event_data: vec![],
             selected_event: 0,
             event_detail: "Waiting for data...".to_string(),
-            anomalies: vec![
-                "No anomalies detected yet".to_string(),
-            ],
+            anomalies: vec!["No anomalies detected yet".to_string()],
             status_message: "Starting...".to_string(),
             client,
             trace_cache: HashMap::new(),
-            auto_refresh: true,  // Auto-refresh enabled by default
-            refresh_interval_secs: 20,  // Default: 20 seconds
+            auto_refresh: true,        // Auto-refresh enabled by default
+            refresh_interval_secs: 20, // Default: 20 seconds
             last_refresh: Instant::now(),
-            show_help: false,  // Help modal hidden by default
+            show_help: false, // Help modal hidden by default
 
             // Panel focus and scroll - start with Events panel
             focused_panel: Panel::Events,
             traces_scroll: 0,
-            events_scroll: 0,
             details_scroll: 0,
             anomalies_scroll: 0,
 
@@ -200,8 +200,38 @@ impl App {
     }
 
     fn should_refresh(&self) -> bool {
-        self.auto_refresh &&
-        self.last_refresh.elapsed().as_secs() >= self.refresh_interval_secs
+        self.auto_refresh && self.last_refresh.elapsed().as_secs() >= self.refresh_interval_secs
+    }
+
+    // Check if enough time has passed since selection changed to actually load the trace
+    fn should_load_trace(&self) -> bool {
+        if let Some(last_change) = self.last_selection_change {
+            // Wait 300ms after last selection change
+            last_change.elapsed().as_millis() >= 300
+        } else {
+            false
+        }
+    }
+
+    // Mark that the trace selection has changed (starts debounce timer)
+    fn mark_selection_changed(&mut self) {
+        self.last_selection_change = Some(Instant::now());
+    }
+
+    // Try to load the selected trace if debounce period has elapsed
+    fn try_load_pending_trace(&mut self) {
+        // Only load if:
+        // 1. There's a pending selection change
+        // 2. Enough time has passed (debounce)
+        // 3. Selected trace is different from loaded trace OR it's cached
+        if self.should_load_trace()
+            && (self.selected_trace != self.loaded_trace
+                || self.trace_cache.contains_key(&self.selected_trace))
+        {
+            self.loaded_trace = self.selected_trace;
+            self.last_selection_change = None; // Clear the timer
+            self.fetch_trace_details();
+        }
     }
 
     fn fetch_status(&mut self) -> Result<()> {
@@ -211,21 +241,27 @@ impl App {
             Ok(response) => {
                 if let Ok(traces_resp) = response.json::<TracesListResponse>() {
                     if let Some(traces_data) = traces_resp.data {
-                        self.status_message = format!(
-                            "Connected | Events: {} | Traces: {}",
-                            traces_data.total_events,
-                            traces_data.total_traces
-                        );
+                        self.status_message = if let Some(events) = traces_data.total_events {
+                            format!(
+                                "Connected | Events: {} | Traces: {}",
+                                events, traces_data.total_traces
+                            )
+                        } else {
+                            format!("Connected | Traces: {}", traces_data.total_traces)
+                        };
 
                         if !traces_data.trace_ids.is_empty() {
                             // Check if trace count changed
-                            let trace_count_changed = self.trace_ids.len() != traces_data.trace_ids.len();
+                            let trace_count_changed =
+                                self.trace_ids.len() != traces_data.trace_ids.len();
 
                             // Store the actual trace IDs
                             self.trace_ids = traces_data.trace_ids.clone();
 
                             // Display traces with their IDs
-                            self.traces = traces_data.trace_ids.iter()
+                            self.traces = traces_data
+                                .trace_ids
+                                .iter()
                                 .enumerate()
                                 .map(|(i, id)| format!("🔍 Trace {}: {}...", i + 1, &id[..8]))
                                 .collect();
@@ -287,18 +323,20 @@ impl App {
     }
 
     fn fetch_trace_details(&mut self) {
-        if self.selected_trace >= self.trace_ids.len() {
+        if self.loaded_trace >= self.trace_ids.len() {
             return;
         }
 
         // CACHE CHECK: Skip fetch if we already have this trace's data
-        if let Some(cached) = self.trace_cache.get(&self.selected_trace) {
+        if let Some(cached) = self.trace_cache.get(&self.loaded_trace) {
             // Restore from cache
             self.events = cached.events.clone();
             self.event_data = cached.event_data.clone();
             self.anomalies = cached.anomalies.clone();
             self.current_trace_has_races = cached.has_races;
             self.anomalies_data = cached.anomalies_data.clone();
+            self.critical_path_data = cached.critical_path_data.clone();
+            self.dependencies_data = cached.dependencies_data.clone();
 
             // Update event detail for current selection
             if self.selected_event < self.event_data.len() {
@@ -314,29 +352,44 @@ impl App {
             return;
         }
 
-        let trace_id = &self.trace_ids[self.selected_trace];
+        let trace_id = &self.trace_ids[self.loaded_trace];
 
-        // Fetch trace events
-        let trace_url = format!("{}/api/traces/{}", self.server_url, trace_id);
-        if let Ok(response) = self.client.get(&trace_url).send() {
-            if let Ok(trace_resp) = response.json::<TraceResponse>() {
-                if let Some(trace_data) = trace_resp.data {
-                    // Store event data
-                    self.event_data = trace_data.events.clone();
+        // Fetch full trace analysis in ONE request (includes events, analysis, critical path, anomalies, dependencies)
+        let full_url = format!("{}/api/traces/{}", self.server_url, trace_id);
+        let has_races;
 
-                    // Display events in timeline
-                    self.events = trace_data.events.iter()
+        if let Ok(response) = self.client.get(&full_url).send() {
+            // Check response status first
+            if !response.status().is_success() {
+                self.anomalies = vec![format!("❌ HTTP Error: {}", response.status())];
+                self.events = vec!["❌ Failed to fetch events".to_string()];
+                return;
+            }
+
+            if let Ok(full_resp) = response.json::<FullTraceAnalysisResponse>() {
+                if let Some(full_data) = full_resp.data {
+                    // 1. Store event data
+                    self.event_data = full_data.events.clone();
+
+                    // 2. Display events in timeline
+                    self.events = full_data
+                        .events
+                        .iter()
                         .enumerate()
                         .map(|(i, event)| {
-                            let kind = event.get("kind").and_then(|k| {
-                                if let Some(obj) = k.as_object() {
-                                    obj.keys().next().map(|s| s.as_str())
-                                } else {
-                                    None
-                                }
-                            }).unwrap_or("Unknown");
+                            let kind = event
+                                .get("kind")
+                                .and_then(|k| {
+                                    if let Some(obj) = k.as_object() {
+                                        obj.keys().next().map(|s| s.as_str())
+                                    } else {
+                                        None
+                                    }
+                                })
+                                .unwrap_or("Unknown");
 
-                            let timestamp = event.get("timestamp")
+                            let timestamp = event
+                                .get("timestamp")
                                 .and_then(|t| t.as_str())
                                 .unwrap_or("?");
 
@@ -344,41 +397,35 @@ impl App {
                         })
                         .collect();
 
-                    // Show details of selected event
-                    if self.selected_event < self.event_data.len() {
-                        let event = &self.event_data[self.selected_event];
-                        self.event_detail = format!("{:#}", event);
-                    }
-                }
-            }
-        }
-
-        // Fetch per-trace analysis
-        let has_races;
-        let analysis_url = format!("{}/api/traces/{}/analyze", self.server_url, trace_id);
-        if let Ok(response) = self.client.get(&analysis_url).send() {
-            if let Ok(analysis_resp) = response.json::<AnalysisResponse>() {
-                if let Some(analysis) = analysis_resp.data {
-                    has_races = analysis.potential_races > 0;
+                    // 3. Process analysis data (race detection)
+                    has_races = full_data.analysis.potential_races > 0;
                     self.current_trace_has_races = has_races;
 
                     if has_races {
-                        self.traces_with_races.insert(self.selected_trace);
+                        self.traces_with_races.insert(self.loaded_trace);
                         self.anomalies = vec![
                             format!("🚨 RACE CONDITIONS DETECTED! 🚨"),
                             "".to_string(),
-                            format!("⚠️  {} concurrent event pairs found", analysis.concurrent_events),
-                            format!("⚠️  {} potential race conditions", analysis.potential_races),
+                            format!(
+                                "⚠️  {} concurrent event pairs found",
+                                full_data.analysis.concurrent_events
+                            ),
+                            format!(
+                                "⚠️  {} potential race conditions",
+                                full_data.analysis.potential_races
+                            ),
                             "".to_string(),
                         ];
 
-                        for anomaly in &analysis.anomalies {
+                        for anomaly in &full_data.analysis.anomalies {
                             self.anomalies.push(anomaly.clone());
                         }
 
                         self.anomalies.push("".to_string());
-                        self.anomalies.push("💡 These events accessed shared state".to_string());
-                        self.anomalies.push("   without proper synchronization!".to_string());
+                        self.anomalies
+                            .push("💡 These events accessed shared state".to_string());
+                        self.anomalies
+                            .push("   without proper synchronization!".to_string());
                     } else {
                         self.anomalies = vec![
                             "✅ No race conditions in this trace".to_string(),
@@ -386,44 +433,84 @@ impl App {
                             format!("Analyzed {} events", self.event_data.len()),
                         ];
                     }
+
+                    // 4. Parse and store critical path if present
+                    self.critical_path_data = if let Some(cp_value) = full_data.critical_path {
+                        serde_json::from_value::<CriticalPathData>(cp_value).ok()
+                    } else {
+                        None
+                    };
+
+                    // 5. Parse and store anomalies data
+                    let anomalies_data = if !full_data.anomalies.is_empty() {
+                        // Build AnomaliesData from the Vec<Value>
+                        let parsed_anomalies: Vec<DetectedAnomaly> = full_data
+                            .anomalies
+                            .iter()
+                            .filter_map(|val| {
+                                serde_json::from_value::<DetectedAnomaly>(val.clone()).ok()
+                            })
+                            .collect();
+
+                        if !parsed_anomalies.is_empty() {
+                            Some(AnomaliesData {
+                                trace_id: trace_id.clone(),
+                                anomaly_count: parsed_anomalies.len(),
+                                anomalies: parsed_anomalies,
+                            })
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    };
+                    self.anomalies_data = anomalies_data.clone();
+
+                    // 6. Store dependencies data
+                    self.dependencies_data = full_data.dependencies.clone();
+
+                    // 7. Show details of selected event
+                    if self.selected_event < self.event_data.len() {
+                        let event = &self.event_data[self.selected_event];
+                        self.event_detail = format!("{:#}", event);
+                    }
+
+                    // 8. Fetch global cross-trace analysis
+                    self.fetch_global_analysis();
+
+                    // 9. Store in cache
+                    self.trace_cache.insert(
+                        self.loaded_trace,
+                        CachedTraceData {
+                            events: self.events.clone(),
+                            event_data: self.event_data.clone(),
+                            anomalies: self.anomalies.clone(),
+                            has_races,
+                            anomalies_data,
+                            critical_path_data: self.critical_path_data.clone(),
+                            dependencies_data: self.dependencies_data.clone(),
+                        },
+                    );
+
+                    return;
                 } else {
-                    has_races = false;
-                    self.current_trace_has_races = false;
+                    // JSON parsing succeeded but data is None
+                    self.anomalies =
+                        vec!["❌ Server returned success=false or null data".to_string()];
+                    self.events = vec!["❌ No data in response".to_string()];
+                    return;
                 }
             } else {
-                has_races = false;
-                self.current_trace_has_races = false;
+                // JSON parsing failed
+                self.anomalies = vec!["❌ Failed to parse response JSON".to_string()];
+                self.events = vec!["❌ Invalid response format".to_string()];
+                return;
             }
         } else {
-            has_races = false;
-            self.current_trace_has_races = false;
+            // HTTP request failed
+            self.anomalies = vec!["❌ Failed to connect to server".to_string()];
+            self.events = vec!["❌ Connection error".to_string()];
         }
-
-        // Fetch global cross-trace analysis
-        self.fetch_global_analysis();
-
-        // Fetch performance anomalies for caching
-        let trace_id = &self.trace_ids[self.selected_trace];
-        let anomalies_url = format!("{}/api/traces/{}/anomalies", self.server_url, trace_id);
-        let fetched_anomalies_data = if let Ok(response) = self.client.get(&anomalies_url).send() {
-            if let Ok(anom_resp) = response.json::<AnomaliesResponse>() {
-                anom_resp.data
-            } else {
-                None
-            }
-        } else {
-            None
-        };
-        self.anomalies_data = fetched_anomalies_data.clone();
-
-        // Store in cache
-        self.trace_cache.insert(self.selected_trace, CachedTraceData {
-            events: self.events.clone(),
-            event_data: self.event_data.clone(),
-            anomalies: self.anomalies.clone(),
-            has_races,
-            anomalies_data: fetched_anomalies_data,
-        });
     }
 
     fn fetch_global_analysis(&mut self) {
@@ -483,7 +570,11 @@ impl App {
                         // Update anomalies with clearer messaging
                         if current_trace_involved {
                             // Remove any existing cross-trace messaging to regenerate it fresh
-                            if let Some(separator_pos) = self.anomalies.iter().position(|a| a.contains("─────────────────────────────────")) {
+                            if let Some(separator_pos) = self
+                                .anomalies
+                                .iter()
+                                .position(|a| a.contains("─────────────────────────────────"))
+                            {
                                 self.anomalies.truncate(separator_pos.saturating_sub(1));
                             }
 
@@ -493,42 +584,62 @@ impl App {
                                 self.traces_with_races.insert(self.selected_trace);
 
                                 // Replace the "no races" message with a better one
-                                if self.anomalies.iter().any(|a| a.contains("✅ No race conditions")) {
+                                if self
+                                    .anomalies
+                                    .iter()
+                                    .any(|a| a.contains("✅ No race conditions"))
+                                {
                                     self.anomalies = vec![
                                         format!("⚠️  This trace is involved in CROSS-TRACE races"),
                                         "".to_string(),
                                         format!("✅ No races within this trace alone"),
-                                        format!("🌐 But {} event(s) race with other traces", events_in_this_trace.len()),
+                                        format!(
+                                            "🌐 But {} event(s) race with other traces",
+                                            events_in_this_trace.len()
+                                        ),
                                         "".to_string(),
                                     ];
                                 }
                             } else {
                                 // Has per-trace races, update the event count line
                                 if self.anomalies.iter().any(|a| a.contains("🌐 But")) {
-                                    if let Some(pos) = self.anomalies.iter().position(|a| a.contains("🌐 But")) {
-                                        self.anomalies[pos] = format!("🌐 But {} event(s) race with other traces", events_in_this_trace.len());
+                                    if let Some(pos) =
+                                        self.anomalies.iter().position(|a| a.contains("🌐 But"))
+                                    {
+                                        self.anomalies[pos] = format!(
+                                            "🌐 But {} event(s) race with other traces",
+                                            events_in_this_trace.len()
+                                        );
                                     }
                                 }
                             }
 
                             // Add separator
                             self.anomalies.push("".to_string());
-                            self.anomalies.push("─────────────────────────────────".to_string());
-                            self.anomalies.push("🌐 CROSS-TRACE RACE DETAILS".to_string());
-                            self.anomalies.push("─────────────────────────────────".to_string());
+                            self.anomalies
+                                .push("─────────────────────────────────".to_string());
+                            self.anomalies
+                                .push("🌐 CROSS-TRACE RACE DETAILS".to_string());
+                            self.anomalies
+                                .push("─────────────────────────────────".to_string());
                             self.anomalies.push("".to_string());
 
                             // Add global race info
                             for anomaly in &global.anomalies {
                                 // Only show races involving current trace
-                                if anomaly.contains(current_trace_short) || !anomaly.contains("Event ") {
+                                if anomaly.contains(current_trace_short)
+                                    || !anomaly.contains("Event ")
+                                {
                                     self.anomalies.push(anomaly.clone());
                                 }
                             }
 
                             self.anomalies.push("".to_string());
-                            self.anomalies.push(format!("💡 Events marked in red are involved in races"));
-                            self.anomalies.push("   Switch traces to see other race participants".to_string());
+                            self.anomalies
+                                .push(format!("💡 Events marked in red are involved in races"));
+                            self.anomalies.push(
+                                "   Switch traces to see other race participants".to_string(),
+                            );
                         }
                     }
                 }
@@ -542,37 +653,25 @@ impl App {
             self.selected_event = 0;
             self.details_scroll = 0;
 
-            // Clear view data for new trace (except anomalies_data which is cached)
-            self.critical_path_data = None;
-            self.dependencies_data = None;
+            // Clear audit trail data for new trace
             self.audit_trail_data = None;
             self.selected_variable = None;
 
-            self.fetch_trace_details();
+            // Mark selection changed - will load after debounce delay (unless cached)
+            self.mark_selection_changed();
 
-            // Fetch current view data only if not cached
-            match self.view_mode {
-                ViewMode::CriticalPath => {
-                    if self.critical_path_data.is_none() {
-                        self.fetch_critical_path();
-                    }
-                }
-                ViewMode::Anomalies => {
-                    if self.anomalies_data.is_none() {
-                        self.fetch_anomalies();
-                    }
-                }
-                ViewMode::Dependencies => {
-                    if self.dependencies_data.is_none() {
-                        self.fetch_dependencies();
-                    }
-                }
-                ViewMode::AuditTrail => {
+            // If cached, load immediately for instant response
+            if self.trace_cache.contains_key(&self.selected_trace) {
+                self.loaded_trace = self.selected_trace;
+                self.last_selection_change = None;
+                self.fetch_trace_details();
+
+                // Fetch audit trail if needed
+                if matches!(self.view_mode, ViewMode::AuditTrail) {
                     if self.audit_trail_data.is_none() && self.selected_variable.is_none() {
                         self.fetch_first_race_variable();
                     }
                 }
-                ViewMode::Events | ViewMode::Tree => {}
             }
         }
     }
@@ -583,67 +682,25 @@ impl App {
             self.selected_event = 0;
             self.details_scroll = 0;
 
-            // Clear view data for new trace (except anomalies_data which is cached)
-            self.critical_path_data = None;
-            self.dependencies_data = None;
+            // Clear audit trail data for new trace
             self.audit_trail_data = None;
             self.selected_variable = None;
 
-            self.fetch_trace_details();
+            // Mark selection changed - will load after debounce delay (unless cached)
+            self.mark_selection_changed();
 
-            // Fetch current view data only if not cached
-            match self.view_mode {
-                ViewMode::CriticalPath => {
-                    if self.critical_path_data.is_none() {
-                        self.fetch_critical_path();
-                    }
-                }
-                ViewMode::Anomalies => {
-                    if self.anomalies_data.is_none() {
-                        self.fetch_anomalies();
-                    }
-                }
-                ViewMode::Dependencies => {
-                    if self.dependencies_data.is_none() {
-                        self.fetch_dependencies();
-                    }
-                }
-                ViewMode::AuditTrail => {
+            // If cached, load immediately for instant response
+            if self.trace_cache.contains_key(&self.selected_trace) {
+                self.loaded_trace = self.selected_trace;
+                self.last_selection_change = None;
+                self.fetch_trace_details();
+
+                // Fetch audit trail if needed
+                if matches!(self.view_mode, ViewMode::AuditTrail) {
                     if self.audit_trail_data.is_none() && self.selected_variable.is_none() {
                         self.fetch_first_race_variable();
                     }
                 }
-                ViewMode::Events | ViewMode::Tree => {}
-            }
-        }
-    }
-
-    fn fetch_critical_path(&mut self) {
-        if self.selected_trace >= self.trace_ids.len() {
-            return;
-        }
-
-        let trace_id = &self.trace_ids[self.selected_trace];
-        let url = format!("{}/api/traces/{}/critical-path", self.server_url, trace_id);
-
-        if let Ok(response) = self.client.get(&url).send() {
-            if let Ok(cp_resp) = response.json::<CriticalPathResponse>() {
-                self.critical_path_data = cp_resp.data;
-            }
-        }
-    }
-
-    fn fetch_anomalies(&mut self) {
-        if self.selected_trace >= self.trace_ids.len() {
-            return;
-        }
-
-        let trace_id = &self.trace_ids[self.selected_trace];
-        let url = format!("{}/api/traces/{}/anomalies", self.server_url, trace_id);
-
-        if let Ok(response) = self.client.get(&url).send() {
-            if let Ok(anom_resp) = response.json::<AnomaliesResponse>() {
-                self.anomalies_data = anom_resp.data;
             }
         }
     }
@@ -658,65 +715,30 @@ impl App {
             ViewMode::AuditTrail => ViewMode::Events,
         };
 
-        // Fetch data for the new view mode if needed
-        match self.view_mode {
-            ViewMode::CriticalPath => {
-                if self.critical_path_data.is_none() {
-                    self.fetch_critical_path();
-                }
-            }
-            ViewMode::Anomalies => {
-                if self.anomalies_data.is_none() {
-                    self.fetch_anomalies();
-                }
-            }
-            ViewMode::Dependencies => {
-                if self.dependencies_data.is_none() {
-                    self.fetch_dependencies();
-                }
-            }
-            ViewMode::AuditTrail => {
-                // Auto-load audit trail for first variable if none selected
-                if self.audit_trail_data.is_none() && self.selected_variable.is_none() {
-                    // Try to find a variable from race conditions
-                    self.fetch_first_race_variable();
-                }
-            }
-            ViewMode::Events | ViewMode::Tree => {} // Already have event data
-        }
-    }
-
-    fn fetch_dependencies(&mut self) {
-        if self.selected_trace >= self.trace_ids.len() {
-            return;
-        }
-
-        let trace_id = &self.trace_ids[self.selected_trace];
-        let url = format!("{}/api/traces/{}/dependencies", self.server_url, trace_id);
-
-        if let Ok(response) = self.client.get(&url).send() {
-            if let Ok(deps_resp) = response.json::<DependenciesResponse>() {
-                self.dependencies_data = deps_resp.data;
+        // Fetch audit trail if needed (only view mode not included in /full endpoint)
+        if matches!(self.view_mode, ViewMode::AuditTrail) {
+            if self.audit_trail_data.is_none() && self.selected_variable.is_none() {
+                self.fetch_first_race_variable();
             }
         }
+        // All other view modes (CriticalPath, Anomalies, Dependencies) already loaded via /full endpoint
     }
 
     fn fetch_first_race_variable(&mut self) {
         // Try to extract a variable name from race anomalies
         // Clone the variable name first to avoid borrowing issues
-        let variable_name = self.anomalies.iter()
-            .find_map(|anomaly| {
-                if anomaly.contains("RACE on ") {
-                    anomaly.find("RACE on ").and_then(|start| {
-                        let after = &anomaly[start + 8..];
-                        after.find(|c: char| c.is_whitespace()).map(|end| {
-                            after[..end].to_string()
-                        })
-                    })
-                } else {
-                    None
-                }
-            });
+        let variable_name = self.anomalies.iter().find_map(|anomaly| {
+            if anomaly.contains("RACE on ") {
+                anomaly.find("RACE on ").and_then(|start| {
+                    let after = &anomaly[start + 8..];
+                    after
+                        .find(|c: char| c.is_whitespace())
+                        .map(|end| after[..end].to_string())
+                })
+            } else {
+                None
+            }
+        });
 
         if let Some(variable) = variable_name {
             self.selected_variable = Some(variable.clone());
@@ -730,9 +752,12 @@ impl App {
         }
 
         let trace_id = &self.trace_ids[self.selected_trace];
-        let url = format!("{}/api/traces/{}/audit-trail/{}",
-            self.server_url, trace_id,
-            urlencoding::encode(variable));
+        let url = format!(
+            "{}/api/traces/{}/audit-trail/{}",
+            self.server_url,
+            trace_id,
+            urlencoding::encode(variable)
+        );
 
         if let Ok(response) = self.client.get(&url).send() {
             if let Ok(trail_resp) = response.json::<AuditTrailResponse>() {
@@ -791,6 +816,9 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
             app.last_refresh = Instant::now();
         }
 
+        // Try to load pending trace after debounce period
+        app.try_load_pending_trace();
+
         // Non-blocking event check
         if event::poll(std::time::Duration::from_millis(100))? {
             match event::read()? {
@@ -798,7 +826,9 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
                     if app.show_help {
                         // When help is showing, only allow closing it
                         match key.code {
-                            KeyCode::Char('?') | KeyCode::F(1) | KeyCode::Esc => app.show_help = false,
+                            KeyCode::Char('?') | KeyCode::F(1) | KeyCode::Esc => {
+                                app.show_help = false
+                            }
                             _ => {}
                         }
                     } else {
@@ -817,7 +847,29 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
                                     app.selected_trace -= 1;
                                     app.selected_event = 0;
                                     app.details_scroll = 0;
-                                    app.fetch_trace_details();
+
+                                    // Clear audit trail data for new trace
+                                    app.audit_trail_data = None;
+                                    app.selected_variable = None;
+
+                                    // Mark selection changed - will load after debounce delay (unless cached)
+                                    app.mark_selection_changed();
+
+                                    // If cached, load immediately for instant response
+                                    if app.trace_cache.contains_key(&app.selected_trace) {
+                                        app.loaded_trace = app.selected_trace;
+                                        app.last_selection_change = None;
+                                        app.fetch_trace_details();
+
+                                        // Fetch audit trail if needed
+                                        if matches!(app.view_mode, ViewMode::AuditTrail) {
+                                            if app.audit_trail_data.is_none()
+                                                && app.selected_variable.is_none()
+                                            {
+                                                app.fetch_first_race_variable();
+                                            }
+                                        }
+                                    }
                                 }
                             }
                             KeyCode::Char('s') if matches!(app.focused_panel, Panel::Traces) => {
@@ -825,7 +877,29 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
                                     app.selected_trace += 1;
                                     app.selected_event = 0;
                                     app.details_scroll = 0;
-                                    app.fetch_trace_details();
+
+                                    // Clear audit trail data for new trace
+                                    app.audit_trail_data = None;
+                                    app.selected_variable = None;
+
+                                    // Mark selection changed - will load after debounce delay (unless cached)
+                                    app.mark_selection_changed();
+
+                                    // If cached, load immediately for instant response
+                                    if app.trace_cache.contains_key(&app.selected_trace) {
+                                        app.loaded_trace = app.selected_trace;
+                                        app.last_selection_change = None;
+                                        app.fetch_trace_details();
+
+                                        // Fetch audit trail if needed
+                                        if matches!(app.view_mode, ViewMode::AuditTrail) {
+                                            if app.audit_trail_data.is_none()
+                                                && app.selected_variable.is_none()
+                                            {
+                                                app.fetch_first_race_variable();
+                                            }
+                                        }
+                                    }
                                 }
                             }
 
@@ -846,8 +920,12 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
                             }
 
                             // Anomalies panel: p/n (previous/next)
-                            KeyCode::Char('p') if matches!(app.focused_panel, Panel::Anomalies) => app.scroll_focused_up(),
-                            KeyCode::Char('n') if matches!(app.focused_panel, Panel::Anomalies) => app.scroll_focused_down(),
+                            KeyCode::Char('p') if matches!(app.focused_panel, Panel::Anomalies) => {
+                                app.scroll_focused_up()
+                            }
+                            KeyCode::Char('n') if matches!(app.focused_panel, Panel::Anomalies) => {
+                                app.scroll_focused_down()
+                            }
 
                             // Global actions
                             KeyCode::Char('r') => {
@@ -867,17 +945,15 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
                         }
                     }
                 }
-                Event::Mouse(mouse) => {
-                    match mouse.kind {
-                        MouseEventKind::Down(_button) => {
-                            let size = terminal.size()?;
-                            app.handle_click(mouse.column, mouse.row, size.width, size.height);
-                        }
-                        MouseEventKind::ScrollDown => app.scroll_focused_down(),
-                        MouseEventKind::ScrollUp => app.scroll_focused_up(),
-                        _ => {}
+                Event::Mouse(mouse) => match mouse.kind {
+                    MouseEventKind::Down(_button) => {
+                        let size = terminal.size()?;
+                        app.handle_click(mouse.column, mouse.row, size.width, size.height);
                     }
-                }
+                    MouseEventKind::ScrollDown => app.scroll_focused_down(),
+                    MouseEventKind::ScrollUp => app.scroll_focused_up(),
+                    _ => {}
+                },
                 _ => {}
             }
         }
@@ -945,10 +1021,12 @@ fn render_help_modal(f: &mut Frame) {
 
     // Render help text with background
     let help_widget = Paragraph::new(help_content)
-        .block(Block::default()
-            .borders(Borders::ALL)
-            .title("📖 Help")
-            .style(Style::default().bg(Color::Black).fg(Color::Cyan)))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("📖 Help")
+                .style(Style::default().bg(Color::Black).fg(Color::Cyan)),
+        )
         .style(Style::default().bg(Color::Black).fg(Color::White))
         .wrap(Wrap { trim: false });
 
@@ -970,18 +1048,24 @@ fn ui(f: &mut Frame, app: &App) {
 
     // Header with status
     let auto_refresh_status = if app.auto_refresh {
-        let seconds_until_refresh = app.refresh_interval_secs
+        let seconds_until_refresh = app
+            .refresh_interval_secs
             .saturating_sub(app.last_refresh.elapsed().as_secs());
-        format!("Auto-refresh: ON (next in {}s)",
-                seconds_until_refresh)
+        format!("Auto-refresh: ON (next in {}s)", seconds_until_refresh)
     } else {
         "Auto-refresh: OFF".to_string()
     };
 
-    let header_text = format!("🏁 Raceway - Concurrency Debugger | {} | {}",
-                              auto_refresh_status, app.status_message);
+    let header_text = format!(
+        "🏁 Raceway - Concurrency Debugger | {} | {}",
+        auto_refresh_status, app.status_message
+    );
     let header = Paragraph::new(header_text)
-        .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
+        .style(
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        )
         .block(Block::default().borders(Borders::ALL));
     f.render_widget(header, chunks[0]);
 
@@ -1005,8 +1089,14 @@ fn ui(f: &mut Frame, app: &App) {
             let is_selected = i == app.selected_trace;
 
             let style = match (is_selected, has_race) {
-                (true, true) => Style::default().fg(Color::Red).add_modifier(Modifier::BOLD).add_modifier(Modifier::REVERSED),
-                (true, false) => Style::default().fg(Color::Green).add_modifier(Modifier::BOLD).add_modifier(Modifier::REVERSED),
+                (true, true) => Style::default()
+                    .fg(Color::Red)
+                    .add_modifier(Modifier::BOLD)
+                    .add_modifier(Modifier::REVERSED),
+                (true, false) => Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD)
+                    .add_modifier(Modifier::REVERSED),
                 (false, true) => Style::default().fg(Color::Red),
                 (false, false) => Style::default(),
             };
@@ -1060,8 +1150,12 @@ fn ui(f: &mut Frame, app: &App) {
                     let is_selected = i == app.selected_event;
 
                     let style = match (is_selected, event_in_race) {
-                        (true, true) => Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
-                        (true, false) => Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+                        (true, true) => {
+                            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
+                        }
+                        (true, false) => Style::default()
+                            .fg(Color::Green)
+                            .add_modifier(Modifier::BOLD),
                         (false, true) => Style::default().fg(Color::Red),
                         (false, false) => Style::default(),
                     };

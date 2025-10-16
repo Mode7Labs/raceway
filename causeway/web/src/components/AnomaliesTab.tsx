@@ -17,10 +17,22 @@ export function AnomaliesTab({ data }: AnomaliesTabProps) {
   const [severityFilter, setSeverityFilter] = useState('all');
   const [eventKindFilter, setEventKindFilter] = useState('all');
   const [showFilters, setShowFilters] = useState(false);
-  if (!data) {
+  if (!data || data.anomalies.length === 0) {
     return (
-      <div className="flex items-center justify-center h-64 text-muted-foreground">
-        Loading anomalies data...
+      <div className="h-[calc(100dvh-5.5rem)] overflow-y-auto p-3">
+        <Card className="border-green-500/20 bg-green-500/5">
+          <CardContent className="pt-6">
+            <div className="flex items-start gap-3">
+              <span className="text-2xl">✓</span>
+              <div className="space-y-1">
+                <div className="font-medium text-sm">No Performance Anomalies Detected</div>
+                <p className="text-sm text-muted-foreground">
+                  All operations completed within expected time ranges. Your application is performing well!
+                </p>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
       </div>
     );
   }

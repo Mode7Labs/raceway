@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -20,7 +22,8 @@ pub struct TracesListResponse {
 #[derive(Deserialize)]
 pub struct TracesListData {
     pub total_traces: usize,
-    pub total_events: usize,
+    #[serde(default)]
+    pub total_events: Option<usize>,
     pub trace_ids: Vec<String>,
 }
 
@@ -45,10 +48,12 @@ pub struct AnalysisResponse {
 
 #[derive(Deserialize)]
 pub struct AnalysisData {
-    pub trace_id: String,
+    #[serde(default)]
+    pub trace_id: Option<String>,
     pub concurrent_events: usize,
     pub potential_races: usize,
     pub anomalies: Vec<String>,
+    #[serde(default)]
     pub race_details: Option<Vec<RaceDetail>>,
 }
 
@@ -101,7 +106,7 @@ pub struct CriticalPathResponse {
     pub data: Option<CriticalPathData>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 pub struct CriticalPathData {
     pub trace_id: String,
     pub path_events: usize,
@@ -111,7 +116,7 @@ pub struct CriticalPathData {
     pub path: Vec<PathEvent>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 pub struct PathEvent {
     pub id: String,
     pub kind: String,
@@ -153,6 +158,8 @@ pub struct CachedTraceData {
     pub anomalies: Vec<String>,
     pub has_races: bool,
     pub anomalies_data: Option<AnomaliesData>,
+    pub critical_path_data: Option<CriticalPathData>,
+    pub dependencies_data: Option<DependenciesData>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -165,12 +172,12 @@ pub enum Panel {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ViewMode {
-    Events,        // Default event timeline view
-    Tree,          // Tree view showing causal relationships
-    CriticalPath,  // Show critical path analysis
-    Anomalies,     // Show detected anomalies with details
-    Dependencies,  // Show service dependencies graph
-    AuditTrail,    // Show audit trail for a variable
+    Events,       // Default event timeline view
+    Tree,         // Tree view showing causal relationships
+    CriticalPath, // Show critical path analysis
+    Anomalies,    // Show detected anomalies with details
+    Dependencies, // Show service dependencies graph
+    AuditTrail,   // Show audit trail for a variable
 }
 
 // Dependencies response types
@@ -226,4 +233,22 @@ pub struct VariableAccess {
     pub location: String,
     pub has_causal_link_to_previous: bool,
     pub is_race: bool,
+}
+
+// Full trace analysis response (single endpoint with ALL data)
+#[derive(Deserialize)]
+pub struct FullTraceAnalysisResponse {
+    pub success: bool,
+    pub data: Option<FullTraceAnalysisData>,
+}
+
+#[derive(Deserialize)]
+pub struct FullTraceAnalysisData {
+    pub trace_id: String,
+    pub events: Vec<serde_json::Value>,
+    pub audit_trails: std::collections::HashMap<String, Vec<VariableAccess>>,
+    pub analysis: AnalysisData,
+    pub critical_path: Option<serde_json::Value>, // Will be parsed to CriticalPathData if present
+    pub anomalies: Vec<serde_json::Value>,        // Will be parsed to Vec<DetectedAnomaly>
+    pub dependencies: Option<DependenciesData>,
 }

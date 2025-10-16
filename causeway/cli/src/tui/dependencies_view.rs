@@ -1,10 +1,10 @@
+use super::types::DependenciesData;
 use ratatui::{
     layout::Rect,
-    style::{Color, Modifier, Style},
-    widgets::{Block, Borders, List, ListItem, Paragraph, Wrap},
+    style::{Color, Style},
+    widgets::{Block, Borders, Paragraph, Wrap},
     Frame,
 };
-use super::types::DependenciesData;
 
 pub fn render_dependencies_view(
     f: &mut Frame,
@@ -50,7 +50,10 @@ pub fn render_dependencies_view(
 
         lines.push("Services:".to_string());
         for service in &sorted_services {
-            lines.push(format!("  • {} ({} events)", service.name, service.event_count));
+            lines.push(format!(
+                "  • {} ({} events)",
+                service.name, service.event_count
+            ));
         }
 
         if !deps.dependencies.is_empty() {
@@ -58,12 +61,7 @@ pub fn render_dependencies_view(
             lines.push("Dependencies:".to_string());
 
             for dep in &deps.dependencies {
-                lines.push(format!(
-                    "  {} ─[{}]→ {}",
-                    dep.from,
-                    dep.call_count,
-                    dep.to
-                ));
+                lines.push(format!("  {} ─[{}]→ {}", dep.from, dep.call_count, dep.to));
             }
         } else {
             lines.push(String::new());
@@ -72,9 +70,7 @@ pub fn render_dependencies_view(
         }
 
         let text = lines.join("\n");
-        let widget = Paragraph::new(text)
-            .block(block)
-            .wrap(Wrap { trim: true });
+        let widget = Paragraph::new(text).block(block).wrap(Wrap { trim: true });
         f.render_widget(widget, area);
     } else {
         let loading_text = "Loading dependencies...";
