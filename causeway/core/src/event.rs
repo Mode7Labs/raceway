@@ -135,20 +135,43 @@ impl Event {
     }
 
     /// Returns true if this event happened before the other event in causal order
+    /// Uses vector clock semantics, not timestamps (which can be skewed in distributed/async systems)
+    ///
+    /// self -> other if:
+    /// 1. For all trace IDs in self's vector: self.VC[trace] <= other.VC[trace]
+    /// 2. At least one trace has strictly less: self.VC[trace] < other.VC[trace]
+    /// 3. All traces from self are present in other (causally connected)
     pub fn happened_before(&self, other: &Event) -> bool {
-        if self.timestamp < other.timestamp {
-            // Check vector clocks for concurrent events
-            self.causality_vector.iter().all(|(id, clock)| {
-                other
-                    .causality_vector
-                    .iter()
-                    .find(|(other_id, _)| other_id == id)
-                    .map(|(_, other_clock)| clock <= other_clock)
-                    .unwrap_or(true)
-            })
-        } else {
-            false
+        if self.causality_vector.is_empty() || other.causality_vector.is_empty() {
+            // Without vector clocks, we can't determine causality - assume concurrent
+            return false;
         }
+
+        let mut found_strictly_less = false;
+
+        // Check that self's clock is <= other's clock for all components in self
+        for (trace_id_self, clock_self) in &self.causality_vector {
+            if let Some((_, clock_other)) = other.causality_vector.iter().find(|(id, _)| id == trace_id_self) {
+                if clock_self > clock_other {
+                    // self has a later clock for this trace - definitely not happens-before
+                    return false;
+                }
+                if clock_self < clock_other {
+                    found_strictly_less = true;
+                }
+            } else {
+                // other doesn't have this trace in its vector clock
+                // This means they're independent on this trace dimension
+                // Can't establish happens-before if not all traces are present
+                return false;
+            }
+        }
+
+        // Happens-before requires:
+        // 1. All trace IDs in self's VC are <= in other's VC (checked above)
+        // 2. At least one trace is strictly less
+        // 3. All traces from self are present in other (checked above)
+        found_strictly_less
     }
 
     /// Detects if two events are concurrent (neither happened before the other)

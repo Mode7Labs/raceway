@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use axum::{
     extract::{Path, State},
     http::{Method, StatusCode},
@@ -8,13 +8,11 @@ use axum::{
 };
 use chrono::Local;
 use raceway_core::engine::EngineConfig;
-use raceway_core::graph::{
-    Anomaly, AuditTrail, CausalGraph, CriticalPath, ServiceDependencies, VariableAccess,
-};
+use raceway_core::graph::{Anomaly, ServiceDependencies, VariableAccess};
 use raceway_core::storage::TraceAnalysisData;
 use raceway_core::{create_storage_backend, Config, Event, RacewayEngine};
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::Arc;
 use tower_http::cors::{Any, CorsLayer};
 use uuid::Uuid;
@@ -23,91 +21,6 @@ use uuid::Uuid;
 struct AppState {
     engine: Arc<RacewayEngine>,
     verbose: bool,
-}
-
-struct TraceWorkspace {
-    trace_id: Uuid,
-    events: Vec<Event>,
-    graph: Arc<CausalGraph>,
-}
-
-impl TraceWorkspace {
-    fn new(trace_id: Uuid, events: Vec<Event>) -> Result<Self> {
-        let graph = CausalGraph::from_events(events.clone())
-            .with_context(|| format!("failed to reconstruct graph for trace {trace_id}"))?;
-
-        Ok(Self {
-            trace_id,
-            events,
-            graph: Arc::new(graph),
-        })
-    }
-
-    fn analysis(&self) -> Result<TraceAnalysisData> {
-        let mut variables = HashSet::new();
-        for event in &self.events {
-            if let raceway_core::event::EventKind::StateChange { variable, .. } = &event.kind {
-                variables.insert(variable.clone());
-            }
-        }
-
-        let mut audit_trails: HashMap<String, Vec<VariableAccess>> = HashMap::new();
-        for variable in variables {
-            if let Ok(trail) = self.graph.get_audit_trail(self.trace_id, &variable) {
-                audit_trails.insert(variable, trail.accesses);
-            }
-        }
-
-        let critical_path = self.graph.get_critical_path(self.trace_id).ok();
-        let anomalies = self
-            .graph
-            .detect_anomalies(self.trace_id)
-            .unwrap_or_default();
-        let dependencies = self.graph.get_service_dependencies(self.trace_id).ok();
-
-        Ok(TraceAnalysisData {
-            events: self.events.clone(),
-            audit_trails,
-            critical_path,
-            anomalies,
-            dependencies,
-        })
-    }
-
-    fn concurrent_events(&self) -> Result<Vec<(Event, Event)>> {
-        self.graph.find_concurrent_events(self.trace_id)
-    }
-
-    fn audit_trail(&self, variable: &str) -> Result<AuditTrail> {
-        self.graph.get_audit_trail(self.trace_id, variable)
-    }
-
-    fn anomalies(&self) -> Result<Vec<Anomaly>> {
-        self.graph.detect_anomalies(self.trace_id)
-    }
-
-    fn critical_path(&self) -> Result<CriticalPath> {
-        self.graph.get_critical_path(self.trace_id)
-    }
-
-    fn dependencies(&self) -> Result<ServiceDependencies> {
-        self.graph.get_service_dependencies(self.trace_id)
-    }
-}
-
-async fn load_trace_workspace(state: &AppState, trace_id: Uuid) -> Result<TraceWorkspace> {
-    let events = state
-        .engine
-        .storage()
-        .get_trace_events(trace_id)
-        .await
-        .with_context(|| format!("failed to fetch events for trace {trace_id}"))?;
-
-    if events.is_empty() {
-        anyhow::bail!("trace {} contains no events", trace_id);
-    }
-
-    TraceWorkspace::new(trace_id, events)
 }
 
 #[derive(Debug, Deserialize)]
@@ -539,16 +452,8 @@ async fn get_audit_trail_handler(
         )
     })?;
 
-    let workspace = load_trace_workspace(&state, trace_uuid)
-        .await
-        .map_err(|e| {
-            (
-                StatusCode::NOT_FOUND,
-                Json(ApiResponse::error(e.to_string())),
-            )
-        })?;
-
-    match workspace.audit_trail(&variable) {
+    // Use storage backend directly - no graph reconstruction
+    match state.engine.storage().get_audit_trail(trace_uuid, &variable).await {
         Ok(audit_trail) => Ok((StatusCode::OK, Json(ApiResponse::success(audit_trail)))),
         Err(e) => Err((
             StatusCode::NOT_FOUND,
@@ -571,23 +476,25 @@ async fn get_full_trace_analysis_handler(
         )
     })?;
 
-    let workspace = load_trace_workspace(&state, trace_uuid)
+    // Use storage backend directly - preserves all accumulated baselines and caches
+    let analysis_data = state
+        .engine
+        .storage()
+        .get_trace_analysis_data(trace_uuid)
         .await
         .map_err(|e| {
             (
                 StatusCode::NOT_FOUND,
-                Json(ApiResponse::error(e.to_string())),
+                Json(ApiResponse::error(format!("Failed to fetch trace: {}", e))),
             )
         })?;
 
-    let analysis_data = workspace.analysis().map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ApiResponse::error(format!("Trace analysis failed: {}", e))),
-        )
-    })?;
-
-    let concurrent = workspace.concurrent_events().unwrap_or_default();
+    let concurrent = state
+        .engine
+        .storage()
+        .find_concurrent_events(trace_uuid)
+        .await
+        .unwrap_or_default();
 
     #[derive(Serialize)]
     struct RaceDetail {
@@ -832,16 +739,13 @@ async fn analyze_trace_handler(
         )
     })?;
 
-    let workspace = load_trace_workspace(&state, trace_uuid)
+    // Use storage backend directly
+    let concurrent = state
+        .engine
+        .storage()
+        .find_concurrent_events(trace_uuid)
         .await
-        .map_err(|e| {
-            (
-                StatusCode::NOT_FOUND,
-                Json(ApiResponse::error(e.to_string())),
-            )
-        })?;
-
-    let concurrent = workspace.concurrent_events().unwrap_or_default();
+        .unwrap_or_default();
 
     #[derive(Serialize)]
     struct RaceDetail {
@@ -962,16 +866,8 @@ async fn get_critical_path_handler(
         )
     })?;
 
-    let workspace = load_trace_workspace(&state, trace_uuid)
-        .await
-        .map_err(|e| {
-            (
-                StatusCode::NOT_FOUND,
-                Json(ApiResponse::error(e.to_string())),
-            )
-        })?;
-
-    match workspace.critical_path() {
+    // Use storage backend directly
+    match state.engine.storage().get_critical_path(trace_uuid).await {
         Ok(critical_path) => {
             #[derive(Serialize)]
             struct PathEvent {
@@ -1068,16 +964,13 @@ async fn get_anomalies_handler(
         )
     })?;
 
-    let workspace = load_trace_workspace(&state, trace_uuid)
+    // Use storage backend directly - preserves accumulated baselines
+    let anomalies = state
+        .engine
+        .storage()
+        .detect_anomalies(trace_uuid)
         .await
-        .map_err(|e| {
-            (
-                StatusCode::NOT_FOUND,
-                Json(ApiResponse::error(e.to_string())),
-            )
-        })?;
-
-    let anomalies = workspace.anomalies().unwrap_or_default();
+        .unwrap_or_default();
 
     #[derive(Serialize)]
     struct AnomaliesResponse {
@@ -1106,16 +999,8 @@ async fn get_dependencies_handler(
         )
     })?;
 
-    let workspace = load_trace_workspace(&state, trace_uuid)
-        .await
-        .map_err(|e| {
-            (
-                StatusCode::NOT_FOUND,
-                Json(ApiResponse::error(e.to_string())),
-            )
-        })?;
-
-    match workspace.dependencies() {
+    // Use storage backend directly
+    match state.engine.storage().get_service_dependencies(trace_uuid).await {
         Ok(deps) => Ok((StatusCode::OK, Json(ApiResponse::success(deps)))),
         Err(e) => Err((
             StatusCode::NOT_FOUND,

@@ -133,11 +133,12 @@ pub struct CausalGraph {
     trace_roots: DashMap<Uuid, Vec<Uuid>>, // trace_id -> root event IDs
     analysis_cache: DashMap<Uuid, Vec<(Event, Event)>>, // trace_id -> cached concurrent pairs
     anomaly_cache: DashMap<Uuid, Vec<Anomaly>>, // trace_id -> cached anomalies
-    vector_clocks: DashMap<String, u64>,   // thread_id -> logical clock value
+    vector_clocks: DashMap<Uuid, u64>,   // trace_id -> logical clock value (fixes async migration)
     lock_sets: DashMap<String, HashSet<String>>, // thread_id -> currently held locks
     baseline_metrics: DashMap<String, BaselineMetrics>, // event_kind -> metrics
     baseline_durations: DashMap<String, Vec<f64>>, // event_kind -> all observed durations
     baselines_updated: DashMap<Uuid, bool>, // track which traces have been added to baselines
+    variable_index: DashMap<String, Vec<Uuid>>, // variable_name -> event IDs accessing it (for fast race detection)
 }
 
 impl CausalGraph {
@@ -153,14 +154,15 @@ impl CausalGraph {
             baseline_metrics: DashMap::new(),
             baseline_durations: DashMap::new(),
             baselines_updated: DashMap::new(),
+            variable_index: DashMap::new(),
         }
     }
 
     /// Add an event to the graph
     pub fn add_event(&self, mut event: Event) -> Result<()> {
-        // Update vector clock for this thread
-        let thread_id = event.metadata.thread_id.clone();
-        let mut clock_value = self.vector_clocks.entry(thread_id.clone()).or_insert(0);
+        // Update vector clock for this trace (not thread, to handle async task migration)
+        let trace_id = event.trace_id;
+        let mut clock_value = self.vector_clocks.entry(trace_id).or_insert(0);
         *clock_value += 1;
         let current_clock = *clock_value;
         drop(clock_value);
@@ -174,31 +176,27 @@ impl CausalGraph {
                 let parent_event = &parent_entry.value().1.event;
 
                 // Merge vector clocks (take max of each component)
-                for (parent_thread_uuid, parent_clock) in &parent_event.causality_vector {
-                    causality_vector.push((*parent_thread_uuid, *parent_clock));
+                for (parent_trace_id, parent_clock) in &parent_event.causality_vector {
+                    causality_vector.push((*parent_trace_id, *parent_clock));
                 }
             }
         }
 
-        // Add or update this thread's clock in the vector
-        let thread_uuid = Uuid::parse_str(&thread_id).unwrap_or_else(|_| {
-            // If thread_id isn't a valid UUID, create a deterministic one from the thread name
-            Uuid::new_v5(&Uuid::NAMESPACE_OID, thread_id.as_bytes())
-        });
-
-        // Update or add this thread's entry
+        // Update or add this trace's entry in the causality vector
         if let Some(existing) = causality_vector
             .iter_mut()
-            .find(|(id, _)| *id == thread_uuid)
+            .find(|(id, _)| *id == trace_id)
         {
             existing.1 = current_clock;
         } else {
-            causality_vector.push((thread_uuid, current_clock));
+            causality_vector.push((trace_id, current_clock));
         }
 
         event.causality_vector = causality_vector;
 
         // Capture the current lock set for this thread BEFORE modifying it
+        // (locks are still thread-local, not trace-local)
+        let thread_id = event.metadata.thread_id.clone();
         let current_locks: Vec<String> = self
             .lock_sets
             .get(&thread_id)
@@ -249,6 +247,15 @@ impl CausalGraph {
 
         drop(graph); // Release lock before inserting into nodes
         self.nodes.insert(event.id, (node_index, causal_node));
+
+        // Update variable index for fast race detection
+        if let EventKind::StateChange { variable, .. } = &event.kind {
+            self.variable_index
+                .entry(variable.clone())
+                .or_insert_with(Vec::new)
+                .push(event.id);
+        }
+
         Ok(())
     }
 
@@ -364,47 +371,64 @@ impl CausalGraph {
     }
 
     /// Find all concurrent events (potential race conditions)
+    /// Uses variable index for O(m * k²) complexity instead of O(n²)
+    /// where m = number of variables, k = avg accesses per variable
     pub fn find_concurrent_events(&self, trace_id: Uuid) -> Result<Vec<(Event, Event)>> {
         // Check cache first
         if let Some(cached) = self.analysis_cache.get(&trace_id) {
             return Ok(cached.value().clone());
         }
-        let events = self.get_causal_order(trace_id)?;
+
         let mut concurrent_pairs = Vec::new();
 
-        // Look for StateChange events that access the same variable
-        for i in 0..events.len() {
-            for j in (i + 1)..events.len() {
-                // Check if both are state changes
-                if let (
-                    EventKind::StateChange {
-                        variable: var1,
-                        access_type: access1,
-                        ..
-                    },
-                    EventKind::StateChange {
-                        variable: var2,
-                        access_type: access2,
-                        ..
-                    },
-                ) = (&events[i].kind, &events[j].kind)
-                {
-                    // Same variable access
-                    if var1 == var2 {
+        // Iterate through each variable in the index
+        for entry in self.variable_index.iter() {
+            let _variable = entry.key();
+            let event_ids = entry.value();
+
+            // Filter to events from this trace only
+            let mut trace_events = Vec::new();
+            for &event_id in event_ids.iter() {
+                if let Some(node_entry) = self.nodes.get(&event_id) {
+                    let event = &node_entry.value().1.event;
+                    if event.trace_id == trace_id {
+                        trace_events.push(event.clone());
+                    }
+                }
+            }
+
+            // Now compare only events that access the same variable (from this trace)
+            for i in 0..trace_events.len() {
+                for j in (i + 1)..trace_events.len() {
+                    if let (
+                        EventKind::StateChange {
+                            access_type: access1,
+                            ..
+                        },
+                        EventKind::StateChange {
+                            access_type: access2,
+                            ..
+                        },
+                    ) = (&trace_events[i].kind, &trace_events[j].kind)
+                    {
                         // Skip safe access patterns
                         if self.is_safe_access_pattern(*access1, *access2) {
                             continue;
                         }
 
                         // Different threads
-                        if events[i].metadata.thread_id != events[j].metadata.thread_id {
-                            // Use vector clocks for happens-before check (more precise than graph path)
-                            if !self.happens_before_vc(&events[i], &events[j])
-                                && !self.happens_before_vc(&events[j], &events[i])
+                        if trace_events[i].metadata.thread_id != trace_events[j].metadata.thread_id {
+                            // Use vector clocks for happens-before check
+                            if !self.happens_before_vc(&trace_events[i], &trace_events[j])
+                                && !self.happens_before_vc(&trace_events[j], &trace_events[i])
                             {
                                 // Check if accesses were protected by the same lock
-                                if !self.protected_by_same_lock(&events[i], &events[j]) {
-                                    concurrent_pairs.push((events[i].clone(), events[j].clone()));
+                                if !self.protected_by_same_lock(&trace_events[i], &trace_events[j])
+                                {
+                                    concurrent_pairs.push((
+                                        trace_events[i].clone(),
+                                        trace_events[j].clone(),
+                                    ));
                                 }
                             }
                         }
@@ -422,10 +446,11 @@ impl CausalGraph {
 
     /// Check if event1 happens-before event2 using vector clocks
     /// This is more precise than graph paths as it captures all causal relationships
+    /// Vector clocks use trace IDs (not thread IDs) to handle async task migration
     fn happens_before_vc(&self, event1: &Event, event2: &Event) -> bool {
-        // event1 -> event2 if for all threads in VC1:
-        // VC1[thread] <= VC2[thread]
-        // AND there exists at least one thread where VC1[thread] < VC2[thread]
+        // event1 -> event2 if for all traces in VC1:
+        // VC1[trace] <= VC2[trace]
+        // AND there exists at least one trace where VC1[trace] < VC2[trace]
 
         if event1.causality_vector.is_empty() && event2.causality_vector.is_empty() {
             // Neither has vector clocks - they're concurrent (can't determine ordering)
@@ -443,31 +468,31 @@ impl CausalGraph {
         }
 
         let mut found_less = false;
-        let mut all_threads_match = true;
+        let mut all_traces_match = true;
 
         // Check that event1's clock is <= event2's clock for all components in event1
-        for (thread1, clock1) in &event1.causality_vector {
-            if let Some((_, clock2)) = event2.causality_vector.iter().find(|(t, _)| t == thread1) {
+        for (trace1, clock1) in &event1.causality_vector {
+            if let Some((_, clock2)) = event2.causality_vector.iter().find(|(t, _)| t == trace1) {
                 if clock1 > clock2 {
-                    // event1 has a later clock for this thread - definitely not happens-before
+                    // event1 has a later clock for this trace - definitely not happens-before
                     return false;
                 }
                 if clock1 < clock2 {
                     found_less = true;
                 }
             } else {
-                // event2 doesn't have this thread in its vector clock
-                // This means they're independent on this thread dimension
-                // Can't establish happens-before if not all threads are present
-                all_threads_match = false;
+                // event2 doesn't have this trace in its vector clock
+                // This means they're independent on this trace dimension
+                // Can't establish happens-before if not all traces are present
+                all_traces_match = false;
             }
         }
 
         // Happens-before requires:
-        // 1. All threads in event1's VC are <= in event2's VC
-        // 2. At least one thread is strictly less
-        // 3. All threads from event1 are present in event2 (causally connected)
-        found_less && all_threads_match
+        // 1. All traces in event1's VC are <= in event2's VC
+        // 2. At least one trace is strictly less
+        // 3. All traces from event1 are present in event2 (causally connected)
+        found_less && all_traces_match
     }
 
     /// Determine if two access types form a safe (non-racing) pattern
@@ -655,6 +680,7 @@ impl CausalGraph {
     }
 
     /// Find the critical path (longest path by duration) through a trace
+    /// This is async-aware: parallel branches are handled by taking MAX duration, not SUM
     pub fn get_critical_path(&self, trace_id: Uuid) -> Result<CriticalPath> {
         let events = self.get_causal_order(trace_id)?;
 
@@ -676,28 +702,105 @@ impl CausalGraph {
 
         // Process events in topological order
         for event in &events {
-            // Get children from graph
+            // Get children and their edge types from graph
             if let Some(entry) = self.nodes.get(&event.id) {
                 let (node_idx, _) = entry.value();
                 let graph = self.graph.lock().unwrap();
-                let children: Vec<Uuid> = graph
+                let children_with_edges: Vec<(Uuid, CausalEdge)> = graph
                     .edges(*node_idx)
-                    .map(|edge| graph[edge.target()])
+                    .map(|edge| (graph[edge.target()], edge.weight().clone()))
                     .collect();
                 drop(graph);
 
-                // Update cumulative durations for children
+                if children_with_edges.is_empty() {
+                    continue;
+                }
+
                 let current_cumulative =
                     cumulative_durations.get(&event.id).copied().unwrap_or(0.0);
 
-                for child_id in children {
+                // Group children by whether they're concurrent (spawned) or sequential
+                let mut spawned_children = Vec::new();
+                let mut sequential_children = Vec::new();
+
+                for (child_id, edge_type) in children_with_edges {
+                    match edge_type {
+                        CausalEdge::AsyncSpawn => spawned_children.push(child_id),
+                        _ => sequential_children.push(child_id),
+                    }
+                }
+
+                // For spawned (concurrent) children, we need to handle them specially:
+                // Multiple spawned tasks run in parallel, so we take MAX not SUM
+                // However, each spawned task still needs to propagate its own cumulative
+                if !spawned_children.is_empty() {
+                    // Check if these spawned children are truly concurrent with each other
+                    let mut concurrent_groups: Vec<Vec<Uuid>> = Vec::new();
+
+                    for &child_id in &spawned_children {
+                        if let Some(child_entry) = self.nodes.get(&child_id) {
+                            let child_event = &child_entry.value().1.event;
+
+                            // Find which group this child belongs to (concurrent with existing group members)
+                            let mut found_group = false;
+                            for group in &mut concurrent_groups {
+                                // Check if this child is concurrent with all members of the group
+                                let is_concurrent_with_group = group.iter().all(|&other_id| {
+                                    if let Some(other_entry) = self.nodes.get(&other_id) {
+                                        let other_event = &other_entry.value().1.event;
+                                        !self.happens_before_vc(child_event, other_event)
+                                            && !self.happens_before_vc(other_event, child_event)
+                                    } else {
+                                        false
+                                    }
+                                });
+
+                                if is_concurrent_with_group {
+                                    group.push(child_id);
+                                    found_group = true;
+                                    break;
+                                }
+                            }
+
+                            if !found_group {
+                                concurrent_groups.push(vec![child_id]);
+                            }
+                        }
+                    }
+
+                    // For each concurrent group, they share the same base cumulative from parent
+                    // But each calculates its own branch duration
+                    for child_id in spawned_children {
+                        if let Some(child_entry) = self.nodes.get(&child_id) {
+                            let child_event = &child_entry.value().1.event;
+                            let child_duration =
+                                child_event.metadata.duration_ns.unwrap_or(0) as f64 / 1_000_000.0;
+
+                            // For spawned tasks, the cumulative is parent's time + this task's time
+                            // (The max logic happens when branches rejoin at an await point)
+                            let new_cumulative = current_cumulative + child_duration;
+
+                            let should_update = cumulative_durations
+                                .get(&child_id)
+                                .map(|&existing| new_cumulative > existing)
+                                .unwrap_or(true);
+
+                            if should_update {
+                                cumulative_durations.insert(child_id, new_cumulative);
+                                predecessors.insert(child_id, event.id);
+                            }
+                        }
+                    }
+                }
+
+                // For sequential children, add durations normally
+                for child_id in sequential_children {
                     if let Some(child_entry) = self.nodes.get(&child_id) {
                         let child_event = &child_entry.value().1.event;
                         let child_duration =
                             child_event.metadata.duration_ns.unwrap_or(0) as f64 / 1_000_000.0;
                         let new_cumulative = current_cumulative + child_duration;
 
-                        // Update if this path is longer
                         let should_update = cumulative_durations
                             .get(&child_id)
                             .map(|&existing| new_cumulative > existing)
