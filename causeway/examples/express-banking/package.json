@@ -1,15 +1,15 @@
 {
-  "name": "causeway-express-example",
+  "name": "raceway-express-example",
   "version": "1.0.0",
-  "description": "Example Express app using Causeway SDK to detect race conditions",
+  "description": "Example Express banking app using Raceway SDK to detect race conditions",
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
     "dev": "nodemon index.js"
   },
   "dependencies": {
-    "express": "^4.18.2",
-    "uuid": "^9.0.0"
+    "@mode-7/raceway-node": "file:../../sdks/typescript",
+    "express": "^4.18.2"
   },
   "devDependencies": {
     "nodemon": "^3.0.1"

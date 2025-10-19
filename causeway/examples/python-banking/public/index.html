@@ -1,0 +1,464 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SecureBank - Online Banking</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+      padding: 20px;
+    }
+
+    .container {
+      max-width: 1000px;
+      margin: 0 auto;
+    }
+
+    .header {
+      background: white;
+      padding: 20px 30px;
+      border-radius: 10px 10px 0 0;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .logo {
+      font-size: 24px;
+      font-weight: bold;
+      color: #667eea;
+    }
+
+    .banner {
+      background: #fff3cd;
+      border: 1px solid #ffc107;
+      padding: 15px;
+      border-radius: 0 0 10px 10px;
+      margin-bottom: 20px;
+      text-align: center;
+      color: #856404;
+    }
+
+    .banner strong {
+      color: #d9534f;
+    }
+
+    .card {
+      background: white;
+      border-radius: 10px;
+      padding: 30px;
+      margin-bottom: 20px;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+    }
+
+    .card-title {
+      font-size: 20px;
+      font-weight: 600;
+      margin-bottom: 20px;
+      color: #333;
+    }
+
+    .accounts-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+      gap: 20px;
+      margin-bottom: 30px;
+    }
+
+    .account-card {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      padding: 20px;
+      border-radius: 10px;
+      box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+    }
+
+    .account-name {
+      font-size: 14px;
+      opacity: 0.9;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      margin-bottom: 10px;
+    }
+
+    .account-balance {
+      font-size: 32px;
+      font-weight: bold;
+      margin-bottom: 5px;
+    }
+
+    .form-group {
+      margin-bottom: 20px;
+    }
+
+    .form-group label {
+      display: block;
+      margin-bottom: 8px;
+      color: #555;
+      font-weight: 500;
+    }
+
+    .form-group select,
+    .form-group input {
+      width: 100%;
+      padding: 12px;
+      border: 1px solid #ddd;
+      border-radius: 5px;
+      font-size: 14px;
+    }
+
+    .form-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 20px;
+    }
+
+    .btn {
+      padding: 12px 24px;
+      border: none;
+      border-radius: 5px;
+      font-size: 16px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.3s;
+    }
+
+    .btn-primary {
+      background: #667eea;
+      color: white;
+    }
+
+    .btn-primary:hover {
+      background: #5568d3;
+    }
+
+    .btn-danger {
+      background: #d9534f;
+      color: white;
+    }
+
+    .btn-danger:hover {
+      background: #c9302c;
+    }
+
+    .btn-success {
+      background: #5cb85c;
+      color: white;
+    }
+
+    .btn-success:hover {
+      background: #4cae4c;
+    }
+
+    .btn:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+
+    .button-group {
+      display: flex;
+      gap: 10px;
+      margin-top: 20px;
+    }
+
+    .alert {
+      padding: 15px;
+      border-radius: 5px;
+      margin-top: 20px;
+      display: none;
+    }
+
+    .alert.show {
+      display: block;
+    }
+
+    .alert-success {
+      background: #d4edda;
+      color: #155724;
+      border: 1px solid #c3e6cb;
+    }
+
+    .alert-danger {
+      background: #f8d7da;
+      color: #721c24;
+      border: 1px solid #f5c6cb;
+    }
+
+    .alert-warning {
+      background: #fff3cd;
+      color: #856404;
+      border: 1px solid #ffc107;
+    }
+
+    .race-demo {
+      background: #fff3cd;
+      border: 2px solid #ffc107;
+      padding: 20px;
+      border-radius: 10px;
+      margin-top: 20px;
+    }
+
+    .race-demo-title {
+      font-size: 18px;
+      font-weight: 600;
+      color: #856404;
+      margin-bottom: 15px;
+    }
+
+    .race-demo-desc {
+      color: #856404;
+      margin-bottom: 15px;
+      line-height: 1.6;
+    }
+
+    .footer {
+      text-align: center;
+      color: white;
+      margin-top: 30px;
+      padding: 20px;
+      opacity: 0.8;
+    }
+
+    .footer a {
+      color: white;
+      text-decoration: underline;
+    }
+
+    .loading {
+      display: inline-block;
+      width: 14px;
+      height: 14px;
+      border: 2px solid rgba(255,255,255,0.3);
+      border-top-color: white;
+      border-radius: 50%;
+      animation: spin 0.6s linear infinite;
+      margin-left: 8px;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <div class="logo">🏦 SecureBank</div>
+      <div style="color: #999; font-size: 14px;">Demo Banking Application</div>
+    </div>
+
+    <div class="banner">
+      ⚠️ <strong>Race Condition Demo:</strong> This app intentionally contains a concurrency bug.
+      Use the "Trigger Race Condition" button to see how Raceway detects it!
+    </div>
+
+    <div class="card">
+      <div class="card-title">Account Overview</div>
+      <div class="accounts-grid" id="accounts">
+        <!-- Accounts loaded dynamically -->
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title">Transfer Money</div>
+      <form id="transferForm">
+        <div class="form-row">
+          <div class="form-group">
+            <label for="fromAccount">From Account</label>
+            <select id="fromAccount" required>
+              <option value="alice">Alice's Account</option>
+              <option value="bob">Bob's Account</option>
+              <option value="charlie">Charlie's Account</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label for="toAccount">To Account</label>
+            <select id="toAccount" required>
+              <option value="bob">Bob's Account</option>
+              <option value="alice">Alice's Account</option>
+              <option value="charlie">Charlie's Account</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-group">
+          <label for="amount">Amount ($)</label>
+          <input type="number" id="amount" min="1" value="100" required>
+        </div>
+        <button type="submit" class="btn btn-primary">Transfer Money</button>
+      </form>
+
+      <div class="race-demo">
+        <div class="race-demo-title">🚨 Race Condition Test</div>
+        <div class="race-demo-desc">
+          This button sends <strong>two concurrent transfers</strong> from Alice's account.
+          Due to a race condition in the code, some money will be "lost" because both transfers
+          read the balance before either writes, causing one transfer to overwrite the other.
+          <br><br>
+          After clicking, check the <a href="http://localhost:8080" target="_blank">Raceway Web UI</a>
+          to see the detected race condition!
+        </div>
+        <div class="button-group">
+          <button class="btn btn-danger" onclick="triggerRaceCondition()">
+            Trigger Race Condition
+          </button>
+          <button class="btn btn-success" onclick="resetAccounts()">
+            Reset Accounts
+          </button>
+        </div>
+      </div>
+
+      <div id="alert" class="alert"></div>
+    </div>
+
+    <div class="footer">
+      Powered by <a href="http://localhost:8080" target="_blank">Raceway</a> -
+      Race Condition Detection for Modern Applications
+    </div>
+  </div>
+
+  <script>
+    async function loadAccounts() {
+      try {
+        const response = await fetch('/api/accounts');
+        const data = await response.json();
+
+        const accountsDiv = document.getElementById('accounts');
+        accountsDiv.innerHTML = '';
+
+        Object.entries(data.accounts).forEach(([name, account]) => {
+          const card = document.createElement('div');
+          card.className = 'account-card';
+          card.innerHTML = `
+            <div class="account-name">${name.charAt(0).toUpperCase() + name.slice(1)}'s Account</div>
+            <div class="account-balance">$${account.balance.toLocaleString()}</div>
+            <div style="font-size: 12px; opacity: 0.8;">Available Balance</div>
+          `;
+          accountsDiv.appendChild(card);
+        });
+      } catch (error) {
+        console.error('Failed to load accounts:', error);
+      }
+    }
+
+    function showAlert(message, type = 'success') {
+      const alert = document.getElementById('alert');
+      alert.className = `alert alert-${type} show`;
+      alert.textContent = message;
+
+      setTimeout(() => {
+        alert.classList.remove('show');
+      }, 5000);
+    }
+
+    document.getElementById('transferForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+
+      const from = document.getElementById('fromAccount').value;
+      const to = document.getElementById('toAccount').value;
+      const amount = parseInt(document.getElementById('amount').value);
+
+      if (from === to) {
+        showAlert('Cannot transfer to the same account', 'danger');
+        return;
+      }
+
+      try {
+        const response = await fetch('/api/transfer', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ from, to, amount }),
+        });
+
+        const data = await response.json();
+
+        if (response.ok) {
+          showAlert(`Successfully transferred $${amount} from ${from} to ${to}`, 'success');
+          loadAccounts();
+        } else {
+          showAlert(data.error || 'Transfer failed', 'danger');
+        }
+      } catch (error) {
+        showAlert('Network error - please try again', 'danger');
+      }
+    });
+
+    async function triggerRaceCondition() {
+      const btn = event.target;
+      btn.disabled = true;
+      btn.innerHTML = 'Triggering Race...<span class="loading"></span>';
+
+      try {
+        // Generate a single trace ID for both concurrent transfers
+        // This allows Raceway to detect they're part of the same logical operation
+        const traceId = crypto.randomUUID();
+
+        // Send TWO concurrent transfers from Alice with the SAME trace ID
+        const [transfer1, transfer2] = await Promise.all([
+          fetch('/api/transfer', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'X-Trace-ID': traceId
+            },
+            body: JSON.stringify({ from: 'alice', to: 'bob', amount: 100 }),
+          }),
+          fetch('/api/transfer', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'X-Trace-ID': traceId
+            },
+            body: JSON.stringify({ from: 'alice', to: 'charlie', amount: 200 }),
+          }),
+        ]);
+
+        const result1 = await transfer1.json();
+        const result2 = await transfer2.json();
+
+        showAlert(
+          '🚨 Race condition triggered! Check Raceway Web UI to see the detected race. ' +
+          'Notice how Alice\'s balance might be incorrect due to concurrent writes.',
+          'warning'
+        );
+
+        loadAccounts();
+      } catch (error) {
+        showAlert('Failed to trigger race condition', 'danger');
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Trigger Race Condition';
+      }
+    }
+
+    async function resetAccounts() {
+      const btn = event.target;
+      btn.disabled = true;
+      btn.innerHTML = 'Resetting...<span class="loading"></span>';
+
+      try {
+        await fetch('/api/reset', { method: 'POST' });
+        showAlert('Accounts reset to initial balances', 'success');
+        loadAccounts();
+      } catch (error) {
+        showAlert('Failed to reset accounts', 'danger');
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Reset Accounts';
+      }
+    }
+
+    // Load accounts on page load
+    loadAccounts();
+  </script>
+</body>
+</html>

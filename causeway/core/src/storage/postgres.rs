@@ -1,6 +1,6 @@
 use super::storage_trait::StorageBackend;
 use super::types::{
-    AuditTrailData, CrossTraceRace, DurationStats, TraceAnalysisData, VariableAccessData,
+    AuditTrailData, CrossTraceRace, DurationStats, TraceAnalysisData, TraceSummary, VariableAccessData,
 };
 use crate::config::StorageConfig;
 use crate::event::{Event, EventKind};
@@ -16,7 +16,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::sync::RwLock;
+use tokio::sync::{RwLock, Mutex};
 use uuid::Uuid;
 
 /// Cached stats with expiration
@@ -31,6 +31,7 @@ struct CachedStats {
 pub struct PostgresBackend {
     pool: PgPool,
     stats_cache: Arc<RwLock<Option<CachedStats>>>,
+    stats_mutex: Arc<Mutex<()>>, // Prevents stampeding herd on cache miss
     cache_ttl: Duration,
 }
 
@@ -136,14 +137,24 @@ impl PostgresBackend {
         // Run migrations if auto_migrate is enabled
         if pg_config.auto_migrate {
             tracing::info!("Running PostgreSQL migrations...");
-            let migration_sql = include_str!("../../../migrations/postgres/001_initial_schema.sql");
-            sqlx::raw_sql(migration_sql).execute(&pool).await?;
-            tracing::info!("Migrations completed successfully");
+
+            // Migration 001: Initial schema
+            let migration_001 = include_str!("../../../migrations/postgres/001_initial_schema.sql");
+            sqlx::raw_sql(migration_001).execute(&pool).await?;
+            tracing::info!("✓ Migration 001 (initial schema) completed");
+
+            // Migration 002: Performance indexes
+            let migration_002 = include_str!("../../../migrations/postgres/002_add_performance_indexes.sql");
+            sqlx::raw_sql(migration_002).execute(&pool).await?;
+            tracing::info!("✓ Migration 002 (performance indexes) completed");
+
+            tracing::info!("All migrations completed successfully");
         }
 
         Ok(Self {
             pool,
             stats_cache: Arc::new(RwLock::new(None)),
+            stats_mutex: Arc::new(Mutex::new(())),
             cache_ttl: Duration::from_secs(5), // Cache stats for 5 seconds
         })
     }
@@ -358,6 +369,55 @@ impl StorageBackend for PostgresBackend {
             .collect::<Result<Vec<Uuid>, _>>()?)
     }
 
+    async fn get_trace_summaries(
+        &self,
+        page: usize,
+        page_size: usize,
+    ) -> Result<(Vec<TraceSummary>, usize)> {
+        // Get total count of traces
+        let total_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(DISTINCT trace_id) FROM events"
+        )
+        .fetch_one(&self.pool)
+        .await?;
+
+        // Calculate offset
+        let offset = (page.saturating_sub(1)) * page_size;
+
+        // Fetch paginated trace summaries
+        let rows = sqlx::query(
+            r#"
+            SELECT
+                trace_id,
+                COUNT(*) as event_count,
+                MIN(timestamp) as first_timestamp,
+                MAX(timestamp) as last_timestamp
+            FROM events
+            GROUP BY trace_id
+            ORDER BY MAX(timestamp) DESC
+            LIMIT $1 OFFSET $2
+            "#,
+        )
+        .bind(page_size as i64)
+        .bind(offset as i64)
+        .fetch_all(&self.pool)
+        .await?;
+
+        let summaries: Vec<TraceSummary> = rows
+            .into_iter()
+            .map(|row| {
+                Ok(TraceSummary {
+                    trace_id: row.try_get("trace_id")?,
+                    event_count: row.try_get("event_count")?,
+                    first_timestamp: row.try_get("first_timestamp")?,
+                    last_timestamp: row.try_get("last_timestamp")?,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        Ok((summaries, total_count as usize))
+    }
+
     async fn get_trace_roots(&self, trace_id: Uuid) -> Result<Vec<Uuid>> {
         let events = self.fetch_trace_events(trace_id).await?;
         Ok(events
@@ -528,7 +588,7 @@ impl StorageBackend for PostgresBackend {
     }
 
     async fn stats(&self) -> Result<GraphStats> {
-        // Check cache first
+        // Fast path: Check cache first (read lock)
         {
             let cache = self.stats_cache.read().await;
             if let Some(cached) = cache.as_ref() {
@@ -542,35 +602,49 @@ impl StorageBackend for PostgresBackend {
             }
         }
 
-        // Cache miss or expired, query database
+        // Cache miss - acquire mutex to prevent stampeding herd
+        let _guard = self.stats_mutex.lock().await;
+
+        // Double-check cache (another thread might have filled it while we waited for the mutex)
+        {
+            let cache = self.stats_cache.read().await;
+            if let Some(cached) = cache.as_ref() {
+                if cached.cached_at.elapsed() < self.cache_ttl {
+                    tracing::debug!(
+                        "stats(): Returning cached stats after mutex wait (age: {:?})",
+                        cached.cached_at.elapsed()
+                    );
+                    return Ok(cached.stats.clone());
+                }
+            }
+        }
+
+        // Cache still empty/expired, query database with single optimized query
         let query_start = Instant::now();
-        tracing::info!("stats(): Cache miss, querying database...");
+        tracing::info!("stats(): Cache miss, querying database (holding mutex)...");
 
-        let q1_start = Instant::now();
-        let event_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM events")
-            .fetch_one(&self.pool)
-            .await?;
-        tracing::info!(
-            "stats(): Query 1 (event count) took {:?}",
-            q1_start.elapsed()
-        );
+        // Single query that fetches all stats at once
+        let row = sqlx::query(
+            r#"
+            SELECT
+                (SELECT COUNT(*) FROM events) as event_count,
+                (SELECT COUNT(DISTINCT trace_id) FROM events) as trace_count,
+                (SELECT COUNT(*) FROM causal_edges) as edge_count
+            "#
+        )
+        .fetch_one(&self.pool)
+        .await?;
 
-        let q2_start = Instant::now();
-        let trace_count: i64 = sqlx::query_scalar("SELECT COUNT(DISTINCT trace_id) FROM events")
-            .fetch_one(&self.pool)
-            .await?;
-        tracing::info!(
-            "stats(): Query 2 (trace count) took {:?}",
-            q2_start.elapsed()
-        );
+        let event_count: i64 = row.get("event_count");
+        let trace_count: i64 = row.get("trace_count");
+        let edge_count: i64 = row.get("edge_count");
 
-        let q3_start = Instant::now();
-        let edge_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM causal_edges")
-            .fetch_one(&self.pool)
-            .await?;
         tracing::info!(
-            "stats(): Query 3 (edge count) took {:?}",
-            q3_start.elapsed()
+            "stats(): Single query completed in {:?} (events: {}, traces: {}, edges: {})",
+            query_start.elapsed(),
+            event_count,
+            trace_count,
+            edge_count
         );
 
         let has_cycles = self.has_cycles().await.unwrap_or(false);

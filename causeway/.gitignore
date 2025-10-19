@@ -83,3 +83,8 @@ temp/
 
 # Local configuration (use raceway.toml.example as template)
 raceway.toml
+scripts/.seed-metadata.json
+
+# Old archived files (development artifacts)
+scripts/old-tests/
+scripts/old-docs/

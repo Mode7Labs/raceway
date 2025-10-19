@@ -70,3 +70,12 @@ pub struct TraceAnalysisData {
     pub anomalies: Vec<Anomaly>,
     pub dependencies: Option<ServiceDependencies>,
 }
+
+/// Summary metadata for a single trace (used for listing/pagination)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TraceSummary {
+    pub trace_id: Uuid,
+    pub event_count: i64,
+    pub first_timestamp: DateTime<Utc>,
+    pub last_timestamp: DateTime<Utc>,
+}

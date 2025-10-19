@@ -1,400 +1,573 @@
-# 🔍 Causeway
+# Raceway
 
-**The AI-Powered Causal Debugging Engine for Distributed Systems**
+**Deep concurrency analysis and debugging for distributed systems**
 
-> *Finally debug production race conditions, async chaos, and distributed nightmares with surgical precision*
+Raceway is a causality tracking engine for debugging concurrent and distributed applications. Using vector clocks, it reconstructs the causal order of events across async operations, enabling deep trace analysis, critical path computation, race condition detection, and performance anomaly identification.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Rust](https://img.shields.io/badge/rust-1.70%2B-orange.svg)](https://www.rust-lang.org/)
-[![TypeScript](https://img.shields.io/badge/typescript-5.0%2B-blue.svg)](https://www.typescriptlang.org/)
 
 ---
 
-## 🎯 The Problem
+## Core Concept
 
-You've been there:
-- A race condition that only happens in production
-- An async operation that fails 0.1% of the time
-- State that changes in ways you can't explain
-- Hours spent adding console.logs, only to change the timing and make the bug disappear
+Raceway captures events from your application (function calls, state changes, locks, HTTP requests) and assigns each a **vector clock timestamp**. This creates a partial ordering of events that respects causality—the happens-before relationship—even across async task migrations and thread boundaries.
 
-**Traditional debuggers break in distributed, async-heavy applications. They can't answer:**
-- "What caused this state change?"
-- "Which async operations are racing?"
-- "What was the exact sequence of events that led to this error?"
+**What you can do with this:**
+- **Visualize execution**: See the complete causal flow of concurrent operations
+- **Find critical paths**: Identify the longest dependency chain affecting latency
+- **Detect race conditions**: Discover concurrent accesses to shared state without synchronization
+- **Audit variable access**: Trace every read/write to specific variables across the entire execution
+- **Analyze anomalies**: Spot performance outliers and unexpected behavior
+- **Map service dependencies**: Extract cross-service call graphs from traces
 
-## ⚡ The Solution
+**Key insight**: Traditional debuggers and profilers break down in async systems where operations hop between threads. Raceway's **trace-local vector clocks** follow async tasks across thread migrations, maintaining accurate causality even when `await` moves your code to different threads.
 
-**Causeway** automatically builds a complete causal graph of your application's execution across:
-- Frontend & Backend
-- Multiple services
-- Async operations
-- Database queries
-- HTTP requests
-- State mutations
+## Architecture
 
-Then uses AI to:
-- Detect race conditions automatically
-- Find the root cause of bugs
-- Generate reproducible test cases
-- Predict where problems might occur
-
-## 🚀 Features
-
-### 🔬 Zero-Config Instrumentation
-```bash
-# TypeScript/JavaScript
-npm install @causeway/instrumentation
-causeway instrument ./src
-
-# Rust
-cargo add causeway-core
-
-# That's it. Your entire codebase is now traced.
+```
+┌─────────────────────────────────────┐
+│   Application (instrumented)        │
+│   client.track_state_change(...)   │
+└────────────────┬────────────────────┘
+                 │ HTTP POST /events
+                 ▼
+┌─────────────────────────────────────┐
+│   Raceway Server (Rust/Axum)        │
+│   - Event ingestion & buffering     │
+│   - Vector clock tracking           │
+│   - Causal graph construction       │
+│   - Race detection (O(m·k²))        │
+│   - Critical path analysis          │
+│   - Anomaly detection               │
+└────────────────┬────────────────────┘
+                 │
+                 ▼
+┌─────────────────────────────────────┐
+│   Storage                           │
+│   - In-Memory (DashMap)             │
+│   - PostgreSQL / Supabase           │
+└────────────────┬────────────────────┘
+                 │
+                 ▼
+┌─────────────────────────────────────┐
+│   Analysis Interfaces               │
+│   - Terminal UI (Ratatui)           │
+│   - Web UI (React)                  │
+│   - HTTP API (12 endpoints)         │
+└─────────────────────────────────────┘
 ```
 
-### 🧠 AI-Powered Analysis
-- **Race Condition Detection**: Finds concurrent state mutations automatically
-- **Anomaly Detection**: ML models spot unusual patterns in execution
-- **Root Cause Analysis**: Traces bugs back to their origin across services
-- **Predictive Warnings**: "These two operations might race in production"
+**Tech Stack:**
+- **Server**: Rust (Axum, Tokio, petgraph)
+- **Storage**: In-memory (DashMap) + PostgreSQL (sqlx)
+- **TUI**: Ratatui with keyboard navigation
+- **Web UI**: React + TypeScript + Vite
+- **SDKs**: Python, TypeScript/Node, Go, Rust
 
-### 🎨 Beautiful Time-Travel Debugging
+## Quick Start
+
+### 1. Start the Server
+
 ```bash
-causeway tui
-```
-
-Interactive terminal UI showing:
-- Real-time event timeline
-- Causal relationships between events
-- Detected anomalies
-- Event details and stack traces
-
-### 📊 Causal Graph Visualization
-- See the entire execution flow as a directed acyclic graph
-- Click any event to see what caused it
-- Time-travel to any point in execution
-- Export graphs for documentation
-
-### 🧪 Automatic Test Generation
-```bash
-causeway export --trace-id abc123 --format test
-```
-
-Generates reproducible test cases from production bugs, including:
-- Exact timing of async operations
-- Order of state mutations
-- HTTP responses and database results
-
-## 📦 Installation
-
-### Quick Start
-```bash
-# Clone the repo
-git clone https://github.com/causeway/causeway
-cd causeway
-
-# Build and start server (Terminal 1)
+git clone https://github.com/yourusername/raceway
+cd raceway
 cargo build --release
-cargo run --release -- serve
 
-# Install SDK and run example (Terminal 2)
-cd examples/express-banking
-npm install
-node index.js
+# Option A: In-memory storage (default)
+./target/release/raceway-cli serve
 
-# Test race condition (Terminal 3)
-cd examples/express-banking
-node test-race.js
-
-# View in TUI (Terminal 4)
-cd ../..
-cargo run --release -- tui
-# Press 'r' to refresh
+# Option B: PostgreSQL/Supabase persistence
+# Edit raceway.toml to configure database connection
+./target/release/raceway-cli serve --config raceway.toml
 ```
 
-### Language Support
-- ✅ TypeScript/JavaScript (Node.js, Browser, Deno)
-- ✅ Rust
-- 🔄 Python (coming soon)
-- 🔄 Go (coming soon)
+Server runs on http://localhost:4242 (configurable)
 
-## 🎮 Usage
+### 2. Choose Your Interface
 
-### 1. Instrument Your Code
-
-#### Automatic (Recommended)
-```typescript
-// Add to your entry point
-import '@causeway/instrumentation';
-
-// Your code is now automatically instrumented!
-async function processPayment(userId: string) {
-  const user = await db.users.findOne({ id: userId });
-  user.balance -= 100;
-  await user.save();
-}
-```
-
-#### Manual
-```typescript
-import { causeway } from '@causeway/instrumentation';
-
-causeway.trace('payment-processing', async () => {
-  // Your code here
-});
-```
-
-### 2. Run Your Application
+**Terminal UI (recommended for development):**
 ```bash
-# Your app sends events to Causeway automatically
-npm start
+raceway-cli tui
 ```
 
-### 3. Debug with the TUI
-```bash
-causeway tui
-```
-
-Navigate traces with keyboard:
-- `↑↓` or `jk`: Navigate events
-- `←→` or `hl`: Switch traces
-- `Enter`: Expand event details
-- `t`: Time-travel to event
-- `a`: Show anomalies only
+Keyboard shortcuts:
+- `j/k` or `↑/↓`: Navigate traces
+- `Enter`: View trace details
+- `r`: Refresh
+- `Tab`: Switch panels (Events, Tree, CriticalPath, Anomalies, Dependencies, AuditTrail)
 - `q`: Quit
 
-### 4. Analyze Bugs
+**Web UI (recommended for sharing):**
 ```bash
-# Get AI analysis of a specific trace
-causeway analyze --trace-id abc123
-
-# Output:
-# 🚨 2 Anomalies Detected:
-#
-# 1. RACE_CONDITION (confidence: 95%)
-#    Events user.balance write and user.balance write occurred within 2ms
-#    Location: src/payment.ts:42 and src/refund.ts:18
-#    Recommendation: Add transaction lock or use atomic operations
-#
-# 2. SLOW_QUERY (confidence: 90%)
-#    Database query took 2.5s (threshold: 1s)
-#    Query: SELECT * FROM orders WHERE user_id = ?
-#    Recommendation: Add index on user_id column
+# Start web UI server
+cd web
+npm install
+npm run dev
+# Open http://localhost:5173
 ```
 
-## 🏗️ Architecture
+Features:
+- Trace list with search/filtering
+- Event timeline visualization
+- Causal tree view
+- Race condition highlighting
+- Critical path analysis
+- Performance anomaly detection
+- Service dependency graph
+- Variable audit trails
 
+### 3. Instrument Your Application
+
+**Python (Flask):**
+```python
+from raceway import RacewayClient, Config
+from raceway.middleware import flask_middleware
+
+client = RacewayClient(Config(
+    endpoint="http://localhost:4242",
+    service_name="banking-api"
+))
+
+middleware = flask_middleware(client)
+
+@app.before_request
+def init_raceway():
+    middleware.before_request()
+
+@app.after_request
+def finish_raceway(response):
+    return middleware.after_request(response)
+
+# Track state changes
+balance = accounts[user]["balance"]
+client.track_state_change(f"{user}.balance", None, balance, "Read")
+
+accounts[user]["balance"] -= amount
+client.track_state_change(f"{user}.balance", balance, new_balance, "Write")
 ```
-┌─────────────────────────────────────────────────────┐
-│  Your Application (TypeScript, Rust, Python, etc)  │
-│  ↓ (Auto-instrumented)                              │
-└─────────────────────────────────────────────────────┘
-                      ↓
-┌─────────────────────────────────────────────────────┐
-│  Causeway Core (Rust)                               │
-│  • Event Capture (Lock-free queues)                 │
-│  • Causal Graph Builder (Vector clocks)             │
-│  • Topological Sort & Analysis                      │
-└─────────────────────────────────────────────────────┘
-                      ↓
-┌─────────────────────────────────────────────────────┐
-│  AI Analysis Layer (Python)                         │
-│  • Anomaly Detection (Isolation Forest)             │
-│  • Race Condition Detection (Concurrency analysis)  │
-│  • Pattern Recognition (ML models)                  │
-└─────────────────────────────────────────────────────┘
-                      ↓
-┌─────────────────────────────────────────────────────┐
-│  Visualization Layer                                │
-│  • TUI (Ratatui) - Terminal interface               │
-│  • Web UI (React + D3.js) - Browser interface       │
-│  • Export (JSON, DOT, Test cases)                   │
-└─────────────────────────────────────────────────────┘
-```
 
-## 🔥 Real-World Examples
-
-### Finding a Race Condition
+**TypeScript/Node (Express):**
 ```typescript
-// Before: This code has a subtle race condition
-async function transferMoney(fromId, toId, amount) {
-  const from = await getUser(fromId);
-  const to = await getUser(toId);
+import { Raceway } from '@mode-7/raceway-node';
 
-  from.balance -= amount;  // ⚠️ Race here!
-  to.balance += amount;    // ⚠️ And here!
-
-  await Promise.all([from.save(), to.save()]);
-}
-```
-
-**Causeway detects:**
-```
-🚨 RACE_CONDITION detected (confidence: 98%)
-
-Concurrent modifications to user.balance:
-  1. Event evt_a1b2: from.balance -= 100 (transfer.ts:45)
-  2. Event evt_c3d4: from.balance -= 50  (transfer.ts:45)
-
-Both events have no causal relationship (happened concurrently)
-
-Timeline:
-  T+0ms:   transferMoney(user1, user2, 100) starts
-  T+1ms:   transferMoney(user1, user3, 50) starts
-  T+150ms: Both read user1.balance = 1000
-  T+152ms: First writes user1.balance = 900
-  T+153ms: Second writes user1.balance = 950  ❌ Lost update!
-
-Recommendation: Use database transactions or atomic operations
-```
-
-### Debugging Async Chaos
-```typescript
-// Complex async flow
-async function processOrder(orderId) {
-  const order = await fetchOrder(orderId);
-  const [inventory, payment, shipping] = await Promise.all([
-    checkInventory(order.items),
-    processPayment(order.total),
-    scheduleShipping(order.address)
-  ]);
-  await finalizeOrder(order, inventory, payment, shipping);
-}
-```
-
-**Causeway shows you:**
-```
-📊 Causal Graph:
-
-fetchOrder
-  ├─→ checkInventory
-  ├─→ processPayment
-  │     └─→ [HTTP] POST /api/payments
-  │           └─→ [DB] INSERT INTO payments
-  └─→ scheduleShipping
-        └─→ [HTTP] POST /api/shipments
-              ↓
-            ⚠️ TIMEOUT (5000ms)
-                ↓
-           (cascading failure)
-                ↓
-         finalizeOrder never called
-```
-
-## 🎓 Advanced Features
-
-### Custom Events
-```typescript
-import { causeway } from '@causeway/instrumentation';
-
-causeway.event('user-action', {
-  action: 'button-click',
-  buttonId: 'checkout',
-  userId: user.id
-});
-```
-
-### Distributed Tracing
-```typescript
-// Service A
-const traceContext = causeway.createTrace();
-await fetch('/api/service-b', {
-  headers: { 'X-Causeway-Trace': traceContext.serialize() }
+const raceway = new Raceway({
+  serverUrl: 'http://localhost:4242',
+  serviceName: 'banking-api'
 });
 
-// Service B (different service/language)
-const traceContext = causeway.deserializeTrace(req.headers['x-causeway-trace']);
-causeway.continueTrace(traceContext);
+app.use(raceway.middleware());
+
+raceway.trackStateChange('user.balance', oldValue, newValue, 'Write');
 ```
 
-### Privacy & Filtering
-```typescript
-// Don't capture sensitive data
-causeway.configure({
-  excludePatterns: ['**/auth/**', '**/secrets/**'],
-  sanitizeValues: true,  // Redact values in events
-  captureArgs: false,    // Don't capture function arguments
+**Go (Gin):**
+```go
+import "github.com/mode-7/raceway-go"
+
+client := raceway.NewClient(raceway.Config{
+    Endpoint:    "http://localhost:4242",
+    ServiceName: "banking-api",
+})
+
+router.Use(client.Middleware)
+client.TrackStateChange(ctx, "user.balance", oldValue, newValue, "Write")
+```
+
+**Rust (Axum):**
+```rust
+use raceway_sdk::{RacewayClient, Config};
+
+let client = RacewayClient::new(Config {
+    endpoint: "http://localhost:4242".to_string(),
+    service_name: "banking-api".to_string(),
+    ..Default::default()
 });
+
+client.track_state_change("user.balance", Some(&old), &new, "Write").await?;
 ```
 
-## 📈 Performance
+### 4. Run a Demo
 
-Causeway is built for production:
-- **< 1% overhead** on application performance
-- **Lock-free** event capture
-- **Async** event processing
-- **Batched** network transmission
-- **Configurable** sampling rates
+```bash
+# Terminal 1: Start server
+cargo run --release -- serve
+
+# Terminal 2: Run Python banking demo
+cd examples/python-banking
+pip install -r requirements.txt
+PORT=3053 python3 app.py
+
+# Terminal 3: Trigger race condition
+# Open http://localhost:3053
+# Click "Trigger Race Condition"
+
+# Terminal 4: View results
+raceway-cli tui
+# Or open http://localhost:5173 for Web UI
+```
+
+## What's Implemented
+
+### Core Analysis Features
+- ✅ **Vector clock causality tracking** - Trace-local clocks, async-aware, follows tasks across threads
+- ✅ **Critical path analysis** - Async-aware longest path computation showing execution bottlenecks
+- ✅ **Variable audit trails** - Complete access history per variable with causal ordering
+- ✅ **Service dependency extraction** - Cross-service call graph from trace data
+- ✅ **Anomaly detection** - Statistical analysis (>1.5σ threshold) for performance outliers
+- ✅ **Lock set tracking** - Captures locks held at event time for synchronization analysis
+- ✅ **Race condition detection** - Optimized O(m·k²) variable indexing to find unsynchronized accesses
+- ✅ **Global cross-trace analysis** - Correlate events across different traces
+
+### Storage Backends
+- ✅ **In-Memory** - DashMap-based, zero-config
+- ✅ **PostgreSQL** - Full async sqlx implementation
+- ✅ **Supabase** - Drop-in compatible with PostgreSQL backend
+
+### User Interfaces
+
+**Terminal UI (Ratatui):**
+- ✅ Real-time trace list with auto-refresh
+- ✅ Event timeline view
+- ✅ Causal tree visualization
+- ✅ Critical path highlighting
+- ✅ Anomaly detection panel
+- ✅ Service dependency graph
+- ✅ Audit trail view
+- ✅ Keyboard navigation (vim-style)
+- ✅ Panel switching and focus management
+
+**Web UI (React):**
+- ✅ Paginated trace list
+- ✅ Event timeline with zoom/pan
+- ✅ Tree view of causal relationships
+- ✅ Race condition highlighting
+- ✅ Performance anomaly charts
+- ✅ Service dependency visualization
+- ✅ Variable audit trail inspector
+- ✅ Trace export (JSON)
+- ✅ Dark/light theme
+- ✅ Keyboard shortcuts
+
+### HTTP API
+12 endpoints:
+- `POST /events` - Event ingestion
+- `GET /api/traces` - List traces (paginated)
+- `GET /api/traces/:id` - Full trace data
+- `GET /api/traces/:id/analyze` - Race detection
+- `GET /api/traces/:id/critical-path` - Critical path
+- `GET /api/traces/:id/anomalies` - Performance anomalies
+- `GET /api/traces/:id/dependencies` - Service graph
+- `GET /api/traces/:id/audit-trail/:variable` - Variable history
+- `GET /api/analyze/global` - Cross-trace races
+- `GET /health` - Health check
+- `GET /status` - Server statistics
+
+### SDKs
+- ✅ **Python** - `raceway` package, Flask/FastAPI middleware
+- ✅ **TypeScript/Node** - `@mode-7/raceway-node` package, Express middleware
+- ✅ **Go** - `github.com/mode-7/raceway-go`, Gin/net/http middleware
+- ✅ **Rust** - `raceway-sdk` crate, Axum/Actix support
+
+### Event Types Supported
+16 event kinds tracked:
+- FunctionCall, AsyncSpawn, AsyncAwait
+- StateChange (Read, Write, AtomicRead, AtomicWrite, AtomicRMW)
+- LockAcquire, LockRelease
+- MemoryFence (Relaxed, Acquire, Release, AcqRel, SeqCst)
+- HttpRequest, HttpResponse
+- DatabaseQuery, DatabaseResult
+- Error, Custom
+
+## How Race Detection Works
+
+### Vector Clock Algorithm
+
+Each event receives a vector clock: `{trace_id -> logical_timestamp}`.
 
 ```rust
-// Configure for your needs
-causeway::Config {
-    buffer_size: 10_000,    // Events before flush
-    sampling_rate: 1.0,      // 100% = capture all
-    batch_size: 100,         // Events per batch
-    flush_interval_ms: 100,  // Auto-flush interval
-}
+Event 1: Read  alice.balance  VC = {trace_1: 1}
+Event 2: Write alice.balance  VC = {trace_1: 2}
+Event 3: Read  alice.balance  VC = {trace_2: 1}  // Different trace!
+Event 4: Write alice.balance  VC = {trace_2: 2}
 ```
 
-## 🤝 Contributing
+**Happens-before relationship:**
+- Event A happens-before Event B if:
+  - For ALL traces: VC_A[trace] ≤ VC_B[trace]
+  - AND at least one trace: VC_A[trace] < VC_B[trace]
 
-We'd love your help making Causeway even better!
+**Concurrent events:**
+- Events are concurrent if NEITHER happens-before the other
+- Example: VC={trace_1:1} vs VC={trace_2:1} → Concurrent (incomparable)
 
-```bash
-git clone https://github.com/causeway/causeway
-cd causeway
-cargo build --release
+**Race detection:**
+```
+IF events are concurrent
+AND access same variable
+AND at least one is a write
+AND NOT protected by same lock
+→ RACE CONDITION
 ```
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+### Optimized Variable Indexing
 
-## 📜 License
+Instead of O(n²) all-pairs comparison, Raceway uses **variable indexing**:
+
+1. Index StateChange events by variable name
+2. For each variable, only compare accesses to that variable
+3. Complexity: **O(m·k²)** where:
+   - m = number of unique variables
+   - k = average accesses per variable (typically << n)
+
+This makes race detection practical even for traces with thousands of events.
+
+### Lock Set Tracking
+
+Raceway captures which locks are held when each event occurs:
+
+```python
+# Thread 1
+lock.acquire()
+balance = account.balance  # Event captured with lock_set = ["account_lock"]
+lock.release()
+```
+
+If two events share ANY lock in their lock sets, they're serialized (race-safe).
+
+### Example: Banking Race
+
+```python
+# Request 1 (trace_1)
+balance = accounts["alice"]["balance"]     # Read:  VC={t1:1}, balance=1000
+time.sleep(0.01)
+accounts["alice"]["balance"] -= 100        # Write: VC={t1:2}, balance=900
+
+# Request 2 (trace_2) - concurrent
+balance = accounts["alice"]["balance"]     # Read:  VC={t2:1}, balance=1000
+time.sleep(0.01)
+accounts["alice"]["balance"] -= 200        # Write: VC={t2:2}, balance=800
+```
+
+**Raceway detects:**
+1. Read events VC={t1:1} and VC={t2:1} are concurrent ✓
+2. Both access `alice.balance` ✓
+3. Followed by writes (at least one write) ✓
+4. No shared locks ✓
+5. → **RACE: Lost $100 update**
+
+## What Needs Work
+
+We're looking for contributors to help with:
+
+### High Priority
+
+**1. Auto-Instrumentation**
+- Currently requires manual `track_state_change()` calls
+- **Python**: AST transformation or bytecode instrumentation
+- **JavaScript**: Babel/SWC plugin (started but incomplete)
+- **Rust**: Procedural macros for automatic tracking
+- **Go**: Compiler plugin or code generation
+
+**2. Distributed Tracing**
+- Works within single service
+- Need trace context propagation across HTTP/gRPC
+- Cross-service causality tracking
+- Distributed vector clock synchronization
+
+**3. Performance Optimization**
+- Benchmark suite (missing)
+- Connection pooling for database
+- Event batching improvements
+- Graph construction parallelization
+
+### Medium Priority
+
+**4. UI Enhancements**
+- Web UI search/filter improvements
+- Timeline zoom/pan in TUI
+- Export formats (protobuf, MessagePack)
+- Trace comparison view
+
+**5. Testing**
+- Unit test coverage (currently sparse)
+- Integration tests for race detection
+- Property-based tests for vector clock invariants
+- Performance regression tests
+
+**6. Documentation**
+- API reference (incomplete)
+- Architecture deep dive
+- Troubleshooting guide
+- Tutorial for each SDK
+
+**7. Production Readiness**
+- Rate limiting enforcement (config exists)
+- Authentication (config exists, not enforced)
+- Sampling strategies
+- Metrics and monitoring integration
+
+### Nice to Have
+
+**8. Additional Storage Backends**
+- MySQL (stubbed)
+- SQLite (stubbed)
+- ClickHouse for analytics
+
+**9. Advanced Features**
+- Deadlock detection (algorithm designed, not implemented)
+- Machine learning-based anomaly detection
+- Real-time alerting (Slack, Discord, PagerDuty)
+- OpenTelemetry integration
+
+**10. Additional SDKs**
+- C/C++
+- Java/Kotlin
+- C# / .NET
+- Ruby
+- PHP
+
+## Examples
+
+All examples include working demos with race conditions:
+
+- **`examples/python-banking/`** - Flask app with concurrent transfer race
+- **`examples/express-banking/`** - Node.js/Express app with read-modify-write races
+- **`examples/rust-banking/`** - Axum app demonstrating atomicity violations
+- **`examples/go-banking/`** - Gin app with balance update races
+
+Each includes:
+- Web UI for triggering races
+- Instructions for reproducing
+- Expected Raceway output
+
+## Configuration
+
+Edit `raceway.toml`:
+
+```toml
+[server]
+host = "0.0.0.0"
+port = 4242
+
+[storage]
+backend = "postgres"  # or "memory"
+connection_string = "postgresql://user:pass@localhost/raceway"
+# Or use Supabase:
+# connection_string = "postgresql://postgres:[password]@db.[project].supabase.co:5432/postgres"
+
+[engine]
+buffer_size = 10000
+batch_size = 100
+flush_interval_ms = 100
+
+[race_detection]
+enabled = true
+
+[anomaly_detection]
+enabled = true
+threshold_stddev = 1.5  # Flag anomalies > 1.5 standard deviations
+
+[critical_path]
+enabled = true
+```
+
+## Performance
+
+**Current benchmarks** (Python SDK, 10k events):
+- Event capture: ~2-3ms per operation
+- Network transmission: Batched every 100ms
+- Server processing: <1ms per event
+- Race detection: ~50ms for 1000-event trace
+- Critical path: ~10ms for 1000-event trace
+
+**Known bottlenecks:**
+- Some SDKs use synchronous HTTP (should be async)
+- No connection pooling (each batch opens new connection)
+- Graph construction is single-threaded
+
+We need more comprehensive benchmarks.
+
+## Contributing
+
+Raceway is an early-stage project with solid foundations. We welcome contributions!
+
+**Good first issues:**
+- Add search/filter to Web UI (`web/src/components/TraceList.tsx`)
+- Write unit tests for vector clock logic (`core/src/graph.rs`)
+- Improve error handling in SDKs
+- Add more event types to capture
+
+**Interesting challenges:**
+- Implement auto-instrumentation for Python (AST transformation)
+- Add distributed tracing support (trace context propagation)
+- Build deadlock detection on top of lock tracking
+- Optimize race detection for large traces (>100k events)
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup.
+
+## Technical Details
+
+### Storage Schema (PostgreSQL)
+
+```sql
+CREATE TABLE events (
+    id UUID PRIMARY KEY,
+    trace_id UUID NOT NULL,
+    parent_id UUID,
+    timestamp TIMESTAMPTZ NOT NULL,
+    kind JSONB NOT NULL,
+    metadata JSONB,
+    causality_vector JSONB NOT NULL,  -- {trace_id: clock_value}
+    lock_set JSONB                    -- [lock_ids]
+);
+
+CREATE INDEX idx_events_trace_id ON events(trace_id);
+CREATE INDEX idx_events_timestamp ON events(timestamp);
+```
+
+### Critical Path Algorithm
+
+Raceway's critical path computation is **async-aware**:
+
+```
+For each event:
+  IF spawns concurrent children:
+    duration += MAX(child_durations)  // Concurrent branches
+  ELSE:
+    duration += SUM(child_durations)  // Sequential execution
+```
+
+This correctly handles async/await patterns where multiple promises run concurrently.
+
+### Anomaly Detection
+
+Statistical outlier detection using baseline metrics:
+
+```
+For each event kind:
+  Compute: mean, stddev, p95, min, max
+
+For each event:
+  deviation = (duration - mean) / stddev
+
+  IF deviation > 1.5: Flag as anomaly
+    Severity:
+      2-3σ: Minor
+      3-5σ: Warning
+      >5σ:  Critical
+```
+
+## License
 
 MIT License - see [LICENSE](LICENSE) for details.
 
-## 🌟 Why "Causeway"?
+## Community
 
-A causeway is a raised road across water or wetland - it provides a clear path through murky, complex terrain. That's exactly what this tool does for debugging: **it gives you a clear path through the murky complexity of distributed, async systems to find the root cause of bugs**.
-
----
-
-## 🚧 Roadmap
-
-**✅ MVP COMPLETE:**
-- [x] Core event capture engine (Rust)
-- [x] Causal graph with vector clocks
-- [x] Race condition detection
-- [x] Terminal UI (TUI) with real-time updates
-- [x] HTTP REST API server
-- [x] TypeScript/JavaScript SDK
-- [x] Automatic instrumentation (Babel plugin)
-- [x] CLI tool (`causeway init`, `causeway instrument`, etc.)
-- [x] Working Express.js example
-
-**🔜 V1.0 (Next):**
-- [ ] PostgreSQL storage/persistence
-- [ ] Web UI dashboard (React)
-- [ ] Python SDK
-- [ ] Go SDK
-- [ ] Alerting (Slack, PagerDuty)
-- [ ] OpenTelemetry integration
-
-**🔮 V2.0 (Future):**
-- [ ] AI anomaly detection (ML models)
-- [ ] Deadlock detection
-- [ ] Automatic fix suggestions
-- [ ] Test case generator
-- [ ] Time-travel debugging
-- [ ] VS Code extension
-- [ ] Chrome DevTools integration
+- **Issues**: https://github.com/yourusername/raceway/issues
+- **Discussions**: Questions and ideas welcome
+- **Contributing**: See [CONTRIBUTING.md](CONTRIBUTING.md)
 
 ---
 
-<div align="center">
-
-**[⭐ Star us on GitHub](https://github.com/causeway/causeway)** | **[📖 Read the Docs](https://docs.causeway.dev)** | **[💬 Join Discord](https://discord.gg/causeway)**
-
-*Built with ❤️ by developers who are tired of debugging production race conditions at 3am*
-
-</div>
+**Project Status**: Alpha quality, actively developed. Core analysis features work well (causality tracking, critical path analysis, race detection, anomaly detection, TUI, Web UI, PostgreSQL persistence). Not yet recommended for production use - expect breaking changes. Great for debugging concurrent applications in development/testing environments and for concurrency research.

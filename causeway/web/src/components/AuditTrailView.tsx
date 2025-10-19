@@ -229,8 +229,8 @@ export function AuditTrailView({ auditTrails, events, traceId, onTraceSelect }: 
                   </span>
                 </div>
                 <div className="flex items-center gap-1 text-[10px]">
-                  <span className="text-blue-400">{summary.readCount}R</span>
-                  <span className="text-orange-400">{summary.writeCount}W</span>
+                  <span className="text-gray-400">{summary.readCount}R</span>
+                  <span className="text-red-400">{summary.writeCount}W</span>
                   {summary.raceCount > 0 && (
                     <span className="text-destructive">⚠</span>
                   )}

@@ -70,29 +70,40 @@ impl App {
     fn new(server_url: String) -> Self {
         // Create a single reusable HTTP client
         let client = reqwest::blocking::Client::builder()
-            .timeout(std::time::Duration::from_secs(2))
+            .timeout(std::time::Duration::from_secs(10))
             .pool_max_idle_per_host(1) // Prevent connection leak
             .build()
             .unwrap_or_else(|_| reqwest::blocking::Client::new());
 
         Self {
             server_url,
-            traces: vec!["Loading...".to_string()],
+            traces: vec![
+                "📡 Connecting to server...".to_string(),
+                "".to_string(),
+                "Loading trace list...".to_string(),
+            ],
             trace_ids: vec![],
             selected_trace: 0,
             loaded_trace: 0,
             last_selection_change: None,
             events: vec![
-                "Connecting to server...".to_string(),
+                "⏳ Connecting to server...".to_string(),
+                "".to_string(),
+                "Fetching initial data...".to_string(),
                 "".to_string(),
                 "Press 'r' to refresh".to_string(),
+                "Press '?' for help".to_string(),
                 "Press 'q' to quit".to_string(),
             ],
             event_data: vec![],
             selected_event: 0,
-            event_detail: "Waiting for data...".to_string(),
-            anomalies: vec!["No anomalies detected yet".to_string()],
-            status_message: "Starting...".to_string(),
+            event_detail: "⏳ Connecting to Raceway server...\n\nPlease wait while we fetch the trace list.".to_string(),
+            anomalies: vec![
+                "⏳ Connecting...".to_string(),
+                "".to_string(),
+                "Waiting for server response".to_string(),
+            ],
+            status_message: "Connecting to server...".to_string(),
             client,
             trace_cache: HashMap::new(),
             auto_refresh: true,        // Auto-refresh enabled by default
@@ -241,29 +252,42 @@ impl App {
             Ok(response) => {
                 if let Ok(traces_resp) = response.json::<TracesListResponse>() {
                     if let Some(traces_data) = traces_resp.data {
-                        self.status_message = if let Some(events) = traces_data.total_events {
-                            format!(
-                                "Connected | Events: {} | Traces: {}",
-                                events, traces_data.total_traces
-                            )
-                        } else {
-                            format!("Connected | Traces: {}", traces_data.total_traces)
-                        };
+                        // Calculate total events from trace metadata
+                        let total_events: usize = traces_data.traces.iter()
+                            .map(|t| t.event_count)
+                            .sum();
 
-                        if !traces_data.trace_ids.is_empty() {
+                        self.status_message = format!(
+                            "Connected | Events: {} | Traces: {}",
+                            total_events, traces_data.total_traces
+                        );
+
+                        if !traces_data.traces.is_empty() {
+                            // Extract trace IDs from metadata
+                            let trace_ids: Vec<String> = traces_data.traces
+                                .iter()
+                                .map(|t| t.trace_id.clone())
+                                .collect();
+
                             // Check if trace count changed
-                            let trace_count_changed =
-                                self.trace_ids.len() != traces_data.trace_ids.len();
+                            let trace_count_changed = self.trace_ids.len() != trace_ids.len();
 
                             // Store the actual trace IDs
-                            self.trace_ids = traces_data.trace_ids.clone();
+                            self.trace_ids = trace_ids.clone();
 
-                            // Display traces with their IDs
+                            // Display traces with their metadata
                             self.traces = traces_data
-                                .trace_ids
+                                .traces
                                 .iter()
                                 .enumerate()
-                                .map(|(i, id)| format!("🔍 Trace {}: {}...", i + 1, &id[..8]))
+                                .map(|(i, meta)| {
+                                    format!(
+                                        "🔍 Trace {}: {}... ({} events)",
+                                        i + 1,
+                                        &meta.trace_id[..8],
+                                        meta.event_count
+                                    )
+                                })
                                 .collect();
 
                             // Only clear cache if trace count changed (new traces added)
@@ -272,8 +296,23 @@ impl App {
                                 self.last_global_analysis_trace_count = 0; // Force global analysis refresh
                             }
 
-                            // Fetch details for the selected trace
-                            if self.selected_trace < self.trace_ids.len() {
+                            // Auto-load first trace immediately on initial startup if not cached
+                            if self.selected_trace < self.trace_ids.len()
+                                && !self.trace_cache.contains_key(&self.selected_trace)
+                                && self.last_selection_change.is_none() {
+                                // Show loading message first
+                                self.events = vec![
+                                    "📋 Loading first trace...".to_string(),
+                                    "".to_string(),
+                                    "Fetching events and analysis...".to_string(),
+                                ];
+                                self.event_detail = "Loading trace data from server...".to_string();
+                                self.anomalies = vec![
+                                    "⏳ Loading...".to_string(),
+                                ];
+
+                                // Load immediately on startup (no debounce)
+                                self.loaded_trace = self.selected_trace;
                                 self.fetch_trace_details();
                             }
                         } else {
@@ -296,7 +335,7 @@ impl App {
                 self.traces = vec!["Server not running!".to_string()];
                 self.trace_ids = vec![];
                 self.events = vec![
-                    "Unable to connect to Causeway server".to_string(),
+                    "Unable to connect to Raceway server".to_string(),
                     "".to_string(),
                     "Make sure the server is running:".to_string(),
                     "  cargo run --release -- serve".to_string(),
@@ -344,11 +383,7 @@ impl App {
                 self.event_detail = format!("{:#}", event);
             }
 
-            // Only fetch global analysis if we haven't done it yet or trace count changed
-            if self.last_global_analysis_trace_count != self.trace_ids.len() {
-                self.fetch_global_analysis();
-            }
-
+            // Global analysis now lazy-loaded when switching to CrossTrace view
             return;
         }
 
@@ -475,10 +510,7 @@ impl App {
                         self.event_detail = format!("{:#}", event);
                     }
 
-                    // 8. Fetch global cross-trace analysis
-                    self.fetch_global_analysis();
-
-                    // 9. Store in cache
+                    // 8. Store in cache (removed global analysis - now lazy loaded on CrossTrace view)
                     self.trace_cache.insert(
                         self.loaded_trace,
                         CachedTraceData {
@@ -657,9 +689,6 @@ impl App {
             self.audit_trail_data = None;
             self.selected_variable = None;
 
-            // Mark selection changed - will load after debounce delay (unless cached)
-            self.mark_selection_changed();
-
             // If cached, load immediately for instant response
             if self.trace_cache.contains_key(&self.selected_trace) {
                 self.loaded_trace = self.selected_trace;
@@ -672,6 +701,19 @@ impl App {
                         self.fetch_first_race_variable();
                     }
                 }
+            } else {
+                // Not cached - show loading state immediately, then mark for debounced load
+                self.events = vec![
+                    "⏳ Loading trace...".to_string(),
+                    "".to_string(),
+                    "Fetching events and analysis...".to_string(),
+                ];
+                self.event_detail = "Loading trace data from server...".to_string();
+                self.anomalies = vec!["⏳ Loading...".to_string()];
+                self.event_data = vec![];
+
+                // Mark selection changed - will load after debounce delay
+                self.mark_selection_changed();
             }
         }
     }
@@ -686,9 +728,6 @@ impl App {
             self.audit_trail_data = None;
             self.selected_variable = None;
 
-            // Mark selection changed - will load after debounce delay (unless cached)
-            self.mark_selection_changed();
-
             // If cached, load immediately for instant response
             if self.trace_cache.contains_key(&self.selected_trace) {
                 self.loaded_trace = self.selected_trace;
@@ -701,6 +740,19 @@ impl App {
                         self.fetch_first_race_variable();
                     }
                 }
+            } else {
+                // Not cached - show loading state immediately, then mark for debounced load
+                self.events = vec![
+                    "⏳ Loading trace...".to_string(),
+                    "".to_string(),
+                    "Fetching events and analysis...".to_string(),
+                ];
+                self.event_detail = "Loading trace data from server...".to_string();
+                self.anomalies = vec!["⏳ Loading...".to_string()];
+                self.event_data = vec![];
+
+                // Mark selection changed - will load after debounce delay
+                self.mark_selection_changed();
             }
         }
     }
@@ -712,16 +764,22 @@ impl App {
             ViewMode::CriticalPath => ViewMode::Anomalies,
             ViewMode::Anomalies => ViewMode::Dependencies,
             ViewMode::Dependencies => ViewMode::AuditTrail,
-            ViewMode::AuditTrail => ViewMode::Events,
+            ViewMode::AuditTrail => ViewMode::CrossTrace,
+            ViewMode::CrossTrace => ViewMode::Events,
         };
 
-        // Fetch audit trail if needed (only view mode not included in /full endpoint)
+        // Lazy load data for view modes not included in /full endpoint
         if matches!(self.view_mode, ViewMode::AuditTrail) {
             if self.audit_trail_data.is_none() && self.selected_variable.is_none() {
                 self.fetch_first_race_variable();
             }
+        } else if matches!(self.view_mode, ViewMode::CrossTrace) {
+            // Only fetch global analysis if we haven't done it yet or trace count changed
+            if self.last_global_analysis_trace_count != self.trace_ids.len() {
+                self.fetch_global_analysis();
+            }
         }
-        // All other view modes (CriticalPath, Anomalies, Dependencies) already loaded via /full endpoint
+        // Other view modes (CriticalPath, Anomalies, Dependencies) already loaded via /full endpoint
     }
 
     fn fetch_first_race_variable(&mut self) {
@@ -784,10 +842,9 @@ fn launch_tui_blocking(server: &str) -> Result<()> {
 
     let mut app = App::new(server.to_string());
 
-    // Try to fetch data (with short timeout)
-    if let Err(e) = app.fetch_status() {
-        app.status_message = format!("Failed to connect: {}", e);
-    }
+    // Don't block on initial fetch - let it happen in the main loop
+    // The UI will show "Connecting..." message until first refresh completes
+    // User can also press 'r' to manually refresh
 
     let res = run_app(&mut terminal, &mut app);
 
@@ -807,6 +864,13 @@ fn launch_tui_blocking(server: &str) -> Result<()> {
 }
 
 fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> {
+    // Draw UI first to avoid black screen
+    terminal.draw(|f| ui(f, app))?;
+
+    // Now fetch status in background (non-blocking from user's perspective)
+    let _ = app.fetch_status();
+    app.last_refresh = Instant::now();
+
     loop {
         terminal.draw(|f| ui(f, app))?;
 
@@ -841,66 +905,12 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
                             KeyCode::Char('l') | KeyCode::Right => app.select_next_trace(),
 
                             // Panel-specific controls (shown in headers)
-                            // Traces panel: w/s
+                            // Traces panel: w/s (same as h/l arrow keys)
                             KeyCode::Char('w') if matches!(app.focused_panel, Panel::Traces) => {
-                                if app.selected_trace > 0 {
-                                    app.selected_trace -= 1;
-                                    app.selected_event = 0;
-                                    app.details_scroll = 0;
-
-                                    // Clear audit trail data for new trace
-                                    app.audit_trail_data = None;
-                                    app.selected_variable = None;
-
-                                    // Mark selection changed - will load after debounce delay (unless cached)
-                                    app.mark_selection_changed();
-
-                                    // If cached, load immediately for instant response
-                                    if app.trace_cache.contains_key(&app.selected_trace) {
-                                        app.loaded_trace = app.selected_trace;
-                                        app.last_selection_change = None;
-                                        app.fetch_trace_details();
-
-                                        // Fetch audit trail if needed
-                                        if matches!(app.view_mode, ViewMode::AuditTrail) {
-                                            if app.audit_trail_data.is_none()
-                                                && app.selected_variable.is_none()
-                                            {
-                                                app.fetch_first_race_variable();
-                                            }
-                                        }
-                                    }
-                                }
+                                app.select_prev_trace();
                             }
                             KeyCode::Char('s') if matches!(app.focused_panel, Panel::Traces) => {
-                                if app.selected_trace < app.traces.len().saturating_sub(1) {
-                                    app.selected_trace += 1;
-                                    app.selected_event = 0;
-                                    app.details_scroll = 0;
-
-                                    // Clear audit trail data for new trace
-                                    app.audit_trail_data = None;
-                                    app.selected_variable = None;
-
-                                    // Mark selection changed - will load after debounce delay (unless cached)
-                                    app.mark_selection_changed();
-
-                                    // If cached, load immediately for instant response
-                                    if app.trace_cache.contains_key(&app.selected_trace) {
-                                        app.loaded_trace = app.selected_trace;
-                                        app.last_selection_change = None;
-                                        app.fetch_trace_details();
-
-                                        // Fetch audit trail if needed
-                                        if matches!(app.view_mode, ViewMode::AuditTrail) {
-                                            if app.audit_trail_data.is_none()
-                                                && app.selected_variable.is_none()
-                                            {
-                                                app.fetch_first_race_variable();
-                                            }
-                                        }
-                                    }
-                                }
+                                app.select_next_trace();
                             }
 
                             // Events panel: j/k (vi-style)
@@ -1229,6 +1239,54 @@ fn ui(f: &mut Frame, app: &App) {
                 events_focused,
             );
         }
+        ViewMode::CrossTrace => {
+            // Render cross-trace race detection view
+            let title = if events_focused {
+                "🌍 Cross-Trace Races [j/k] ●"
+            } else {
+                "🌍 Cross-Trace Races [j/k]"
+            };
+
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .title(title.to_string())
+                .border_style(if events_focused {
+                    Style::default().fg(Color::Cyan)
+                } else {
+                    Style::default()
+                });
+
+            // Show global concurrent events or loading message
+            let items: Vec<ListItem> = if app.last_global_analysis_trace_count == app.trace_ids.len() {
+                // Global analysis is loaded - show races with selection highlighting
+                app.events
+                    .iter()
+                    .enumerate()
+                    .map(|(i, e)| {
+                        let is_selected = i == app.selected_event;
+                        let style = if is_selected {
+                            Style::default()
+                                .fg(Color::Red)
+                                .add_modifier(Modifier::BOLD | Modifier::REVERSED)
+                        } else {
+                            Style::default().fg(Color::Red)
+                        };
+                        ListItem::new(e.clone()).style(style)
+                    })
+                    .collect()
+            } else {
+                // Still loading or not yet fetched
+                vec![
+                    ListItem::new("⏳ Loading cross-trace analysis..."),
+                    ListItem::new(""),
+                    ListItem::new("Analyzing races across all traces..."),
+                    ListItem::new("This may take a moment for large datasets."),
+                ]
+            };
+
+            let list = List::new(items).block(block);
+            f.render_widget(list, main_chunks[1]);
+        }
     }
 
     // Right panel: Event details and anomalies
@@ -1289,6 +1347,7 @@ fn ui(f: &mut Frame, app: &App) {
         ViewMode::Anomalies => "Anomalies",
         ViewMode::Dependencies => "Dependencies",
         ViewMode::AuditTrail => "Audit Trail",
+        ViewMode::CrossTrace => "Cross-Trace Races",
     };
     let footer_text = format!(
         "View: {} | Tab/v: Cycle view | ←→/hl: Switch trace | r: Refresh | ?: Help | q: Quit",

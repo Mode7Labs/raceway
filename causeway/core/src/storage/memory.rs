@@ -1,6 +1,6 @@
 use super::storage_trait::StorageBackend;
 use super::types::{
-    AuditTrailData, CrossTraceRace, DurationStats, TraceAnalysisData, VariableAccessData,
+    AuditTrailData, CrossTraceRace, DurationStats, TraceAnalysisData, TraceSummary, VariableAccessData,
 };
 use crate::config::StorageConfig;
 use crate::event::Event;
@@ -90,6 +90,48 @@ impl StorageBackend for MemoryBackend {
 
     async fn get_all_trace_ids(&self) -> Result<Vec<Uuid>> {
         Ok(self.graph.get_all_trace_ids())
+    }
+
+    async fn get_trace_summaries(
+        &self,
+        page: usize,
+        page_size: usize,
+    ) -> Result<(Vec<TraceSummary>, usize)> {
+        let all_trace_ids = self.graph.get_all_trace_ids();
+
+        // Build summaries for all traces
+        let mut summaries: Vec<TraceSummary> = Vec::new();
+        for trace_id in all_trace_ids {
+            if let Ok(events) = self.graph.get_causal_order(trace_id) {
+                if !events.is_empty() {
+                    let event_count = events.len() as i64;
+                    let first_timestamp = events.iter().map(|e| e.timestamp).min().unwrap();
+                    let last_timestamp = events.iter().map(|e| e.timestamp).max().unwrap();
+
+                    summaries.push(TraceSummary {
+                        trace_id,
+                        event_count,
+                        first_timestamp,
+                        last_timestamp,
+                    });
+                }
+            }
+        }
+
+        // Sort by last_timestamp DESC (newest first)
+        summaries.sort_by(|a, b| b.last_timestamp.cmp(&a.last_timestamp));
+
+        let total_count = summaries.len();
+
+        // Apply pagination
+        let offset = (page.saturating_sub(1)) * page_size;
+        let paginated = summaries
+            .into_iter()
+            .skip(offset)
+            .take(page_size)
+            .collect();
+
+        Ok((paginated, total_count))
     }
 
     async fn get_trace_roots(&self, _trace_id: Uuid) -> Result<Vec<Uuid>> {

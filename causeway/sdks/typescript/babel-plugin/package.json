@@ -1,0 +1,32 @@
+{
+  "name": "babel-plugin-raceway",
+  "version": "0.1.0",
+  "description": "Babel plugin for automatic Raceway instrumentation",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "test": "jest",
+    "watch": "tsc --watch"
+  },
+  "keywords": [
+    "babel-plugin",
+    "instrumentation",
+    "raceway",
+    "debugging"
+  ],
+  "author": "Raceway",
+  "license": "MIT",
+  "dependencies": {
+    "@babel/core": "^7.23.0",
+    "@babel/types": "^7.23.0"
+  },
+  "devDependencies": {
+    "@types/babel__core": "^7.20.0",
+    "@types/babel__traverse": "^7.20.0",
+    "@types/node": "^20.0.0",
+    "typescript": "^5.0.0"
+  },
+  "peerDependencies": {
+    "@babel/core": "^7.0.0"
+  }
+}

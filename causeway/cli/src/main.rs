@@ -20,7 +20,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Start the Causeway server
+    /// Start the Raceway server
     Serve {
         /// Override verbose setting from config
         #[arg(short, long)]
@@ -96,7 +96,7 @@ async fn main() -> Result<()> {
         Commands::Tui { server } => {
             let server_url = server.unwrap_or(server_url);
             println!(
-                "🎨 Launching Causeway TUI (connecting to {})...",
+                "🎨 Launching Raceway TUI (connecting to {})...",
                 server_url
             );
             tui::launch_tui(&server_url).await?;

@@ -3,9 +3,18 @@ export interface TracesListResponse {
   success: boolean;
   data?: {
     total_traces: number;
-    total_events: number;
-    trace_ids: string[];
+    page: number;
+    page_size: number;
+    total_pages: number;
+    traces: TraceMetadata[];
   };
+}
+
+export interface TraceMetadata {
+  trace_id: string;
+  event_count: number;
+  first_timestamp: string;
+  last_timestamp: string;
 }
 
 export interface TraceResponse {

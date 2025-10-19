@@ -1,0 +1,30 @@
+[package]
+name = "rust-banking-demo"
+version = "0.1.0"
+edition = "2021"
+
+[workspace]
+# This is a standalone package, not part of the parent workspace
+
+[dependencies]
+# Web framework
+axum = "0.7"
+tower = "0.4"
+tower-http = { version = "0.5", features = ["fs"] }
+
+# Async runtime
+tokio = { version = "1.35", features = ["full"] }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Raceway SDK (use local path for now, would be crates.io in production)
+# raceway-sdk = "0.1"
+# For now, inline the SDK types
+uuid = { version = "1.6", features = ["v4", "serde"] }
+reqwest = { version = "0.11", features = ["json"] }
+chrono = { version = "0.4", features = ["serde"] }
+
+# Other
+parking_lot = "0.12"

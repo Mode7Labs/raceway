@@ -131,11 +131,11 @@ export function AnomaliesTab({ data }: AnomaliesTabProps) {
               </div>
               <div className="space-y-0.5">
                 <div className="text-[10px] text-muted-foreground uppercase tracking-wide">Warning</div>
-                <div className="text-sm font-medium font-mono text-orange-400">{warningCount}</div>
+                <div className="text-sm font-medium font-mono text-red-400/70">{warningCount}</div>
               </div>
               <div className="space-y-0.5">
                 <div className="text-[10px] text-muted-foreground uppercase tracking-wide">Minor</div>
-                <div className="text-sm font-medium font-mono text-yellow-400">{minorCount}</div>
+                <div className="text-sm font-medium font-mono text-gray-400">{minorCount}</div>
               </div>
             </div>
           </CardContent>
@@ -313,13 +313,13 @@ export function AnomaliesTab({ data }: AnomaliesTabProps) {
                         <div className="grid grid-cols-1 md:grid-cols-3 gap-2 text-xs">
                           <div className="flex items-center gap-1.5">
                             <span className="text-muted-foreground">Actual:</span>
-                            <span className="font-mono text-orange-400 font-semibold">
+                            <span className="font-mono text-foreground font-semibold">
                               {anomaly.actual_duration_ms.toFixed(2)} ms
                             </span>
                           </div>
                           <div className="flex items-center gap-1.5">
                             <span className="text-muted-foreground">Expected:</span>
-                            <span className="font-mono text-green-400">
+                            <span className="font-mono text-muted-foreground">
                               {anomaly.expected_duration_ms.toFixed(2)} ms
                             </span>
                           </div>

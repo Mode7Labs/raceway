@@ -1,4 +1,4 @@
-use super::types::{AuditTrailData, CrossTraceRace, DurationStats, TraceAnalysisData};
+use super::types::{AuditTrailData, CrossTraceRace, DurationStats, TraceAnalysisData, TraceSummary};
 use crate::event::Event;
 use crate::graph::{Anomaly, AuditTrail, CriticalPath, GraphStats, ServiceDependencies, TreeNode};
 use anyhow::Result;
@@ -35,6 +35,13 @@ pub trait StorageBackend: Send + Sync {
 
     /// Get all trace IDs in the system
     async fn get_all_trace_ids(&self) -> Result<Vec<Uuid>>;
+
+    /// Get paginated trace summaries with metadata
+    async fn get_trace_summaries(
+        &self,
+        page: usize,
+        page_size: usize,
+    ) -> Result<(Vec<TraceSummary>, usize)>;
 
     /// Get trace roots (entry point events) for a specific trace
     async fn get_trace_roots(&self, trace_id: Uuid) -> Result<Vec<Uuid>>;

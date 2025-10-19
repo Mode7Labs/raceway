@@ -467,6 +467,19 @@ impl CausalGraph {
             return false;
         }
 
+        // Special case: If both events are on different threads in the same trace,
+        // check if they're on concurrent branches (no ancestor relationship)
+        if event1.trace_id == event2.trace_id
+            && event1.metadata.thread_id != event2.metadata.thread_id
+        {
+            // Check if either event is an ancestor of the other
+            // If neither is an ancestor, they're on concurrent branches
+            if !self.is_ancestor(event1.id, event2.id) && !self.is_ancestor(event2.id, event1.id) {
+                // Neither is an ancestor of the other - they're on concurrent branches
+                return false;
+            }
+        }
+
         let mut found_less = false;
         let mut all_traces_match = true;
 
@@ -493,6 +506,38 @@ impl CausalGraph {
         // 2. At least one trace is strictly less
         // 3. All traces from event1 are present in event2 (causally connected)
         found_less && all_traces_match
+    }
+
+    /// Check if ancestor_id is an ancestor of descendant_id in the parent chain
+    fn is_ancestor(&self, ancestor_id: Uuid, descendant_id: Uuid) -> bool {
+        if ancestor_id == descendant_id {
+            return false; // An event is not its own ancestor
+        }
+
+        let mut current_id = descendant_id;
+        let mut visited = HashSet::new();
+
+        // Trace back through parent chain
+        while let Some(entry) = self.nodes.get(&current_id) {
+            if visited.contains(&current_id) {
+                // Cycle detected (shouldn't happen in valid causal graph)
+                return false;
+            }
+            visited.insert(current_id);
+
+            let event = &entry.value().1.event;
+            if let Some(parent_id) = event.parent_id {
+                if parent_id == ancestor_id {
+                    return true; // Found the ancestor
+                }
+                current_id = parent_id;
+            } else {
+                // Reached a root without finding the ancestor
+                return false;
+            }
+        }
+
+        false
     }
 
     /// Determine if two access types form a safe (non-racing) pattern

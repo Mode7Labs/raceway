@@ -1,6 +1,6 @@
 use anyhow::Result;
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::{Method, StatusCode},
     response::{IntoResponse, Json},
     routing::{get, post},
@@ -276,38 +276,78 @@ async fn ingest_events_handler(
     }
 }
 
-async fn list_traces_handler(State(state): State<AppState>) -> impl IntoResponse {
-    let trace_ids = state
-        .engine
-        .storage()
-        .get_all_trace_ids()
-        .await
-        .unwrap_or_default();
-    let stats = state.engine.storage().stats().await.unwrap_or_default();
+async fn list_traces_handler(
+    State(state): State<AppState>,
+    Query(params): Query<HashMap<String, String>>,
+) -> Result<impl IntoResponse, (StatusCode, Json<ApiResponse<String>>)> {
+    let page: usize = params
+        .get("page")
+        .and_then(|p| p.parse().ok())
+        .unwrap_or(1);
+    let page_size: usize = params
+        .get("page_size")
+        .and_then(|p| p.parse().ok())
+        .unwrap_or(20);
 
     if state.verbose {
         println!(
-            "[{}] 📋 list_traces_handler -> traces: {}, events: {}",
+            "[{}] 📋 list_traces_handler -> page: {}, page_size: {}",
             Local::now().format("%H:%M:%S.%3f"),
-            trace_ids.len(),
-            stats.total_events
+            page,
+            page_size
         );
     }
 
     #[derive(Serialize)]
-    struct TraceSummary {
-        total_traces: usize,
-        total_events: usize,
-        trace_ids: Vec<String>,
+    struct TraceMetadata {
+        trace_id: String,
+        event_count: usize,
+        first_timestamp: String,
+        last_timestamp: String,
     }
 
-    let summary = TraceSummary {
-        total_traces: trace_ids.len(),
-        total_events: stats.total_events,
-        trace_ids: trace_ids.iter().map(|id| id.to_string()).collect(),
-    };
+    #[derive(Serialize)]
+    struct TracesListResponse {
+        total_traces: usize,
+        page: usize,
+        page_size: usize,
+        total_pages: usize,
+        traces: Vec<TraceMetadata>,
+    }
 
-    Json(ApiResponse::success(summary))
+    // Use storage trait method for paginated trace summaries
+    match state.engine.storage().get_trace_summaries(page, page_size).await {
+        Ok((summaries, total_traces)) => {
+            let total_pages = (total_traces + page_size - 1) / page_size;
+
+            let traces: Vec<TraceMetadata> = summaries
+                .into_iter()
+                .map(|summary| TraceMetadata {
+                    trace_id: summary.trace_id.to_string(),
+                    event_count: summary.event_count as usize,
+                    first_timestamp: summary.first_timestamp.to_rfc3339(),
+                    last_timestamp: summary.last_timestamp.to_rfc3339(),
+                })
+                .collect();
+
+            let response = TracesListResponse {
+                total_traces,
+                page,
+                page_size,
+                total_pages,
+                traces,
+            };
+
+            Ok((StatusCode::OK, Json(ApiResponse::success(response))))
+        }
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiResponse::error(format!(
+                "Failed to fetch trace summaries: {}",
+                e
+            ))),
+        )),
+    }
 }
 
 async fn analyze_global_handler(

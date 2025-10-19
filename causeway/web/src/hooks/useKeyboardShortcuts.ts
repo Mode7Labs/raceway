@@ -1,11 +1,11 @@
 import { useEffect } from 'react';
-import { type ViewMode } from '../types';
+import { type ViewMode, type TraceMetadata } from '../types';
 
 interface UseKeyboardShortcutsProps {
   onNavigate: (tab: ViewMode) => void;
   onRefresh: () => void;
   selectedTraceId: string | null;
-  traces: string[];
+  traces: TraceMetadata[];
   onTraceSelect: (traceId: string) => void;
 }
 
@@ -74,16 +74,16 @@ export function useKeyboardShortcuts({
 
       // Trace navigation with arrow keys
       if (selectedTraceId && traces.length > 0) {
-        const currentIndex = traces.indexOf(selectedTraceId);
+        const currentIndex = traces.findIndex(t => t.trace_id === selectedTraceId);
 
         if (event.key === 'ArrowUp' && !event.metaKey && !event.ctrlKey) {
           event.preventDefault();
           const prevIndex = currentIndex > 0 ? currentIndex - 1 : traces.length - 1;
-          onTraceSelect(traces[prevIndex]);
+          onTraceSelect(traces[prevIndex].trace_id);
         } else if (event.key === 'ArrowDown' && !event.metaKey && !event.ctrlKey) {
           event.preventDefault();
           const nextIndex = currentIndex < traces.length - 1 ? currentIndex + 1 : 0;
-          onTraceSelect(traces[nextIndex]);
+          onTraceSelect(traces[nextIndex].trace_id);
         }
       }
     };

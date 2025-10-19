@@ -1,0 +1,26 @@
+[package]
+name = "raceway-sdk"
+version = "0.1.0"
+edition = "2021"
+authors = ["Raceway Contributors"]
+description = "Lightweight SDK for race condition detection in Rust applications"
+license = "MIT"
+repository = "https://github.com/mode-7/raceway"
+keywords = ["tracing", "instrumentation", "race-detection", "concurrency", "debugging"]
+categories = ["development-tools::debugging", "development-tools::profiling"]
+
+[workspace]
+# This is a standalone package, not part of the parent workspace
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1.35", features = ["full"] }
+reqwest = { version = "0.11", features = ["json"] }
+uuid = { version = "1.6", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+axum = "0.7"
+parking_lot = "0.12"
+
+[dev-dependencies]
+tokio-test = "0.4"

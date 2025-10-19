@@ -22,9 +22,18 @@ pub struct TracesListResponse {
 #[derive(Deserialize)]
 pub struct TracesListData {
     pub total_traces: usize,
-    #[serde(default)]
-    pub total_events: Option<usize>,
-    pub trace_ids: Vec<String>,
+    pub page: usize,
+    pub page_size: usize,
+    pub total_pages: usize,
+    pub traces: Vec<TraceMetadata>,
+}
+
+#[derive(Deserialize, Clone)]
+pub struct TraceMetadata {
+    pub trace_id: String,
+    pub event_count: usize,
+    pub first_timestamp: String,
+    pub last_timestamp: String,
 }
 
 #[derive(Deserialize)]
@@ -178,6 +187,7 @@ pub enum ViewMode {
     Anomalies,    // Show detected anomalies with details
     Dependencies, // Show service dependencies graph
     AuditTrail,   // Show audit trail for a variable
+    CrossTrace,   // Show cross-trace race detection (lazy loaded)
 }
 
 // Dependencies response types

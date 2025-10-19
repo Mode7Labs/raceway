@@ -20,8 +20,8 @@ export class RacewayAPI {
     return response.json();
   }
 
-  static async getTraces(): Promise<TracesListResponse> {
-    return this.fetchJSON<TracesListResponse>(`${API_BASE}/api/traces`);
+  static async getTraces(page: number = 1, pageSize: number = 20): Promise<TracesListResponse> {
+    return this.fetchJSON<TracesListResponse>(`${API_BASE}/api/traces?page=${page}&page_size=${pageSize}`);
   }
 
   static async getTrace(traceId: string): Promise<TraceResponse> {

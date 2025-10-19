@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { RacewayAPI } from './api';
-import {type ViewMode, type Event, type AnomaliesData, type CriticalPathData, type DependenciesData, type VariableAccess } from './types';
+import {type ViewMode, type Event, type AnomaliesData, type CriticalPathData, type DependenciesData, type VariableAccess, type TraceMetadata } from './types';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import { TraceList } from './components/TraceList';
 import { EventsTabWithSwitcher } from './components/EventsTabWithSwitcher';
@@ -14,14 +14,13 @@ import { ExportMenu } from './components/ExportMenu';
 import { Button } from './components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from './components/ui/tabs';
 import { Badge } from './components/ui/badge';
-import { AlertBanner } from './components/AlertBanner';
 import { OverviewTab } from './components/OverviewTab';
 import { AnomaliesTab } from './components/AnomaliesTab';
 import { Loader2 } from 'lucide-react';
 import logo from './static/icon.png';
 
 export default function App() {
-  const [traces, setTraces] = useState<string[]>([]);
+  const [traces, setTraces] = useState<TraceMetadata[]>([]);
   const [selectedTraceId, setSelectedTraceId] = useState<string | null>(null);
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>('overview');
@@ -29,6 +28,10 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [status, setStatus] = useState('Connecting...');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [currentPage, setCurrentPage] = useState(1);
+  const [hasMoreTraces, setHasMoreTraces] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
 
   // Data caches
   const [events, setEvents] = useState<Event[]>([]);
@@ -38,59 +41,31 @@ export default function App() {
   const [auditTrails, setAuditTrails] = useState<Record<string, VariableAccess[]>>({});
   const [raceCount, setRaceCount] = useState<number>(0);
   const [raceInfo, setRaceInfo] = useState<string[]>([]);
-  const [tracesWithRaces, setTracesWithRaces] = useState<Set<string>>(new Set());
-  const [traceRaceCounts, setTraceRaceCounts] = useState<Map<string, number>>(new Map());
-  const [globalRaceInfo, setGlobalRaceInfo] = useState<string[]>([]);
 
   // Fetch global analysis (cross-trace races)
   const fetchGlobalAnalysis = useCallback(async () => {
     try {
-      const response = await RacewayAPI.analyzeGlobal();
-      if (response.data && response.data.anomalies) {
-        setGlobalRaceInfo(response.data.anomalies);
-      }
+      await RacewayAPI.analyzeGlobal();
+      // Global analysis is available via API but not currently displayed in UI
     } catch (error) {
       console.error('Error fetching global analysis:', error);
     }
   }, []);
 
-  // Fetch race counts for all traces (for trace list indicators)
-  const fetchAllRaceCounts = useCallback(async (traceIds: string[]) => {
-    const raceCounts = new Map<string, number>();
-    const racyTraces = new Set<string>();
-
-    // Fetch race counts in parallel
-    await Promise.all(
-      traceIds.map(async (traceId) => {
-        try {
-          const analysis = await RacewayAPI.analyzeTrace(traceId);
-          if (analysis.data && analysis.data.potential_races) {
-            raceCounts.set(traceId, analysis.data.potential_races);
-            if (analysis.data.potential_races > 0) {
-              racyTraces.add(traceId);
-            }
-          }
-        } catch (error) {
-          console.error(`Error fetching race count for trace ${traceId}:`, error);
-        }
-      })
-    );
-
-    setTraceRaceCounts(raceCounts);
-    setTracesWithRaces(racyTraces);
-  }, []);
-
-  // Fetch traces list
+  // Fetch traces list (resets to page 1)
   const fetchTraces = useCallback(async () => {
     setRefreshing(true);
     try {
-      const response = await RacewayAPI.getTraces();
+      const response = await RacewayAPI.getTraces(1, 20);
       if (response.data) {
-        setTraces(response.data.trace_ids);
-        setStatus(`Connected | Events: ${response.data.total_events} | Traces: ${response.data.total_traces}`);
+        // Store full trace metadata
+        setTraces(response.data.traces);
+        setCurrentPage(1);
+        setHasMoreTraces(response.data.page < response.data.total_pages);
 
-        // Fetch race counts for all traces (for indicators)
-        fetchAllRaceCounts(response.data.trace_ids);
+        // Calculate total events from all traces
+        const totalEvents = response.data.traces.reduce((sum, t) => sum + t.event_count, 0);
+        setStatus(`Connected | Events: ${totalEvents} | Traces: ${response.data.total_traces}`);
       }
       // Fetch global analysis when traces are loaded
       fetchGlobalAnalysis();
@@ -99,7 +74,28 @@ export default function App() {
     } finally {
       setRefreshing(false);
     }
-  }, [fetchGlobalAnalysis, fetchAllRaceCounts]);
+  }, [fetchGlobalAnalysis]);
+
+  // Load more traces (append next page)
+  const loadMoreTraces = useCallback(async () => {
+    if (loadingMore || !hasMoreTraces) return;
+
+    setLoadingMore(true);
+    try {
+      const nextPage = currentPage + 1;
+      const response = await RacewayAPI.getTraces(nextPage, 20);
+      if (response.data && response.data.traces) {
+        // Append new traces to existing list
+        setTraces(prev => [...prev, ...response.data!.traces]);
+        setCurrentPage(nextPage);
+        setHasMoreTraces(response.data.page < response.data.total_pages);
+      }
+    } catch (error) {
+      console.error('Error loading more traces:', error);
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [currentPage, hasMoreTraces, loadingMore]);
 
 
   // Fetch trace details (optimized to use single /full endpoint)
@@ -116,9 +112,6 @@ export default function App() {
         // Extract race analysis
         setRaceCount(fullAnalysis.data.analysis.potential_races || 0);
         setRaceInfo(fullAnalysis.data.analysis.anomalies || []);
-        if (fullAnalysis.data.analysis.potential_races > 0) {
-          setTracesWithRaces(prev => new Set(prev).add(traceId));
-        }
 
         // Extract critical path (if available)
         if (fullAnalysis.data.critical_path) {
@@ -186,12 +179,17 @@ export default function App() {
 
   const selectedEvent = events.find(e => e.id === selectedEventId);
 
+  // Filter traces by search query
+  const filteredTraces = traces.filter(trace =>
+    trace.trace_id.toLowerCase().includes(searchQuery.toLowerCase())
+  );
+
   // Keyboard shortcuts
   useKeyboardShortcuts({
     onNavigate: (tab) => setViewMode(tab),
     onRefresh: fetchTraces,
     selectedTraceId,
-    traces,
+    traces: filteredTraces,
     onTraceSelect: handleTraceSelect,
   });
 
@@ -203,7 +201,7 @@ export default function App() {
           <div className="flex items-center gap-3">
             <h1 className="text-base font-medium flex items-center gap-2">
               <img src={logo} alt="Raceway" className="w-5 h-5" />
-              <span className="text-red-500">raceway</span>
+              <span className="text-red-400/60 font-extralight uppercase tracking-[0.25em]">raceway</span>
             </h1>
           </div>
 
@@ -271,16 +269,30 @@ export default function App() {
       {/* Main Content */}
       <div className="flex flex-1 overflow-hidden">
         {/* Left Sidebar - Traces */}
-        <aside className="w-64 border-r border-border bg-card/30">
-          <div className="h-[calc(100dvh-4.5rem)] overflow-y-auto p-3">
-            <h2 className="text-[11px] font-medium text-muted-foreground mb-2 px-2 tracking-wide">TRACES</h2>
-            <TraceList
-              traces={traces}
-              selectedTraceId={selectedTraceId}
-              tracesWithRaces={tracesWithRaces}
-              traceRaceCounts={traceRaceCounts}
-              onSelect={handleTraceSelect}
-            />
+        <aside className="w-64 border-r border-border bg-background">
+          <div className="h-[calc(100dvh-4.5rem)] flex flex-col">
+            <div className="p-3 border-b border-border">
+              <div className="text-[10px] font-medium text-muted-foreground/70 mb-2 px-2 tracking-wider uppercase">
+                Traces
+              </div>
+              <input
+                type="text"
+                placeholder="Search by ID..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="w-full px-3 py-1.5 text-xs bg-background border border-border rounded-md focus:outline-none focus:ring-1 focus:ring-primary/50"
+              />
+            </div>
+            <div className="flex-1 overflow-y-auto p-3">
+              <TraceList
+                traces={filteredTraces}
+                selectedTraceId={selectedTraceId}
+                onSelect={handleTraceSelect}
+                onLoadMore={loadMoreTraces}
+                hasMore={hasMoreTraces && !searchQuery}
+                loadingMore={loadingMore}
+              />
+            </div>
           </div>
         </aside>
 

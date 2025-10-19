@@ -25,6 +25,8 @@ ICON_BUILD="🛠️ "
 ICON_SERVER="🚀"
 ICON_TUI="🎨"
 ICON_WEB="🌐"
+ICON_SEED="🌱"
+ICON_DEMO="💰"
 ICON_EXIT="👋"
 
 # ─── Helpers ────────────────────────────────────────────────────────────────────
@@ -95,14 +97,66 @@ action_web() {
     "${SCRIPT_DIR}/web"
 }
 
+action_seed() {
+  # Prefer pnpm, then npx
+  local pkg_manager
+  if command -v pnpm >/dev/null 2>&1; then
+    pkg_manager="pnpm exec ts-node"
+  else
+    require_tool npx
+    pkg_manager="npx ts-node"
+  fi
+
+  run_step "${ICON_SEED} Seeding database (${pkg_manager} scripts/seed-database.ts)" \
+    "${pkg_manager} scripts/seed-database.ts" \
+    "${SCRIPT_DIR}"
+}
+
+action_demo_typescript() {
+  require_tool node
+  run_step "${ICON_DEMO} Starting TypeScript demo (node index.js on port 3050)" \
+    "PORT=3050 node index.js" \
+    "${SCRIPT_DIR}/examples/express-banking"
+}
+
+action_demo_rust() {
+  require_tool cargo
+  run_step "${ICON_DEMO} Starting Rust demo (cargo run on port 3051)" \
+    "cargo run --release" \
+    "${SCRIPT_DIR}/examples/rust-banking"
+}
+
+action_demo_go() {
+  require_tool go
+  run_step "${ICON_DEMO} Starting Go demo (go run main.go on port 3052)" \
+    "PORT=3052 go run main.go" \
+    "${SCRIPT_DIR}/examples/go-banking"
+}
+
+action_demo_python() {
+  require_tool python3
+  run_step "${ICON_DEMO} Starting Python demo (python app.py on port 3053)" \
+    "PORT=3053 python3 app.py" \
+    "${SCRIPT_DIR}/examples/python-banking"
+}
+
 # ─── Menu ───────────────────────────────────────────────────────────────────────
 print_menu() {
   print_header
   cat <<EOF
+${BOLD}${CYAN}Core${RESET}
 ${GREEN}1)${RESET} ${ICON_BUILD} Rebuild core (cargo build)
 ${GREEN}2)${RESET} ${ICON_SERVER} Start server (cargo run --release -- serve)
 ${GREEN}3)${RESET} ${ICON_TUI} Launch TUI (cargo run --release -- tui)
 ${GREEN}4)${RESET} ${ICON_WEB} Start Web UI (Vite on port 3005)
+${GREEN}5)${RESET} ${ICON_SEED} Seed database (clear & seed test data)
+
+${BOLD}${CYAN}Demo Apps${RESET}
+${GREEN}6)${RESET} ${ICON_DEMO} TypeScript Banking (Node.js/Express on port 3050)
+${GREEN}7)${RESET} ${ICON_DEMO} Rust Banking (Axum on port 3051)
+${GREEN}8)${RESET} ${ICON_DEMO} Go Banking (Gin on port 3052)
+${GREEN}9)${RESET} ${ICON_DEMO} Python Banking (Flask on port 3053)
+
 ${YELLOW}q)${RESET} ${ICON_EXIT} Quit
 EOF
   printf "\nSelect an option: "
@@ -119,6 +173,11 @@ main_loop() {
       2) action_server ;;
       3) action_tui ;;
       4) action_web ;;
+      5) action_seed ;;
+      6) action_demo_typescript ;;
+      7) action_demo_rust ;;
+      8) action_demo_go ;;
+      9) action_demo_python ;;
       q|Q) printf "${ICON_EXIT} Bye!\n"; exit 0 ;;
       *) printf "${RED}Invalid selection.${RESET} Try again.\n\n" ;;
     esac

@@ -1,205 +1,94 @@
 /**
- * Example Express Banking API with Causeway Integration
+ * Example Express Banking API with Raceway Integration
  *
- * This demonstrates how Causeway can detect race conditions in a banking API.
+ * This demonstrates how Raceway can detect race conditions in a banking API
+ * using the plug-and-play SDK architecture.
  *
  * To run:
- * 1. Start Causeway server: cargo run --release -- serve
+ * 1. Start Raceway server: cd ../.. && cargo run --release -- serve
  * 2. Install deps: npm install
  * 3. Start this server: node index.js
- * 4. Test race condition: node test-race.js
- * 5. View in TUI: cargo run --release -- tui
+ * 4. Open browser: http://localhost:3050
+ * 5. Click "Trigger Race Condition" to see the bug in action
+ * 6. View results in Raceway Web UI: http://localhost:8080
  */
 
 const express = require('express');
-const { v4: uuidv4 } = require('uuid');
+const path = require('path');
+const { Raceway } = require('@mode-7/raceway-node');
 
-// NOTE: In a real app, you would import from 'causeway-sdk'
-// For this example, we'll use the local implementation structure
-const causeway = {
+// ============================================================
+// Application Setup
+// ============================================================
+
+// Initialize Raceway client
+const raceway = new Raceway({
   serverUrl: 'http://localhost:8080',
   serviceName: 'banking-api',
   environment: 'development',
-  enabled: true,
   debug: true,
-
-  currentTrace: null,
-
-  startTrace() {
-    this.currentTrace = {
-      traceId: uuidv4(),
-      parentId: null,
-      events: [],
-    };
-    console.log(`[Causeway] Started trace ${this.currentTrace.traceId}`);
-    return this.currentTrace;
-  },
-
-  endTrace() {
-    if (this.currentTrace) {
-      console.log(`[Causeway] Ended trace ${this.currentTrace.traceId}`);
-      this.sendEvents(this.currentTrace.events);
-      this.currentTrace = null;
-    }
-  },
-
-  captureEvent(kind, trace = this.currentTrace) {
-    if (!this.enabled || !trace) return;
-
-    const event = {
-      id: uuidv4(),
-      trace_id: trace.traceId,
-      parent_id: trace.parentId,
-      timestamp: new Date().toISOString(),
-      kind,
-      metadata: {
-        thread_id: `node-${process.pid}`,
-        process_id: process.pid,
-        service_name: this.serviceName,
-        environment: this.environment,
-        tags: {},
-        duration_ns: null,
-      },
-      causality_vector: [],
-      lock_set: [],
-    };
-
-    trace.events.push(event);
-    trace.parentId = event.id;
-
-    if (this.debug) {
-      console.log(`[Causeway] Captured event:`, Object.keys(kind)[0]);
-    }
-
-    return event;
-  },
-
-  async sendEvents(events) {
-    if (!events.length) return;
-
-    try {
-      const response = await fetch(`${this.serverUrl}/events`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ events }),
-      });
-
-      if (response.ok) {
-        console.log(`[Causeway] Sent ${events.length} events`);
-      } else {
-        console.error(`[Causeway] Failed to send events: ${response.status}`);
-      }
-    } catch (error) {
-      console.error('[Causeway] Error sending events:', error.message);
-    }
-  },
-};
+});
 
 // In-memory account database
-const accounts = {
+// Wrap with auto-tracking for zero-instrumentation mode!
+const accounts = raceway.track({
   alice: { balance: 1000 },
   bob: { balance: 500 },
   charlie: { balance: 300 },
-};
+}, 'accounts');
 
 const app = express();
 app.use(express.json());
+app.use(express.static(path.join(__dirname, 'public')));
 
-// Middleware to start Causeway trace for each request
+// Install Raceway middleware for automatic trace initialization
+app.use(raceway.middleware());
+
+// Track HTTP response timing
 app.use((req, res, next) => {
-  const trace = causeway.startTrace();
-  res.locals.trace = trace;
+  res.locals.startTime = Date.now();
 
-  // Capture HTTP request
-  causeway.captureEvent(
-    {
-      HttpRequest: {
-        method: req.method,
-        url: req.url,
-        headers: req.headers,
-        body: req.body,
-      },
-    },
-    trace
-  );
-
-  // Capture response on finish
   res.on('finish', () => {
-    causeway.captureEvent(
-      {
-        HttpResponse: {
-          status: res.statusCode,
-          headers: res.getHeaders(),
-          body: null,
-          duration_ms: Date.now() - res.locals.startTime,
-        },
-      },
-      trace
-    );
-    causeway.endTrace();
+    const duration = Date.now() - res.locals.startTime;
+    raceway.trackHttpResponse(res.statusCode, duration);
   });
 
-  res.locals.startTime = Date.now();
   next();
 });
 
-// Get balance endpoint
-app.get('/balance/:account', (req, res) => {
-  const { account } = req.params;
-  const { trace } = res.locals;
+// ============================================================
+// API Endpoints
+// ============================================================
 
-  causeway.captureEvent(
-    {
-      FunctionCall: {
-        function_name: 'getBalance',
-        module: 'banking',
-        args: { account },
-        file: 'index.js',
-        line: 134,
-      },
-    },
-    trace
-  );
+// Get all accounts
+app.get('/api/accounts', (req, res) => {
+  raceway.trackFunctionCall('getAllAccounts', {});
+  res.json({ accounts });
+});
+
+// Get balance endpoint
+app.get('/api/balance/:account', (req, res) => {
+  const { account } = req.params;
+
+  raceway.trackFunctionCall('getBalance', { account });
 
   if (!accounts[account]) {
     return res.status(404).json({ error: 'Account not found' });
   }
 
+  // ✅ AUTO-TRACKED Read
   const balance = accounts[account].balance;
-
-  causeway.captureEvent(
-    {
-      StateChange: {
-        variable: `${account}.balance`,
-        old_value: null,
-        new_value: balance,
-        location: 'index.js:145',
-        access_type: 'Read',
-      },
-    },
-    trace
-  );
 
   res.json({ account, balance });
 });
 
 // Transfer money endpoint (VULNERABLE TO RACE CONDITIONS!)
-app.post('/transfer', async (req, res) => {
+// ✨ ZERO MANUAL INSTRUMENTATION - Proxies handle everything!
+app.post('/api/transfer', async (req, res) => {
   const { from, to, amount } = req.body;
-  const { trace } = res.locals;
 
-  causeway.captureEvent(
-    {
-      FunctionCall: {
-        function_name: 'transferMoney',
-        module: 'banking',
-        args: { from, to, amount },
-        file: 'index.js',
-        line: 167,
-      },
-    },
-    trace
-  );
+  // Track function call (optional - for better visibility)
+  raceway.trackFunctionCall('transferMoney', { from, to, amount });
 
   // Validate accounts exist
   if (!accounts[from] || !accounts[to]) {
@@ -209,20 +98,8 @@ app.post('/transfer', async (req, res) => {
   // Simulate some processing time (makes race conditions more likely)
   await new Promise(resolve => setTimeout(resolve, 10));
 
-  // READ: Get current balance
+  // READ: Get current balance (✅ AUTO-TRACKED!)
   const currentBalance = accounts[from].balance;
-  causeway.captureEvent(
-    {
-      StateChange: {
-        variable: `${from}.balance`,
-        old_value: null,
-        new_value: currentBalance,
-        location: 'index.js:190 (READ)',
-        access_type: 'Read',
-      },
-    },
-    trace
-  );
 
   console.log(`[${from}] Read balance: ${currentBalance}`);
 
@@ -234,39 +111,14 @@ app.post('/transfer', async (req, res) => {
   // Simulate more processing (window for race condition!)
   await new Promise(resolve => setTimeout(resolve, 10));
 
-  // WRITE: Update balance (RACE CONDITION HERE!)
+  // WRITE: Update balance (✅ AUTO-TRACKED - RACE CONDITION HERE!)
   const newBalance = currentBalance - amount;
   accounts[from].balance = newBalance;
 
-  causeway.captureEvent(
-    {
-      StateChange: {
-        variable: `${from}.balance`,
-        old_value: currentBalance,
-        new_value: newBalance,
-        location: 'index.js:217 (WRITE)',
-        access_type: 'Write',
-      },
-    },
-    trace
-  );
-
   console.log(`[${from}] Wrote balance: ${newBalance}`);
 
-  // Credit the recipient
+  // Credit the recipient (✅ AUTO-TRACKED!)
   accounts[to].balance += amount;
-  causeway.captureEvent(
-    {
-      StateChange: {
-        variable: `${to}.balance`,
-        old_value: accounts[to].balance - amount,
-        new_value: accounts[to].balance,
-        location: 'index.js:233',
-        access_type: 'Write',
-      },
-    },
-    trace
-  );
 
   res.json({
     success: true,
@@ -276,23 +128,32 @@ app.post('/transfer', async (req, res) => {
 });
 
 // Reset accounts endpoint (for testing)
-app.post('/reset', (req, res) => {
+app.post('/api/reset', (req, res) => {
+  raceway.trackFunctionCall('resetAccounts', {});
+
   accounts.alice = { balance: 1000 };
   accounts.bob = { balance: 500 };
   accounts.charlie = { balance: 300 };
+
   res.json({ message: 'Accounts reset', accounts });
 });
 
-const PORT = 3000;
+// ============================================================
+// Server Startup
+// ============================================================
+
+const PORT = process.env.PORT || 3050;
 app.listen(PORT, () => {
   console.log(`\n💰 Banking API running on http://localhost:${PORT}`);
-  console.log(`🔍 Causeway integration enabled`);
-  console.log(`\n📊 Available endpoints:`);
-  console.log(`   GET  /balance/:account`);
-  console.log(`   POST /transfer (body: { from, to, amount })`);
-  console.log(`   POST /reset`);
-  console.log(`\n🚨 To test race condition:`);
-  console.log(`   node test-race.js`);
-  console.log(`\n📺 View results:`);
-  console.log(`   cargo run --release -- tui\n`);
+  console.log(`🔍 Raceway plug-and-play integration enabled`);
+  console.log(`\n📊 Web UI: http://localhost:${PORT}`);
+  console.log(`📊 Raceway Analysis: http://localhost:8080`);
+  console.log(`\n🚨 Click "Trigger Race Condition" in the UI to see the bug!\n`);
+});
+
+// Graceful shutdown
+process.on('SIGINT', async () => {
+  console.log('\nShutting down...');
+  await raceway.stop();
+  process.exit(0);
 });

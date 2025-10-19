@@ -1,0 +1,31 @@
+{
+  "name": "raceway-cli",
+  "version": "0.1.0",
+  "description": "CLI tool for Raceway instrumentation",
+  "bin": {
+    "raceway": "./dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc--watch"
+  },
+  "keywords": [
+    "raceway",
+    "instrumentation",
+    "cli"
+  ],
+  "author": "Raceway",
+  "license": "MIT",
+  "dependencies": {
+    "@babel/core": "^7.23.0",
+    "@babel/preset-env": "^7.23.0",
+    "@babel/preset-typescript": "^7.23.0",
+    "babel-plugin-raceway": "file:../babel-plugin",
+    "commander": "^11.0.0",
+    "glob": "^10.3.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.0.0"
+  }
+}

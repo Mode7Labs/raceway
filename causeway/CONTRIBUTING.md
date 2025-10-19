@@ -1,6 +1,6 @@
-# Contributing to Causeway
+# Contributing to Raceway
 
-First off, thank you for considering contributing to Causeway! It's people like you that make Causeway such a great tool.
+First off, thank you for considering contributing to Raceway! It's people like you that make Raceway such a great tool.
 
 ## Code of Conduct
 
@@ -57,20 +57,23 @@ Enhancement suggestions are tracked as GitHub issues. When creating an enhanceme
 
 ```bash
 # Clone
-git clone https://github.com/YOUR_USERNAME/causeway.git
-cd causeway
+git clone https://github.com/YOUR_USERNAME/raceway.git
+cd raceway
 
-# Build Rust components
-cargo build
+# Build Rust core and CLI
+cargo build --release
 
-# Build TypeScript components
-cd instrumentation
+# Build Web UI
+cd web
 npm install
 npm run build
 
 # Run tests
+cd ..
 cargo test
-npm test
+
+# Try the demo
+cargo run --release -- serve
 ```
 
 ## Style Guides
