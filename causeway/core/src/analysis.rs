@@ -1,7 +1,8 @@
 use crate::event::Event;
 use crate::graph::{Anomaly, AuditTrail, CausalGraph, CriticalPath, ServiceDependencies, TreeNode};
-use crate::storage::{CrossTraceRace, TraceAnalysisData, StorageBackend};
+use crate::storage::{CrossTraceRace, StorageBackend, TraceAnalysisData};
 use anyhow::Result;
+use std::collections::HashSet;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use uuid::Uuid;
@@ -160,27 +161,22 @@ impl AnalysisService {
         // Fetch events from storage
         let events = self.storage.get_trace_events(trace_id).await?;
 
-        // Get analysis results from graph
-        let graph = self.graph.read().await;
-        let anomalies = graph.detect_anomalies(trace_id)?;
-        let critical_path = graph.get_critical_path(trace_id).ok();
-        let dependencies = graph.get_service_dependencies(trace_id).ok();
-
-        // Collect variables and their audit trails
-        let mut variables = std::collections::HashSet::new();
+        // Collect unique variables referenced in the trace
+        let mut variables = HashSet::new();
         for event in &events {
             if let crate::event::EventKind::StateChange { variable, .. } = &event.kind {
                 variables.insert(variable.clone());
             }
         }
 
-        // Get audit trails for each variable
-        let mut audit_trails = std::collections::HashMap::new();
-        for variable in variables {
-            if let Ok(trail) = graph.get_audit_trail(trace_id, &variable) {
-                audit_trails.insert(variable, trail.accesses);
-            }
-        }
+        // Get analysis results from graph
+        let graph = self.graph.read().await;
+        let anomalies = graph.detect_anomalies(trace_id)?;
+        let critical_path = graph.get_critical_path(trace_id).ok();
+        let dependencies = graph.get_service_dependencies(trace_id).ok();
+
+        // Get audit trails in a single pass
+        let audit_trails = graph.get_audit_trails_bulk(trace_id, &variables)?;
 
         Ok(TraceAnalysisData {
             events,

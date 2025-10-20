@@ -50,7 +50,10 @@ pub trait StorageBackend: Send + Sync {
     async fn save_baseline(&self, operation: &str, stats: DurationStats) -> Result<()>;
 
     /// Save multiple baseline metrics at once (batched for performance)
-    async fn save_baselines_batch(&self, baselines: std::collections::HashMap<String, DurationStats>) -> Result<()>;
+    async fn save_baselines_batch(
+        &self,
+        baselines: std::collections::HashMap<String, DurationStats>,
+    ) -> Result<()>;
 
     /// Get baseline metric for a specific operation type
     async fn get_baseline_metric(&self, operation: &str) -> Result<Option<DurationStats>>;

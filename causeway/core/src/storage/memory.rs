@@ -127,11 +127,7 @@ impl StorageBackend for MemoryBackend {
 
         // Apply pagination
         let offset = (page.saturating_sub(1)) * page_size;
-        let paginated = summaries
-            .into_iter()
-            .skip(offset)
-            .take(page_size)
-            .collect();
+        let paginated = summaries.into_iter().skip(offset).take(page_size).collect();
 
         Ok((paginated, total_count))
     }
@@ -154,7 +150,10 @@ impl StorageBackend for MemoryBackend {
         Ok(())
     }
 
-    async fn save_baselines_batch(&self, baselines: std::collections::HashMap<String, DurationStats>) -> Result<()> {
+    async fn save_baselines_batch(
+        &self,
+        baselines: std::collections::HashMap<String, DurationStats>,
+    ) -> Result<()> {
         for (operation, stats) in baselines {
             self.baselines.insert(operation, stats);
         }

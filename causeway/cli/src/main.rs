@@ -95,10 +95,7 @@ async fn main() -> Result<()> {
         }
         Commands::Tui { server } => {
             let server_url = server.unwrap_or(server_url);
-            println!(
-                "🎨 Launching Raceway TUI (connecting to {})...",
-                server_url
-            );
+            println!("🎨 Launching Raceway TUI (connecting to {})...", server_url);
             tui::launch_tui(&server_url).await?;
         }
         Commands::Analyze { trace_id, server } => {

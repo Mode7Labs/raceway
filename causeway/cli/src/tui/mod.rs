@@ -97,7 +97,9 @@ impl App {
             ],
             event_data: vec![],
             selected_event: 0,
-            event_detail: "⏳ Connecting to Raceway server...\n\nPlease wait while we fetch the trace list.".to_string(),
+            event_detail:
+                "⏳ Connecting to Raceway server...\n\nPlease wait while we fetch the trace list."
+                    .to_string(),
             anomalies: vec![
                 "⏳ Connecting...".to_string(),
                 "".to_string(),
@@ -253,9 +255,8 @@ impl App {
                 if let Ok(traces_resp) = response.json::<TracesListResponse>() {
                     if let Some(traces_data) = traces_resp.data {
                         // Calculate total events from trace metadata
-                        let total_events: usize = traces_data.traces.iter()
-                            .map(|t| t.event_count)
-                            .sum();
+                        let total_events: usize =
+                            traces_data.traces.iter().map(|t| t.event_count).sum();
 
                         self.status_message = format!(
                             "Connected | Events: {} | Traces: {}",
@@ -264,7 +265,8 @@ impl App {
 
                         if !traces_data.traces.is_empty() {
                             // Extract trace IDs from metadata
-                            let trace_ids: Vec<String> = traces_data.traces
+                            let trace_ids: Vec<String> = traces_data
+                                .traces
                                 .iter()
                                 .map(|t| t.trace_id.clone())
                                 .collect();
@@ -299,7 +301,8 @@ impl App {
                             // Auto-load first trace immediately on initial startup if not cached
                             if self.selected_trace < self.trace_ids.len()
                                 && !self.trace_cache.contains_key(&self.selected_trace)
-                                && self.last_selection_change.is_none() {
+                                && self.last_selection_change.is_none()
+                            {
                                 // Show loading message first
                                 self.events = vec![
                                     "📋 Loading first trace...".to_string(),
@@ -307,9 +310,7 @@ impl App {
                                     "Fetching events and analysis...".to_string(),
                                 ];
                                 self.event_detail = "Loading trace data from server...".to_string();
-                                self.anomalies = vec![
-                                    "⏳ Loading...".to_string(),
-                                ];
+                                self.anomalies = vec!["⏳ Loading...".to_string()];
 
                                 // Load immediately on startup (no debounce)
                                 self.loaded_trace = self.selected_trace;
@@ -1257,32 +1258,33 @@ fn ui(f: &mut Frame, app: &App) {
                 });
 
             // Show global concurrent events or loading message
-            let items: Vec<ListItem> = if app.last_global_analysis_trace_count == app.trace_ids.len() {
-                // Global analysis is loaded - show races with selection highlighting
-                app.events
-                    .iter()
-                    .enumerate()
-                    .map(|(i, e)| {
-                        let is_selected = i == app.selected_event;
-                        let style = if is_selected {
-                            Style::default()
-                                .fg(Color::Red)
-                                .add_modifier(Modifier::BOLD | Modifier::REVERSED)
-                        } else {
-                            Style::default().fg(Color::Red)
-                        };
-                        ListItem::new(e.clone()).style(style)
-                    })
-                    .collect()
-            } else {
-                // Still loading or not yet fetched
-                vec![
-                    ListItem::new("⏳ Loading cross-trace analysis..."),
-                    ListItem::new(""),
-                    ListItem::new("Analyzing races across all traces..."),
-                    ListItem::new("This may take a moment for large datasets."),
-                ]
-            };
+            let items: Vec<ListItem> =
+                if app.last_global_analysis_trace_count == app.trace_ids.len() {
+                    // Global analysis is loaded - show races with selection highlighting
+                    app.events
+                        .iter()
+                        .enumerate()
+                        .map(|(i, e)| {
+                            let is_selected = i == app.selected_event;
+                            let style = if is_selected {
+                                Style::default()
+                                    .fg(Color::Red)
+                                    .add_modifier(Modifier::BOLD | Modifier::REVERSED)
+                            } else {
+                                Style::default().fg(Color::Red)
+                            };
+                            ListItem::new(e.clone()).style(style)
+                        })
+                        .collect()
+                } else {
+                    // Still loading or not yet fetched
+                    vec![
+                        ListItem::new("⏳ Loading cross-trace analysis..."),
+                        ListItem::new(""),
+                        ListItem::new("Analyzing races across all traces..."),
+                        ListItem::new("This may take a moment for large datasets."),
+                    ]
+                };
 
             let list = List::new(items).block(block);
             f.render_widget(list, main_chunks[1]);

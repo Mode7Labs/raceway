@@ -232,8 +232,18 @@ async fn health_handler() -> impl IntoResponse {
 
 async fn status_handler(State(state): State<AppState>) -> impl IntoResponse {
     // Get counts directly from storage
-    let all_events = state.engine.storage().get_all_events().await.unwrap_or_default();
-    let all_traces = state.engine.storage().get_all_trace_ids().await.unwrap_or_default();
+    let all_events = state
+        .engine
+        .storage()
+        .get_all_events()
+        .await
+        .unwrap_or_default();
+    let all_traces = state
+        .engine
+        .storage()
+        .get_all_trace_ids()
+        .await
+        .unwrap_or_default();
 
     let status = ServerStatus {
         version: env!("CARGO_PKG_VERSION").to_string(),
@@ -282,10 +292,7 @@ async fn list_traces_handler(
     State(state): State<AppState>,
     Query(params): Query<HashMap<String, String>>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<ApiResponse<String>>)> {
-    let page: usize = params
-        .get("page")
-        .and_then(|p| p.parse().ok())
-        .unwrap_or(1);
+    let page: usize = params.get("page").and_then(|p| p.parse().ok()).unwrap_or(1);
     let page_size: usize = params
         .get("page_size")
         .and_then(|p| p.parse().ok())
@@ -318,7 +325,12 @@ async fn list_traces_handler(
     }
 
     // Use storage trait method for paginated trace summaries
-    match state.engine.storage().get_trace_summaries(page, page_size).await {
+    match state
+        .engine
+        .storage()
+        .get_trace_summaries(page, page_size)
+        .await
+    {
         Ok((summaries, total_traces)) => {
             let total_pages = (total_traces + page_size - 1) / page_size;
 
@@ -380,11 +392,26 @@ async fn analyze_global_handler(
         race_details: Vec<RaceDetail>,
     }
 
-    match state.engine.analysis().find_global_concurrent_events().await {
+    match state
+        .engine
+        .analysis()
+        .find_global_concurrent_events()
+        .await
+    {
         Ok(concurrent) => {
             // Get counts directly from storage
-            let all_events = state.engine.storage().get_all_events().await.unwrap_or_default();
-            let all_traces = state.engine.storage().get_all_trace_ids().await.unwrap_or_default();
+            let all_events = state
+                .engine
+                .storage()
+                .get_all_events()
+                .await
+                .unwrap_or_default();
+            let all_traces = state
+                .engine
+                .storage()
+                .get_all_trace_ids()
+                .await
+                .unwrap_or_default();
 
             let mut anomalies = Vec::new();
             let mut race_details = Vec::new();
@@ -497,7 +524,12 @@ async fn get_audit_trail_handler(
     })?;
 
     // Use storage backend directly - no graph reconstruction
-    match state.engine.analysis().get_audit_trail(trace_uuid, &variable).await {
+    match state
+        .engine
+        .analysis()
+        .get_audit_trail(trace_uuid, &variable)
+        .await
+    {
         Ok(audit_trail) => Ok((StatusCode::OK, Json(ApiResponse::success(audit_trail)))),
         Err(e) => Err((
             StatusCode::NOT_FOUND,
@@ -1047,7 +1079,12 @@ async fn get_dependencies_handler(
     })?;
 
     // Use storage backend directly
-    match state.engine.analysis().get_service_dependencies(trace_uuid).await {
+    match state
+        .engine
+        .analysis()
+        .get_service_dependencies(trace_uuid)
+        .await
+    {
         Ok(deps) => Ok((StatusCode::OK, Json(ApiResponse::success(deps)))),
         Err(e) => Err((
             StatusCode::NOT_FOUND,

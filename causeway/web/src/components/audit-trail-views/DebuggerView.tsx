@@ -33,6 +33,17 @@ export function DebuggerView({ data, currentStep, isPlaying, onStepChange, onPla
 
   const currentAccess = data.accesses[currentStep];
 
+  if (!currentAccess) {
+    return (
+      <div className="flex flex-col items-center justify-center h-64 text-center space-y-2">
+        <h3 className="text-lg font-semibold">No accesses available</h3>
+        <p className="text-sm text-muted-foreground">
+          The selected step is out of range for this variable.
+        </p>
+      </div>
+    );
+  }
+
   // Calculate derived values
   const delta = currentAccess.old_value !== null && typeof currentAccess.new_value === 'number' && typeof currentAccess.old_value === 'number'
     ? currentAccess.new_value - currentAccess.old_value

@@ -45,7 +45,8 @@ impl PostgresBackend {
             tracing::info!("✓ Migration 001 (initial schema) completed");
 
             // Migration 002: Performance indexes
-            let migration_002 = include_str!("../../../migrations/postgres/002_add_performance_indexes.sql");
+            let migration_002 =
+                include_str!("../../../migrations/postgres/002_add_performance_indexes.sql");
             sqlx::raw_sql(migration_002).execute(&pool).await?;
             tracing::info!("✓ Migration 002 (performance indexes) completed");
 
@@ -331,7 +332,10 @@ impl StorageBackend for PostgresBackend {
         .fetch_all(&self.pool)
         .await?;
 
-        Ok(rows.into_iter().map(|row| row.get("root_event_id")).collect())
+        Ok(rows
+            .into_iter()
+            .map(|row| row.get("root_event_id"))
+            .collect())
     }
 
     async fn save_baseline(&self, operation: &str, stats: DurationStats) -> Result<()> {
@@ -367,7 +371,10 @@ impl StorageBackend for PostgresBackend {
         Ok(())
     }
 
-    async fn save_baselines_batch(&self, baselines: std::collections::HashMap<String, DurationStats>) -> Result<()> {
+    async fn save_baselines_batch(
+        &self,
+        baselines: std::collections::HashMap<String, DurationStats>,
+    ) -> Result<()> {
         // Use a transaction for batched inserts
         let mut tx = self.pool.begin().await?;
 

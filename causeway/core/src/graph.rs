@@ -133,7 +133,7 @@ pub struct CausalGraph {
     trace_roots: DashMap<Uuid, Vec<Uuid>>, // trace_id -> root event IDs
     analysis_cache: DashMap<Uuid, Vec<(Event, Event)>>, // trace_id -> cached concurrent pairs
     anomaly_cache: DashMap<Uuid, Vec<Anomaly>>, // trace_id -> cached anomalies
-    vector_clocks: DashMap<Uuid, u64>,   // trace_id -> logical clock value (fixes async migration)
+    vector_clocks: DashMap<Uuid, u64>, // trace_id -> logical clock value (fixes async migration)
     lock_sets: DashMap<String, HashSet<String>>, // thread_id -> currently held locks
     baseline_metrics: DashMap<String, BaselineMetrics>, // event_kind -> metrics
     baseline_durations: DashMap<String, Vec<f64>>, // event_kind -> all observed durations
@@ -183,10 +183,7 @@ impl CausalGraph {
         }
 
         // Update or add this trace's entry in the causality vector
-        if let Some(existing) = causality_vector
-            .iter_mut()
-            .find(|(id, _)| *id == trace_id)
-        {
+        if let Some(existing) = causality_vector.iter_mut().find(|(id, _)| *id == trace_id) {
             existing.1 = current_clock;
         } else {
             causality_vector.push((trace_id, current_clock));
@@ -255,6 +252,11 @@ impl CausalGraph {
                 .or_insert_with(Vec::new)
                 .push(event.id);
         }
+
+        // Invalidate per-trace caches so subsequent queries see fresh data
+        self.analysis_cache.remove(&trace_id);
+        self.anomaly_cache.remove(&trace_id);
+        self.baselines_updated.remove(&trace_id);
 
         Ok(())
     }
@@ -381,23 +383,21 @@ impl CausalGraph {
 
         let mut concurrent_pairs = Vec::new();
 
-        // Iterate through each variable in the index
-        for entry in self.variable_index.iter() {
-            let _variable = entry.key();
-            let event_ids = entry.value();
+        let events = self.get_causal_order(trace_id)?;
+        let mut per_variable: HashMap<String, Vec<Event>> = HashMap::new();
 
-            // Filter to events from this trace only
-            let mut trace_events = Vec::new();
-            for &event_id in event_ids.iter() {
-                if let Some(node_entry) = self.nodes.get(&event_id) {
-                    let event = &node_entry.value().1.event;
-                    if event.trace_id == trace_id {
-                        trace_events.push(event.clone());
-                    }
-                }
+        for event in events.into_iter() {
+            if let EventKind::StateChange { variable, .. } = &event.kind {
+                per_variable
+                    .entry(variable.clone())
+                    .or_insert_with(Vec::new)
+                    .push(event);
             }
+        }
 
-            // Now compare only events that access the same variable (from this trace)
+        for trace_events in per_variable.values_mut() {
+            trace_events.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
+
             for i in 0..trace_events.len() {
                 for j in (i + 1)..trace_events.len() {
                     if let (
@@ -417,7 +417,8 @@ impl CausalGraph {
                         }
 
                         // Different threads
-                        if trace_events[i].metadata.thread_id != trace_events[j].metadata.thread_id {
+                        if trace_events[i].metadata.thread_id != trace_events[j].metadata.thread_id
+                        {
                             // Use vector clocks for happens-before check
                             if !self.happens_before_vc(&trace_events[i], &trace_events[j])
                                 && !self.happens_before_vc(&trace_events[j], &trace_events[i])
@@ -425,10 +426,8 @@ impl CausalGraph {
                                 // Check if accesses were protected by the same lock
                                 if !self.protected_by_same_lock(&trace_events[i], &trace_events[j])
                                 {
-                                    concurrent_pairs.push((
-                                        trace_events[i].clone(),
-                                        trace_events[j].clone(),
-                                    ));
+                                    concurrent_pairs
+                                        .push((trace_events[i].clone(), trace_events[j].clone()));
                                 }
                             }
                         }
@@ -437,9 +436,11 @@ impl CausalGraph {
             }
         }
 
-        // Store in cache
-        self.analysis_cache
-            .insert(trace_id, concurrent_pairs.clone());
+        // Store in cache unless we saw no relevant state changes (trace may still be ingesting)
+        if !per_variable.is_empty() {
+            self.analysis_cache
+                .insert(trace_id, concurrent_pairs.clone());
+        }
 
         Ok(concurrent_pairs)
     }
@@ -1011,7 +1012,8 @@ impl CausalGraph {
                 // Convert BaselineMetrics (graph format) to DurationStats (storage format)
                 let stats = crate::storage::DurationStats {
                     count: metrics.count,
-                    total_duration_us: (metrics.mean_duration_ms * 1000.0 * metrics.count as f64) as u64,
+                    total_duration_us: (metrics.mean_duration_ms * 1000.0 * metrics.count as f64)
+                        as u64,
                     min_duration_us: (metrics.min * 1000.0) as u64,
                     max_duration_us: (metrics.max * 1000.0) as u64,
                     mean_duration_us: metrics.mean_duration_ms * 1000.0,
@@ -1266,6 +1268,50 @@ impl CausalGraph {
         // Sort by timestamp
         variable_events.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
 
+        let accesses = self.build_variable_accesses(&variable_events);
+
+        Ok(AuditTrail {
+            trace_id: trace_id.to_string(),
+            variable: variable.to_string(),
+            accesses,
+        })
+    }
+
+    /// Build audit trails for multiple variables in a single pass
+    pub fn get_audit_trails_bulk(
+        &self,
+        trace_id: Uuid,
+        variables: &HashSet<String>,
+    ) -> Result<HashMap<String, Vec<VariableAccess>>> {
+        if variables.is_empty() {
+            return Ok(HashMap::new());
+        }
+
+        let events = self.get_causal_order(trace_id)?;
+        let mut grouped: HashMap<String, Vec<Event>> = HashMap::new();
+
+        for event in events.into_iter() {
+            if let EventKind::StateChange { variable, .. } = &event.kind {
+                if variables.contains(variable) {
+                    grouped
+                        .entry(variable.clone())
+                        .or_insert_with(Vec::new)
+                        .push(event);
+                }
+            }
+        }
+
+        let mut trails = HashMap::with_capacity(grouped.len());
+        for (variable, mut variable_events) in grouped {
+            variable_events.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
+            let accesses = self.build_variable_accesses(&variable_events);
+            trails.insert(variable, accesses);
+        }
+
+        Ok(trails)
+    }
+
+    fn build_variable_accesses(&self, variable_events: &[Event]) -> Vec<VariableAccess> {
         let mut accesses = Vec::new();
 
         for (i, event) in variable_events.iter().enumerate() {
@@ -1331,11 +1377,7 @@ impl CausalGraph {
             }
         }
 
-        Ok(AuditTrail {
-            trace_id: trace_id.to_string(),
-            variable: variable.to_string(),
-            accesses,
-        })
+        accesses
     }
 }
 

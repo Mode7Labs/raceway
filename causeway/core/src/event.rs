@@ -151,7 +151,11 @@ impl Event {
 
         // Check that self's clock is <= other's clock for all components in self
         for (trace_id_self, clock_self) in &self.causality_vector {
-            if let Some((_, clock_other)) = other.causality_vector.iter().find(|(id, _)| id == trace_id_self) {
+            if let Some((_, clock_other)) = other
+                .causality_vector
+                .iter()
+                .find(|(id, _)| id == trace_id_self)
+            {
                 if clock_self > clock_other {
                     // self has a later clock for this trace - definitely not happens-before
                     return false;
