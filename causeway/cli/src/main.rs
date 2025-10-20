@@ -1,10 +1,8 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
+use raceway::{server, tui};
 use raceway_core::Config;
 use std::path::PathBuf;
-
-mod server;
-mod tui;
 
 #[derive(Parser)]
 #[command(name = "causeway")]

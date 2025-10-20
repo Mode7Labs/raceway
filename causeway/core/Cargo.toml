@@ -21,3 +21,4 @@ thiserror.workspace = true
 sqlx.workspace = true
 async-trait = "0.1"
 futures = "0.3"
+lru.workspace = true

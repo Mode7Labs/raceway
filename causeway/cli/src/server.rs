@@ -7,6 +7,7 @@ use axum::{
     Router,
 };
 use chrono::Local;
+use raceway_core::analysis::{WarmupPhase, WarmupStatus};
 use raceway_core::engine::EngineConfig;
 use raceway_core::graph::{Anomaly, ServiceDependencies, VariableAccess};
 use raceway_core::storage::TraceAnalysisData;
@@ -61,6 +62,53 @@ struct ServerStatus {
     uptime_seconds: u64,
     events_captured: usize,
     traces_active: usize,
+    warmup: WarmupSummary,
+}
+
+#[derive(Debug, Serialize)]
+struct WarmupSummary {
+    phase: String,
+    ready: bool,
+    total_traces: usize,
+    processed_traces: usize,
+    last_trace: Option<String>,
+    started_at: Option<String>,
+    completed_at: Option<String>,
+    last_error: Option<String>,
+}
+
+impl From<WarmupStatus> for WarmupSummary {
+    fn from(status: WarmupStatus) -> Self {
+        let WarmupStatus {
+            phase,
+            total_traces,
+            processed_traces,
+            last_trace,
+            started_at,
+            completed_at,
+            last_error,
+        } = status;
+
+        let ready = matches!(phase, WarmupPhase::Completed);
+        let phase_label = match phase {
+            WarmupPhase::Idle => "idle",
+            WarmupPhase::Replaying => "replaying",
+            WarmupPhase::Completed => "completed",
+            WarmupPhase::Failed => "failed",
+        }
+        .to_string();
+
+        Self {
+            phase: phase_label,
+            ready,
+            total_traces,
+            processed_traces,
+            last_trace: last_trace.map(|id| id.to_string()),
+            started_at: started_at.map(|ts| ts.to_rfc3339()),
+            completed_at: completed_at.map(|ts| ts.to_rfc3339()),
+            last_error,
+        }
+    }
 }
 
 pub async fn start_server(config: Config) -> Result<()> {
@@ -79,6 +127,22 @@ pub async fn start_server(config: Config) -> Result<()> {
         .compact()
         .init();
 
+    let engine = init_engine(&config).await?;
+    let app = build_router(&config, Arc::clone(&engine));
+
+    let addr = format!("{}:{}", config.server.host, config.server.port);
+    let listener = tokio::net::TcpListener::bind(&addr).await?;
+
+    println!(
+        "\n🏁 Raceway Server Started!\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n   🌐 Server:        http://{}\n   📥 Ingest:        http://{}/events\n   📊 Status:        http://{}/status\n   🔍 List traces:   http://{}/api/traces\n   🎯 Get trace:     http://{}/api/traces/:id\n   🤖 Analyze:       http://{}/api/traces/:id/analyze\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n✨ Ready to detect races!\n",
+        addr, addr, addr, addr, addr, addr
+    );
+
+    axum::serve(listener, app).await?;
+    Ok(())
+}
+
+pub async fn init_engine(config: &Config) -> Result<Arc<RacewayEngine>> {
     let storage = create_storage_backend(&config.storage).await?;
 
     let engine_config = EngineConfig {
@@ -91,34 +155,16 @@ pub async fn start_server(config: Config) -> Result<()> {
 
     let engine = Arc::new(RacewayEngine::new(engine_config, storage).await?);
     engine.start().await?;
+    Ok(engine)
+}
 
+pub fn build_router(config: &Config, engine: Arc<RacewayEngine>) -> Router {
     let state = AppState {
         engine,
         verbose: config.server.verbose,
     };
 
-    let cors = if config.server.cors_enabled {
-        if config.development.cors_allow_all
-            || config.server.cors_origins.contains(&"*".to_string())
-        {
-            CorsLayer::new()
-                .allow_origin(Any)
-                .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
-                .allow_headers(Any)
-        } else {
-            CorsLayer::new()
-                .allow_origin(Any)
-                .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
-                .allow_headers(Any)
-        }
-    } else {
-        CorsLayer::new()
-            .allow_origin(Any)
-            .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
-            .allow_headers(Any)
-    };
-
-    let app = Router::new()
+    Router::new()
         .route("/", get(root_handler))
         .route("/health", get(health_handler))
         .route("/status", get(status_handler))
@@ -146,19 +192,31 @@ pub async fn start_server(config: Config) -> Result<()> {
             get(get_audit_trail_handler),
         )
         .route("/api/analyze/global", get(analyze_global_handler))
-        .layer(cors)
-        .with_state(state);
+        .layer(build_cors(config))
+        .with_state(state)
+}
 
-    let addr = format!("{}:{}", config.server.host, config.server.port);
-    let listener = tokio::net::TcpListener::bind(&addr).await?;
-
-    println!(
-        "\n🏁 Raceway Server Started!\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n   🌐 Server:        http://{}\n   📥 Ingest:        http://{}/events\n   📊 Status:        http://{}/status\n   🔍 List traces:   http://{}/api/traces\n   🎯 Get trace:     http://{}/api/traces/:id\n   🤖 Analyze:       http://{}/api/traces/:id/analyze\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n✨ Ready to detect races!\n",
-        addr, addr, addr, addr, addr, addr
-    );
-
-    axum::serve(listener, app).await?;
-    Ok(())
+fn build_cors(config: &Config) -> CorsLayer {
+    if config.server.cors_enabled {
+        if config.development.cors_allow_all
+            || config.server.cors_origins.contains(&"*".to_string())
+        {
+            CorsLayer::new()
+                .allow_origin(Any)
+                .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
+                .allow_headers(Any)
+        } else {
+            CorsLayer::new()
+                .allow_origin(Any)
+                .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
+                .allow_headers(Any)
+        }
+    } else {
+        CorsLayer::new()
+            .allow_origin(Any)
+            .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
+            .allow_headers(Any)
+    }
 }
 
 async fn root_handler() -> impl IntoResponse {
@@ -226,8 +284,26 @@ async fn root_handler() -> impl IntoResponse {
     (StatusCode::OK, [("content-type", "text/html")], html)
 }
 
-async fn health_handler() -> impl IntoResponse {
-    Json(ApiResponse::success("OK"))
+async fn health_handler(State(state): State<AppState>) -> impl IntoResponse {
+    let warmup_status = state.engine.analysis().warmup_status().await;
+    if matches!(warmup_status.phase, WarmupPhase::Failed) {
+        let response = ApiResponse::<WarmupSummary> {
+            success: false,
+            data: None,
+            error: Some(
+                warmup_status
+                    .last_error
+                    .clone()
+                    .unwrap_or_else(|| "warmup failed".to_string()),
+            ),
+        };
+        (StatusCode::SERVICE_UNAVAILABLE, Json(response))
+    } else {
+        (
+            StatusCode::OK,
+            Json(ApiResponse::success(warmup_status.into())),
+        )
+    }
 }
 
 async fn status_handler(State(state): State<AppState>) -> impl IntoResponse {
@@ -250,6 +326,7 @@ async fn status_handler(State(state): State<AppState>) -> impl IntoResponse {
         uptime_seconds: 0,
         events_captured: all_events.len(),
         traces_active: all_traces.len(),
+        warmup: state.engine.analysis().warmup_status().await.into(),
     };
 
     Json(ApiResponse::success(status))

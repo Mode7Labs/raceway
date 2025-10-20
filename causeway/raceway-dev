@@ -28,6 +28,7 @@ ICON_WEB="🌐"
 ICON_SEED="🌱"
 ICON_DEMO="💰"
 ICON_EXIT="👋"
+ICON_TEST="✅"
 
 # ─── Helpers ────────────────────────────────────────────────────────────────────
 print_header() {
@@ -97,6 +98,14 @@ action_web() {
     "${SCRIPT_DIR}/web"
 }
 
+action_tests() {
+  require_tool cargo
+  run_step "${ICON_TEST} Graph unit tests (cargo test -p raceway-core graph::tests)" \
+    "cargo test -p raceway-core graph::tests"
+  run_step "${ICON_TEST} Integration tests (cargo test -p raceway-test)" \
+    "cargo test -p raceway-test"
+}
+
 action_seed() {
   # Prefer pnpm, then npx
   local pkg_manager
@@ -149,13 +158,14 @@ ${GREEN}1)${RESET} ${ICON_BUILD} Rebuild core (cargo build)
 ${GREEN}2)${RESET} ${ICON_SERVER} Start server (cargo run --release -- serve)
 ${GREEN}3)${RESET} ${ICON_TUI} Launch TUI (cargo run --release -- tui)
 ${GREEN}4)${RESET} ${ICON_WEB} Start Web UI (Vite on port 3005)
-${GREEN}5)${RESET} ${ICON_SEED} Seed database (clear & seed test data)
+${GREEN}5)${RESET} ${ICON_BUILD} Run tests (core + integration)
+${GREEN}6)${RESET} ${ICON_SEED} Seed database (clear & seed test data)
 
 ${BOLD}${CYAN}Demo Apps${RESET}
-${GREEN}6)${RESET} ${ICON_DEMO} TypeScript Banking (Node.js/Express on port 3050)
-${GREEN}7)${RESET} ${ICON_DEMO} Rust Banking (Axum on port 3051)
-${GREEN}8)${RESET} ${ICON_DEMO} Go Banking (Gin on port 3052)
-${GREEN}9)${RESET} ${ICON_DEMO} Python Banking (Flask on port 3053)
+${GREEN}7)${RESET} ${ICON_DEMO} TypeScript Banking (Node.js/Express on port 3050)
+${GREEN}8)${RESET} ${ICON_DEMO} Rust Banking (Axum on port 3051)
+${GREEN}9)${RESET} ${ICON_DEMO} Go Banking (Gin on port 3052)
+${GREEN}10)${RESET} ${ICON_DEMO} Python Banking (Flask on port 3053)
 
 ${YELLOW}q)${RESET} ${ICON_EXIT} Quit
 EOF
@@ -173,11 +183,12 @@ main_loop() {
       2) action_server ;;
       3) action_tui ;;
       4) action_web ;;
-      5) action_seed ;;
-      6) action_demo_typescript ;;
-      7) action_demo_rust ;;
-      8) action_demo_go ;;
-      9) action_demo_python ;;
+      5) action_tests ;;
+      6) action_seed ;;
+      7) action_demo_typescript ;;
+      8) action_demo_rust ;;
+      9) action_demo_go ;;
+      10) action_demo_python ;;
       q|Q) printf "${ICON_EXIT} Bye!\n"; exit 0 ;;
       *) printf "${RED}Invalid selection.${RESET} Try again.\n\n" ;;
     esac

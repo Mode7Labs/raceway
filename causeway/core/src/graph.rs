@@ -2,11 +2,13 @@ use crate::event::{AccessType, Event, EventKind};
 use anyhow::{anyhow, Result};
 use chrono::{DateTime, Utc};
 use dashmap::DashMap;
+use lru::LruCache;
 use petgraph::algo::is_cyclic_directed;
 use petgraph::graph::{DiGraph, NodeIndex};
 use petgraph::visit::EdgeRef;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
+use std::num::NonZeroUsize;
 use std::sync::Mutex;
 use uuid::Uuid;
 
@@ -126,13 +128,16 @@ pub struct VariableAccess {
     pub is_race: bool,
 }
 
+const ANALYSIS_CACHE_CAPACITY: usize = 256;
+const ANOMALY_CACHE_CAPACITY: usize = 256;
+
 /// The causal graph maintains relationships between all captured events
 pub struct CausalGraph {
     graph: Mutex<DiGraph<Uuid, CausalEdge>>,
     nodes: DashMap<Uuid, (NodeIndex, CausalNode)>,
     trace_roots: DashMap<Uuid, Vec<Uuid>>, // trace_id -> root event IDs
-    analysis_cache: DashMap<Uuid, Vec<(Event, Event)>>, // trace_id -> cached concurrent pairs
-    anomaly_cache: DashMap<Uuid, Vec<Anomaly>>, // trace_id -> cached anomalies
+    analysis_cache: Mutex<LruCache<Uuid, Vec<(Event, Event)>>>, // bounded cache of concurrent pairs
+    anomaly_cache: Mutex<LruCache<Uuid, Vec<Anomaly>>>, // bounded cache of anomalies
     vector_clocks: DashMap<Uuid, u64>, // trace_id -> logical clock value (fixes async migration)
     lock_sets: DashMap<String, HashSet<String>>, // thread_id -> currently held locks
     baseline_metrics: DashMap<String, BaselineMetrics>, // event_kind -> metrics
@@ -147,8 +152,14 @@ impl CausalGraph {
             graph: Mutex::new(DiGraph::new()),
             nodes: DashMap::new(),
             trace_roots: DashMap::new(),
-            analysis_cache: DashMap::new(),
-            anomaly_cache: DashMap::new(),
+            analysis_cache: Mutex::new(LruCache::new(
+                NonZeroUsize::new(ANALYSIS_CACHE_CAPACITY)
+                    .expect("analysis cache capacity must be > 0"),
+            )),
+            anomaly_cache: Mutex::new(LruCache::new(
+                NonZeroUsize::new(ANOMALY_CACHE_CAPACITY)
+                    .expect("anomaly cache capacity must be > 0"),
+            )),
             vector_clocks: DashMap::new(),
             lock_sets: DashMap::new(),
             baseline_metrics: DashMap::new(),
@@ -254,9 +265,7 @@ impl CausalGraph {
         }
 
         // Invalidate per-trace caches so subsequent queries see fresh data
-        self.analysis_cache.remove(&trace_id);
-        self.anomaly_cache.remove(&trace_id);
-        self.baselines_updated.remove(&trace_id);
+        self.invalidate_trace_caches(trace_id);
 
         Ok(())
     }
@@ -264,6 +273,11 @@ impl CausalGraph {
     /// Returns true if the graph already contains the specified event
     pub fn contains_event(&self, event_id: Uuid) -> bool {
         self.nodes.contains_key(&event_id)
+    }
+
+    /// Returns true if the graph has seen the given trace
+    pub fn has_trace(&self, trace_id: Uuid) -> bool {
+        self.trace_roots.contains_key(&trace_id)
     }
 
     /// Bulk-ingest a collection of events into the graph
@@ -377,8 +391,8 @@ impl CausalGraph {
     /// where m = number of variables, k = avg accesses per variable
     pub fn find_concurrent_events(&self, trace_id: Uuid) -> Result<Vec<(Event, Event)>> {
         // Check cache first
-        if let Some(cached) = self.analysis_cache.get(&trace_id) {
-            return Ok(cached.value().clone());
+        if let Some(cached) = self.get_cached_concurrent(trace_id) {
+            return Ok(cached);
         }
 
         let mut concurrent_pairs = Vec::new();
@@ -438,11 +452,36 @@ impl CausalGraph {
 
         // Store in cache unless we saw no relevant state changes (trace may still be ingesting)
         if !per_variable.is_empty() {
-            self.analysis_cache
-                .insert(trace_id, concurrent_pairs.clone());
+            self.cache_concurrent(trace_id, concurrent_pairs.clone());
         }
 
         Ok(concurrent_pairs)
+    }
+
+    fn get_cached_concurrent(&self, trace_id: Uuid) -> Option<Vec<(Event, Event)>> {
+        let mut cache = self.analysis_cache.lock().unwrap();
+        cache.get(&trace_id).cloned()
+    }
+
+    fn cache_concurrent(&self, trace_id: Uuid, pairs: Vec<(Event, Event)>) {
+        let mut cache = self.analysis_cache.lock().unwrap();
+        cache.put(trace_id, pairs);
+    }
+
+    fn get_cached_anomalies(&self, trace_id: Uuid) -> Option<Vec<Anomaly>> {
+        let mut cache = self.anomaly_cache.lock().unwrap();
+        cache.get(&trace_id).cloned()
+    }
+
+    fn cache_anomalies(&self, trace_id: Uuid, anomalies: Vec<Anomaly>) {
+        let mut cache = self.anomaly_cache.lock().unwrap();
+        cache.put(trace_id, anomalies);
+    }
+
+    fn invalidate_trace_caches(&self, trace_id: Uuid) {
+        self.analysis_cache.lock().unwrap().pop(&trace_id);
+        self.anomaly_cache.lock().unwrap().pop(&trace_id);
+        self.baselines_updated.remove(&trace_id);
     }
 
     /// Check if event1 happens-before event2 using vector clocks
@@ -1029,8 +1068,8 @@ impl CausalGraph {
     /// Detect anomalies in a trace based on baseline metrics
     pub fn detect_anomalies(&self, trace_id: Uuid) -> Result<Vec<Anomaly>> {
         // Check cache first - if we've already analyzed this trace, return cached results
-        if let Some(cached) = self.anomaly_cache.get(&trace_id) {
-            return Ok(cached.value().clone());
+        if let Some(cached) = self.get_cached_anomalies(trace_id) {
+            return Ok(cached);
         }
 
         let events = self.get_causal_order(trace_id)?;
@@ -1124,7 +1163,7 @@ impl CausalGraph {
 
         // Cache the anomalies BEFORE adding this trace to baselines
         // This ensures the cached results reflect the "first time" analysis
-        self.anomaly_cache.insert(trace_id, anomalies.clone());
+        self.cache_anomalies(trace_id, anomalies.clone());
 
         // AFTER caching and checking for anomalies, add this trace to baselines
         // Even if it's anomalous - this allows gradual adaptation to changing patterns
@@ -1410,6 +1449,8 @@ impl Default for CausalGraph {
 mod tests {
     use super::*;
     use crate::event::EventMetadata;
+    use crate::storage::DurationStats;
+    use chrono::{Duration as ChronoDuration, TimeZone, Utc};
     use std::collections::HashMap;
 
     #[test]
@@ -1441,5 +1482,496 @@ mod tests {
 
         assert!(graph.add_event(event).is_ok());
         assert_eq!(graph.stats().total_events, 1);
+    }
+
+    #[test]
+    fn concurrent_events_detect_race() {
+        let graph = CausalGraph::new();
+        let trace_id = Uuid::new_v4();
+        let root_id = Uuid::new_v4();
+        let base = Utc.with_ymd_and_hms(2024, 1, 1, 12, 0, 0).unwrap();
+
+        graph
+            .add_event(make_root(root_id, trace_id, base, "root"))
+            .unwrap();
+
+        for (id, thread, offset_ms) in [
+            (Uuid::new_v4(), "worker-a", 1),
+            (Uuid::new_v4(), "worker-b", 2),
+        ] {
+            graph
+                .add_event(Event {
+                    id,
+                    trace_id,
+                    parent_id: Some(root_id),
+                    timestamp: base + ChronoDuration::milliseconds(offset_ms),
+                    kind: EventKind::StateChange {
+                        variable: "balance".into(),
+                        old_value: Some(serde_json::json!(10)),
+                        new_value: serde_json::json!(15),
+                        location: "tests.rs:20".into(),
+                        access_type: AccessType::Write,
+                    },
+                    metadata: metadata(thread, 8),
+                    causality_vector: Vec::new(),
+                    lock_set: Vec::new(),
+                })
+                .unwrap();
+        }
+
+        let races = graph.find_concurrent_events(trace_id).unwrap();
+        assert_eq!(races.len(), 1);
+    }
+
+    #[test]
+    fn lock_protected_events_do_not_race() {
+        let graph = CausalGraph::new();
+        let trace_id = Uuid::new_v4();
+        let root_id = Uuid::new_v4();
+        let base = Utc.with_ymd_and_hms(2024, 1, 1, 12, 0, 0).unwrap();
+
+        graph
+            .add_event(make_root(root_id, trace_id, base, "root"))
+            .unwrap();
+
+        // Both threads acquire the same lock before writing.
+        for (thread, offset_ms) in [("worker-a", 1), ("worker-b", 1)] {
+            graph
+                .add_event(Event {
+                    id: Uuid::new_v4(),
+                    trace_id,
+                    parent_id: Some(root_id),
+                    timestamp: base + ChronoDuration::milliseconds(offset_ms),
+                    kind: EventKind::LockAcquire {
+                        lock_id: "balance-lock".into(),
+                        lock_type: "Mutex".into(),
+                        location: "tests.rs:12".into(),
+                    },
+                    metadata: metadata(thread, 1),
+                    causality_vector: Vec::new(),
+                    lock_set: Vec::new(),
+                })
+                .unwrap();
+        }
+
+        for (thread, offset_ms) in [("worker-a", 2), ("worker-b", 3)] {
+            graph
+                .add_event(Event {
+                    id: Uuid::new_v4(),
+                    trace_id,
+                    parent_id: Some(root_id),
+                    timestamp: base + ChronoDuration::milliseconds(offset_ms),
+                    kind: EventKind::StateChange {
+                        variable: "balance".into(),
+                        old_value: Some(serde_json::json!(10)),
+                        new_value: serde_json::json!(15),
+                        location: "tests.rs:22".into(),
+                        access_type: AccessType::Write,
+                    },
+                    metadata: metadata(thread, 5),
+                    causality_vector: Vec::new(),
+                    lock_set: Vec::new(),
+                })
+                .unwrap();
+        }
+
+        let races = graph.find_concurrent_events(trace_id).unwrap();
+        assert!(races.is_empty());
+    }
+
+    #[test]
+    fn critical_path_prefers_longer_branch() {
+        let graph = CausalGraph::new();
+        let trace_id = Uuid::new_v4();
+        let root_id = Uuid::new_v4();
+        let fast_id = Uuid::new_v4();
+        let slow_id = Uuid::new_v4();
+        let base = Utc.with_ymd_and_hms(2024, 1, 1, 12, 0, 0).unwrap();
+
+        graph
+            .add_event(make_root(root_id, trace_id, base, "root"))
+            .unwrap();
+
+        graph
+            .add_event(Event {
+                id: fast_id,
+                trace_id,
+                parent_id: Some(root_id),
+                timestamp: base + ChronoDuration::milliseconds(1),
+                kind: EventKind::FunctionCall {
+                    function_name: "fast".into(),
+                    module: "tests".into(),
+                    args: serde_json::json!({}),
+                    file: "tests.rs".into(),
+                    line: 20,
+                },
+                metadata: metadata("fast", 5),
+                causality_vector: Vec::new(),
+                lock_set: Vec::new(),
+            })
+            .unwrap();
+
+        graph
+            .add_event(Event {
+                id: slow_id,
+                trace_id,
+                parent_id: Some(root_id),
+                timestamp: base + ChronoDuration::milliseconds(2),
+                kind: EventKind::FunctionCall {
+                    function_name: "slow".into(),
+                    module: "tests".into(),
+                    args: serde_json::json!({}),
+                    file: "tests.rs".into(),
+                    line: 30,
+                },
+                metadata: metadata("slow", 20),
+                causality_vector: Vec::new(),
+                lock_set: Vec::new(),
+            })
+            .unwrap();
+
+        let path = graph.get_critical_path(trace_id).unwrap();
+        assert!(path.path.iter().any(|event| matches!(
+            &event.kind,
+            EventKind::FunctionCall { function_name, .. } if function_name == "slow"
+        )));
+    }
+
+    #[test]
+    fn anomalies_ignore_baseline_duration() {
+        let graph = CausalGraph::new();
+        let trace_id = Uuid::new_v4();
+        let base = Utc.with_ymd_and_hms(2024, 1, 1, 12, 0, 0).unwrap();
+
+        graph.set_baseline(
+            "HttpResponse(200)",
+            DurationStats {
+                count: 10,
+                total_duration_us: 170_000,
+                min_duration_us: 15_000,
+                max_duration_us: 19_000,
+                mean_duration_us: 17_000.0,
+                variance: (2_000.0_f64).powi(2),
+                std_dev: 2_000.0,
+            },
+        );
+
+        graph
+            .add_event(Event {
+                id: Uuid::new_v4(),
+                trace_id,
+                parent_id: None,
+                timestamp: base,
+                kind: EventKind::HttpResponse {
+                    status: 200,
+                    headers: HashMap::new(),
+                    body: None,
+                    duration_ms: 0,
+                },
+                metadata: metadata("http", 17),
+                causality_vector: Vec::new(),
+                lock_set: Vec::new(),
+            })
+            .unwrap();
+
+        assert!(graph.detect_anomalies(trace_id).unwrap().is_empty());
+    }
+
+    #[test]
+    fn anomalies_trigger_when_duration_exceeds_baseline() {
+        let graph = CausalGraph::new();
+        let trace_id = Uuid::new_v4();
+        let base = Utc.with_ymd_and_hms(2024, 1, 1, 12, 0, 0).unwrap();
+
+        graph
+            .add_event(Event {
+                id: Uuid::new_v4(),
+                trace_id,
+                parent_id: None,
+                timestamp: base,
+                kind: EventKind::HttpResponse {
+                    status: 200,
+                    headers: HashMap::new(),
+                    body: None,
+                    duration_ms: 0,
+                },
+                metadata: metadata("http", 17),
+                causality_vector: Vec::new(),
+                lock_set: Vec::new(),
+            })
+            .unwrap();
+
+        graph.set_baseline(
+            "HttpResponse(200)",
+            DurationStats {
+                count: 10,
+                total_duration_us: 170_000,
+                min_duration_us: 15_000,
+                max_duration_us: 19_000,
+                mean_duration_us: 17_000.0,
+                variance: (2_000.0_f64).powi(2),
+                std_dev: 2_000.0,
+            },
+        );
+
+        graph
+            .add_event(Event {
+                id: Uuid::new_v4(),
+                trace_id,
+                parent_id: None,
+                timestamp: base + ChronoDuration::milliseconds(1),
+                kind: EventKind::HttpResponse {
+                    status: 200,
+                    headers: HashMap::new(),
+                    body: None,
+                    duration_ms: 0,
+                },
+                metadata: metadata("http", 40),
+                causality_vector: Vec::new(),
+                lock_set: Vec::new(),
+            })
+            .unwrap();
+
+        let anomalies = graph.detect_anomalies(trace_id).unwrap();
+        assert_eq!(anomalies.len(), 1);
+    }
+
+    #[test]
+    fn audit_trail_flags_race_access() {
+        let graph = CausalGraph::new();
+        let trace_id = Uuid::new_v4();
+        let root_id = Uuid::new_v4();
+        let base = Utc.with_ymd_and_hms(2024, 1, 1, 12, 0, 0).unwrap();
+
+        graph
+            .add_event(make_root(root_id, trace_id, base, "root"))
+            .unwrap();
+
+        for (thread, offset_ms, new_value) in [
+            ("worker-a", 1_i64, 15),
+            ("worker-b", 2_i64, 20),
+        ] {
+            graph
+                .add_event(Event {
+                    id: Uuid::new_v4(),
+                    trace_id,
+                    parent_id: Some(root_id),
+                    timestamp: base + ChronoDuration::milliseconds(offset_ms),
+                    kind: EventKind::StateChange {
+                        variable: "balance".into(),
+                        old_value: Some(serde_json::json!(10)),
+                        new_value: serde_json::json!(new_value),
+                        location: format!("tests.rs:{}", 10 + offset_ms),
+                        access_type: AccessType::Write,
+                    },
+                    metadata: metadata(thread, 5),
+                    causality_vector: Vec::new(),
+                    lock_set: Vec::new(),
+                })
+                .unwrap();
+        }
+
+        let trail = graph.get_audit_trail(trace_id, "balance").unwrap();
+        assert_eq!(trail.accesses.len(), 2);
+        assert!(trail.accesses.iter().any(|access| access.is_race));
+    }
+
+    #[test]
+    fn service_dependencies_capture_cross_service_calls() {
+        let graph = CausalGraph::new();
+        let trace_id = Uuid::new_v4();
+        let root_id = Uuid::new_v4();
+        let child_id = Uuid::new_v4();
+        let base = Utc.with_ymd_and_hms(2024, 1, 1, 12, 0, 0).unwrap();
+
+        graph
+            .add_event(Event {
+                id: root_id,
+                trace_id,
+                parent_id: None,
+                timestamp: base,
+                kind: EventKind::FunctionCall {
+                    function_name: "root".into(),
+                    module: "svc_a".into(),
+                    args: serde_json::json!({}),
+                    file: "svc_a.rs".into(),
+                    line: 10,
+                },
+                metadata: metadata_with_service("main", "svc-a", 5),
+                causality_vector: Vec::new(),
+                lock_set: Vec::new(),
+            })
+            .unwrap();
+
+        graph
+            .add_event(Event {
+                id: child_id,
+                trace_id,
+                parent_id: Some(root_id),
+                timestamp: base + ChronoDuration::milliseconds(1),
+                kind: EventKind::FunctionCall {
+                    function_name: "child".into(),
+                    module: "svc_b".into(),
+                    args: serde_json::json!({}),
+                    file: "svc_b.rs".into(),
+                    line: 20,
+                },
+                metadata: metadata_with_service("worker", "svc-b", 7),
+                causality_vector: Vec::new(),
+                lock_set: Vec::new(),
+            })
+            .unwrap();
+
+        let deps = graph.get_service_dependencies(trace_id).unwrap();
+        assert_eq!(deps.services.len(), 2);
+        assert!(deps
+            .dependencies
+            .iter()
+            .any(|dep| dep.from == "svc-a" && dep.to == "svc-b" && dep.call_count == 1));
+    }
+
+    #[test]
+    fn global_concurrency_detects_cross_trace_races() {
+        let graph = CausalGraph::new();
+        let base = Utc.with_ymd_and_hms(2024, 1, 1, 12, 0, 0).unwrap();
+
+        let traces = [
+            (Uuid::new_v4(), Uuid::new_v4(), "worker-a"),
+            (Uuid::new_v4(), Uuid::new_v4(), "worker-b"),
+        ];
+
+        for (trace_id, root_id, thread) in traces {
+            graph
+                .add_event(make_root(root_id, trace_id, base, "root"))
+                .unwrap();
+
+            graph
+                .add_event(Event {
+                    id: Uuid::new_v4(),
+                    trace_id,
+                    parent_id: Some(root_id),
+                    timestamp: base + ChronoDuration::milliseconds(1),
+                    kind: EventKind::StateChange {
+                        variable: "shared".into(),
+                        old_value: Some(serde_json::json!(0)),
+                        new_value: serde_json::json!(1),
+                        location: "tests.rs:50".into(),
+                        access_type: AccessType::Write,
+                    },
+                    metadata: metadata(thread, 4),
+                    causality_vector: Vec::new(),
+                    lock_set: Vec::new(),
+                })
+                .unwrap();
+        }
+
+        let global = graph.find_global_concurrent_events().unwrap();
+        assert!(
+            global.iter().any(|(a, b)| a.trace_id != b.trace_id && a.metadata.thread_id != b.metadata.thread_id),
+            "expected cross-trace concurrent pair, got {:?}",
+            global
+        );
+    }
+
+    #[test]
+    fn vector_clocks_establish_happens_before() {
+        let graph = CausalGraph::new();
+        let trace_id = Uuid::new_v4();
+        let root_id = Uuid::new_v4();
+        let child_id = Uuid::new_v4();
+        let sibling_id = Uuid::new_v4();
+        let base = Utc.with_ymd_and_hms(2024, 1, 1, 12, 0, 0).unwrap();
+
+        graph
+            .add_event(make_root(root_id, trace_id, base, "root"))
+            .unwrap();
+
+        graph
+            .add_event(Event {
+                id: child_id,
+                trace_id,
+                parent_id: Some(root_id),
+                timestamp: base + ChronoDuration::milliseconds(1),
+                kind: EventKind::AsyncSpawn {
+                    task_id: Uuid::new_v4(),
+                    spawned_by: "root".into(),
+                },
+                metadata: metadata("spawn", 2),
+                causality_vector: Vec::new(),
+                lock_set: Vec::new(),
+            })
+            .unwrap();
+
+        graph
+            .add_event(Event {
+                id: sibling_id,
+                trace_id,
+                parent_id: Some(root_id),
+                timestamp: base + ChronoDuration::milliseconds(2),
+                kind: EventKind::FunctionCall {
+                    function_name: "sibling".into(),
+                    module: "tests".into(),
+                    args: serde_json::json!({}),
+                    file: "tests.rs".into(),
+                    line: 60,
+                },
+                metadata: metadata("sibling", 3),
+                causality_vector: Vec::new(),
+                lock_set: Vec::new(),
+            })
+            .unwrap();
+
+        let child_event = graph.nodes.get(&child_id).unwrap().value().1.event.clone();
+        let sibling_event = graph
+            .nodes
+            .get(&sibling_id)
+            .unwrap()
+            .value()
+            .1
+            .event
+            .clone();
+        let root_event = graph.nodes.get(&root_id).unwrap().value().1.event.clone();
+
+        assert!(graph.happens_before_vc(&root_event, &child_event));
+        assert!(graph.happens_before_vc(&root_event, &sibling_event));
+        assert!(
+            !graph.happens_before_vc(&child_event, &sibling_event)
+                && !graph.happens_before_vc(&sibling_event, &child_event),
+            "spawned child and sibling should be concurrent"
+        );
+    }
+
+    fn metadata(thread: &str, duration_ms: u64) -> EventMetadata {
+        metadata_with_service(thread, "test-service", duration_ms)
+    }
+
+    fn metadata_with_service(thread: &str, service: &str, duration_ms: u64) -> EventMetadata {
+        EventMetadata {
+            thread_id: thread.to_string(),
+            process_id: 1,
+            service_name: service.into(),
+            environment: "test".into(),
+            tags: HashMap::new(),
+            duration_ns: Some(duration_ms * 1_000_000),
+        }
+    }
+
+    fn make_root(id: Uuid, trace_id: Uuid, timestamp: DateTime<Utc>, name: &str) -> Event {
+        Event {
+            id,
+            trace_id,
+            parent_id: None,
+            timestamp,
+            kind: EventKind::FunctionCall {
+                function_name: name.into(),
+                module: "tests".into(),
+                args: serde_json::json!({}),
+                file: "tests.rs".into(),
+                line: 1,
+            },
+            metadata: metadata("main", 5),
+            causality_vector: Vec::new(),
+            lock_set: Vec::new(),
+        }
     }
 }

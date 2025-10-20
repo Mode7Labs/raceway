@@ -75,20 +75,22 @@ cd raceway
 cargo build --release
 
 # Option A: In-memory storage (default)
-./target/release/raceway-cli serve
+./target/release/raceway serve
 
 # Option B: PostgreSQL/Supabase persistence
 # Edit raceway.toml to configure database connection
-./target/release/raceway-cli serve --config raceway.toml
+./target/release/raceway --config raceway.toml serve
 ```
 
-Server runs on http://localhost:4242 (configurable)
+Server runs on http://localhost:8080 by default (configurable via `raceway.toml`).
 
 ### 2. Choose Your Interface
 
 **Terminal UI (recommended for development):**
 ```bash
-raceway-cli tui
+./target/release/raceway tui
+# or during development
+cargo run -p raceway -- tui
 ```
 
 Keyboard shortcuts:
@@ -191,7 +193,7 @@ client.track_state_change("user.balance", Some(&old), &new, "Write").await?;
 
 ```bash
 # Terminal 1: Start server
-cargo run --release -- serve
+cargo run -p raceway --release -- serve
 
 # Terminal 2: Run Python banking demo
 cd examples/python-banking
@@ -203,8 +205,23 @@ PORT=3053 python3 app.py
 # Click "Trigger Race Condition"
 
 # Terminal 4: View results
-raceway-cli tui
+./target/release/raceway tui
 # Or open http://localhost:5173 for Web UI
+```
+
+### 5. Verify the Engine
+
+To run the regression test suites locally:
+
+```bash
+# Graph-level unit tests (race detection, anomalies, critical path, etc.)
+cargo test -p raceway-core graph::tests
+
+# End-to-end harness (ingest → API responses)
+cargo test -p raceway-test
+
+# Or use the helper menu
+./raceway-dev   # choose option 5 to run both suites
 ```
 
 ## What's Implemented

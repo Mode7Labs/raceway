@@ -5,6 +5,10 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 
+[lib]
+name = "raceway"
+path = "src/lib.rs"
+
 [[bin]]
 name = "raceway"
 path = "src/main.rs"

@@ -61,8 +61,10 @@ macro_rules! capture_event {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::event::EventKind;
     use crate::event::EventMetadata;
     use std::collections::HashMap;
+    use uuid::Uuid;
 
     #[test]
     fn test_event_capture() {

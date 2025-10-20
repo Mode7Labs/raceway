@@ -146,7 +146,7 @@ mod tests {
         let config = EngineConfig::default();
         let storage_config = StorageConfig::default();
         let storage = Arc::new(MemoryBackend::new(&storage_config).unwrap());
-        let engine = RacewayEngine::new(config, storage);
+        let engine = RacewayEngine::new(config, storage).await.unwrap();
 
         assert!(engine.start().await.is_ok());
         engine.stop().await;

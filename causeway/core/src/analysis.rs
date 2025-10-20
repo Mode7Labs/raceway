@@ -1,7 +1,8 @@
 use crate::event::Event;
 use crate::graph::{Anomaly, AuditTrail, CausalGraph, CriticalPath, ServiceDependencies, TreeNode};
 use crate::storage::{CrossTraceRace, StorageBackend, TraceAnalysisData};
-use anyhow::Result;
+use anyhow::{Context, Result};
+use chrono::{DateTime, Utc};
 use std::collections::HashSet;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -12,27 +13,102 @@ use uuid::Uuid;
 pub struct AnalysisService {
     storage: Arc<dyn StorageBackend>,
     graph: Arc<RwLock<CausalGraph>>,
+    warmup: Arc<RwLock<WarmupStatus>>,
 }
 
 impl AnalysisService {
     /// Create a new AnalysisService with the given storage backend
     pub async fn new(storage: Arc<dyn StorageBackend>) -> Result<Self> {
-        // Initialize graph by loading all events from storage
-        let events = storage.get_all_events().await?;
-        let graph = CausalGraph::from_events(events)?;
+        let graph = Arc::new(RwLock::new(CausalGraph::new()));
+        let warmup = Arc::new(RwLock::new(WarmupStatus::new()));
 
         // Load existing baselines from storage
         let baseline_operations = storage.get_all_baseline_operations().await?;
+        let mut baseline_metrics = Vec::new();
         for operation in baseline_operations {
             if let Some(baseline) = storage.get_baseline_metric(&operation).await? {
-                graph.set_baseline(&operation, baseline);
+                baseline_metrics.push((operation, baseline));
+            }
+        }
+        {
+            let graph_guard = graph.read().await;
+            for (operation, baseline) in baseline_metrics {
+                graph_guard.set_baseline(&operation, baseline);
             }
         }
 
-        Ok(Self {
-            storage,
-            graph: Arc::new(RwLock::new(graph)),
-        })
+        let service = Self {
+            storage: Arc::clone(&storage),
+            graph: Arc::clone(&graph),
+            warmup: Arc::clone(&warmup),
+        };
+
+        tokio::spawn(Self::warmup_existing_events(storage, graph, warmup));
+
+        Ok(service)
+    }
+
+    async fn warmup_existing_events(
+        storage: Arc<dyn StorageBackend>,
+        graph: Arc<RwLock<CausalGraph>>,
+        warmup: Arc<RwLock<WarmupStatus>>,
+    ) {
+        if let Err(err) = async {
+            let trace_ids = storage.get_all_trace_ids().await?;
+
+            {
+                let mut status = warmup.write().await;
+                status.phase = WarmupPhase::Replaying;
+                status.total_traces = trace_ids.len();
+                status.started_at = Some(Utc::now());
+            }
+
+            for (idx, trace_id) in trace_ids.into_iter().enumerate() {
+                let events = storage
+                    .get_trace_events(trace_id)
+                    .await
+                    .with_context(|| format!("fetching events for trace {}", trace_id))?;
+
+                let missing_events = {
+                    let graph_read = graph.read().await;
+                    events
+                        .iter()
+                        .filter(|event| !graph_read.contains_event(event.id))
+                        .cloned()
+                        .collect::<Vec<_>>()
+                };
+
+                if !missing_events.is_empty() {
+                    let graph_guard = graph.write().await;
+                    let mut pending = missing_events;
+                    pending.retain(|event| !graph_guard.contains_event(event.id));
+
+                    if !pending.is_empty() {
+                        graph_guard
+                            .ingest_events(pending)
+                            .with_context(|| format!("ingesting events for trace {}", trace_id))?;
+                    }
+                }
+
+                let mut status = warmup.write().await;
+                status.processed_traces = idx + 1;
+                status.last_trace = Some(trace_id);
+            }
+
+            {
+                let mut status = warmup.write().await;
+                status.phase = WarmupPhase::Completed;
+                status.completed_at = Some(Utc::now());
+            }
+
+            Ok::<(), anyhow::Error>(())
+        }
+        .await
+        {
+            let mut status = warmup.write().await;
+            status.phase = WarmupPhase::Failed;
+            status.last_error = Some(err.to_string());
+        }
     }
 
     /// Add an event (this goes through storage, then updates graph)
@@ -49,6 +125,8 @@ impl AnalysisService {
 
     /// Update baselines after processing a trace
     pub async fn update_baselines(&self, trace_id: Uuid) -> Result<()> {
+        self.ensure_trace_loaded(trace_id).await?;
+
         // Update baselines and get them in a single write lock scope
         let baselines = {
             let graph = self.graph.write().await;
@@ -62,20 +140,31 @@ impl AnalysisService {
         Ok(())
     }
 
+    /// Get the current warm-up status
+    pub async fn warmup_status(&self) -> WarmupStatus {
+        self.warmup.read().await.clone()
+    }
+
     /// Detect anomalies in a trace
     pub async fn detect_anomalies(&self, trace_id: Uuid) -> Result<Vec<Anomaly>> {
+        self.ensure_trace_loaded(trace_id).await?;
+
         let graph = self.graph.read().await;
         graph.detect_anomalies(trace_id)
     }
 
     /// Get critical path for a trace
     pub async fn get_critical_path(&self, trace_id: Uuid) -> Result<CriticalPath> {
+        self.ensure_trace_loaded(trace_id).await?;
+
         let graph = self.graph.read().await;
         graph.get_critical_path(trace_id)
     }
 
     /// Find concurrent events within a trace
     pub async fn find_concurrent_events(&self, trace_id: Uuid) -> Result<Vec<(Event, Event)>> {
+        self.ensure_trace_loaded(trace_id).await?;
+
         let graph = self.graph.read().await;
         graph.find_concurrent_events(trace_id)
     }
@@ -134,24 +223,32 @@ impl AnalysisService {
 
     /// Get service dependencies for a trace
     pub async fn get_service_dependencies(&self, trace_id: Uuid) -> Result<ServiceDependencies> {
+        self.ensure_trace_loaded(trace_id).await?;
+
         let graph = self.graph.read().await;
         graph.get_service_dependencies(trace_id)
     }
 
     /// Get audit trail for a variable in a trace
     pub async fn get_audit_trail(&self, trace_id: Uuid, variable: &str) -> Result<AuditTrail> {
+        self.ensure_trace_loaded(trace_id).await?;
+
         let graph = self.graph.read().await;
         graph.get_audit_trail(trace_id, variable)
     }
 
     /// Get trace tree
     pub async fn get_trace_tree(&self, trace_id: Uuid) -> Result<Vec<TreeNode>> {
+        self.ensure_trace_loaded(trace_id).await?;
+
         let graph = self.graph.read().await;
         graph.get_trace_tree(trace_id)
     }
 
     /// Get causal order of events for a trace
     pub async fn get_causal_order(&self, trace_id: Uuid) -> Result<Vec<Event>> {
+        self.ensure_trace_loaded(trace_id).await?;
+
         let graph = self.graph.read().await;
         graph.get_causal_order(trace_id)
     }
@@ -160,6 +257,9 @@ impl AnalysisService {
     pub async fn get_trace_analysis_data(&self, trace_id: Uuid) -> Result<TraceAnalysisData> {
         // Fetch events from storage
         let events = self.storage.get_trace_events(trace_id).await?;
+
+        self.ensure_trace_loaded_from_events(trace_id, &events)
+            .await?;
 
         // Collect unique variables referenced in the trace
         let mut variables = HashSet::new();
@@ -202,6 +302,89 @@ impl AnalysisService {
         let mut graph = self.graph.write().await;
         *graph = CausalGraph::new();
 
+        // Reset warmup status (callers may choose to trigger a manual warmup afterwards)
+        *self.warmup.write().await = WarmupStatus::new();
+
         Ok(())
+    }
+
+    async fn ensure_trace_loaded(&self, trace_id: Uuid) -> Result<()> {
+        let events = self.storage.get_trace_events(trace_id).await?;
+        self.ensure_trace_loaded_from_events(trace_id, &events)
+            .await
+    }
+
+    async fn ensure_trace_loaded_from_events(
+        &self,
+        _trace_id: Uuid,
+        events: &[Event],
+    ) -> Result<()> {
+        if events.is_empty() {
+            return Ok(());
+        }
+
+        let missing_events = {
+            let graph = self.graph.read().await;
+            events
+                .iter()
+                .filter(|event| !graph.contains_event(event.id))
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+
+        if missing_events.is_empty() {
+            return Ok(());
+        }
+
+        {
+            let graph = self.graph.write().await;
+            let mut pending = missing_events;
+            pending.retain(|event| !graph.contains_event(event.id));
+
+            if pending.is_empty() {
+                return Ok(());
+            }
+
+            graph.ingest_events(pending)?;
+        }
+
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WarmupPhase {
+    Idle,
+    Replaying,
+    Completed,
+    Failed,
+}
+
+#[derive(Debug, Clone)]
+pub struct WarmupStatus {
+    pub phase: WarmupPhase,
+    pub total_traces: usize,
+    pub processed_traces: usize,
+    pub last_trace: Option<Uuid>,
+    pub started_at: Option<DateTime<Utc>>,
+    pub completed_at: Option<DateTime<Utc>>,
+    pub last_error: Option<String>,
+}
+
+impl WarmupStatus {
+    pub fn new() -> Self {
+        Self {
+            phase: WarmupPhase::Idle,
+            total_traces: 0,
+            processed_traces: 0,
+            last_trace: None,
+            started_at: None,
+            completed_at: None,
+            last_error: None,
+        }
+    }
+
+    pub fn is_ready(&self) -> bool {
+        matches!(self.phase, WarmupPhase::Completed)
     }
 }
