@@ -985,20 +985,50 @@ impl CausalGraph {
         Ok(())
     }
 
+    /// Set baseline metric for an operation (used when loading from storage)
+    pub fn set_baseline(&self, operation: &str, stats: crate::storage::DurationStats) {
+        // Convert DurationStats (storage format) to BaselineMetrics (graph format)
+        let metrics = BaselineMetrics {
+            count: stats.count,
+            mean_duration_ms: stats.mean_duration_us / 1000.0,
+            std_dev: stats.std_dev / 1000.0,
+            p95: 0.0, // Not stored in DurationStats, will be recalculated if needed
+            min: stats.min_duration_us as f64 / 1000.0,
+            max: stats.max_duration_us as f64 / 1000.0,
+        };
+
+        self.baseline_metrics.insert(operation.to_string(), metrics);
+    }
+
+    /// Get all baseline metrics (used when persisting to storage)
+    pub fn get_all_baselines(&self) -> HashMap<String, crate::storage::DurationStats> {
+        self.baseline_metrics
+            .iter()
+            .map(|entry| {
+                let operation = entry.key().clone();
+                let metrics = entry.value();
+
+                // Convert BaselineMetrics (graph format) to DurationStats (storage format)
+                let stats = crate::storage::DurationStats {
+                    count: metrics.count,
+                    total_duration_us: (metrics.mean_duration_ms * 1000.0 * metrics.count as f64) as u64,
+                    min_duration_us: (metrics.min * 1000.0) as u64,
+                    max_duration_us: (metrics.max * 1000.0) as u64,
+                    mean_duration_us: metrics.mean_duration_ms * 1000.0,
+                    variance: metrics.std_dev.powi(2) * 1_000_000.0, // Convert ms² to μs²
+                    std_dev: metrics.std_dev * 1000.0,
+                };
+
+                (operation, stats)
+            })
+            .collect()
+    }
+
     /// Detect anomalies in a trace based on baseline metrics
     pub fn detect_anomalies(&self, trace_id: Uuid) -> Result<Vec<Anomaly>> {
         // Check cache first - if we've already analyzed this trace, return cached results
         if let Some(cached) = self.anomaly_cache.get(&trace_id) {
             return Ok(cached.value().clone());
-        }
-
-        // Build baselines from ALL other traces
-        // This ensures we have comprehensive baseline data
-        for other_trace_id in self.get_all_trace_ids() {
-            if other_trace_id != trace_id {
-                // Add all other traces to baseline
-                let _ = self.update_baselines(other_trace_id);
-            }
         }
 
         let events = self.get_causal_order(trace_id)?;

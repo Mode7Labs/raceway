@@ -89,7 +89,7 @@ pub async fn start_server(config: Config) -> Result<()> {
         enable_race_detection: config.race_detection.enabled,
     };
 
-    let engine = Arc::new(RacewayEngine::new(engine_config, storage));
+    let engine = Arc::new(RacewayEngine::new(engine_config, storage).await?);
     engine.start().await?;
 
     let state = AppState {
@@ -231,13 +231,15 @@ async fn health_handler() -> impl IntoResponse {
 }
 
 async fn status_handler(State(state): State<AppState>) -> impl IntoResponse {
-    let stats = state.engine.storage().stats().await.unwrap_or_default();
+    // Get counts directly from storage
+    let all_events = state.engine.storage().get_all_events().await.unwrap_or_default();
+    let all_traces = state.engine.storage().get_all_trace_ids().await.unwrap_or_default();
 
     let status = ServerStatus {
         version: env!("CARGO_PKG_VERSION").to_string(),
         uptime_seconds: 0,
-        events_captured: stats.total_events,
-        traces_active: stats.total_traces,
+        events_captured: all_events.len(),
+        traces_active: all_traces.len(),
     };
 
     Json(ApiResponse::success(status))
@@ -378,9 +380,11 @@ async fn analyze_global_handler(
         race_details: Vec<RaceDetail>,
     }
 
-    match state.engine.storage().find_global_concurrent_events().await {
+    match state.engine.analysis().find_global_concurrent_events().await {
         Ok(concurrent) => {
-            let stats = state.engine.storage().stats().await.unwrap_or_default();
+            // Get counts directly from storage
+            let all_events = state.engine.storage().get_all_events().await.unwrap_or_default();
+            let all_traces = state.engine.storage().get_all_trace_ids().await.unwrap_or_default();
 
             let mut anomalies = Vec::new();
             let mut race_details = Vec::new();
@@ -464,8 +468,8 @@ async fn analyze_global_handler(
             }
 
             let analysis = GlobalAnalysis {
-                total_traces: stats.total_traces,
-                total_events: stats.total_events,
+                total_traces: all_traces.len(),
+                total_events: all_events.len(),
                 concurrent_events: concurrent.len(),
                 potential_races: concurrent.len(),
                 anomalies,
@@ -493,7 +497,7 @@ async fn get_audit_trail_handler(
     })?;
 
     // Use storage backend directly - no graph reconstruction
-    match state.engine.storage().get_audit_trail(trace_uuid, &variable).await {
+    match state.engine.analysis().get_audit_trail(trace_uuid, &variable).await {
         Ok(audit_trail) => Ok((StatusCode::OK, Json(ApiResponse::success(audit_trail)))),
         Err(e) => Err((
             StatusCode::NOT_FOUND,
@@ -519,7 +523,7 @@ async fn get_full_trace_analysis_handler(
     // Use storage backend directly - preserves all accumulated baselines and caches
     let analysis_data = state
         .engine
-        .storage()
+        .analysis()
         .get_trace_analysis_data(trace_uuid)
         .await
         .map_err(|e| {
@@ -531,7 +535,7 @@ async fn get_full_trace_analysis_handler(
 
     let concurrent = state
         .engine
-        .storage()
+        .analysis()
         .find_concurrent_events(trace_uuid)
         .await
         .unwrap_or_default();
@@ -782,7 +786,7 @@ async fn analyze_trace_handler(
     // Use storage backend directly
     let concurrent = state
         .engine
-        .storage()
+        .analysis()
         .find_concurrent_events(trace_uuid)
         .await
         .unwrap_or_default();
@@ -907,7 +911,7 @@ async fn get_critical_path_handler(
     })?;
 
     // Use storage backend directly
-    match state.engine.storage().get_critical_path(trace_uuid).await {
+    match state.engine.analysis().get_critical_path(trace_uuid).await {
         Ok(critical_path) => {
             #[derive(Serialize)]
             struct PathEvent {
@@ -1004,10 +1008,13 @@ async fn get_anomalies_handler(
         )
     })?;
 
-    // Use storage backend directly - preserves accumulated baselines
+    // Update baselines first to ensure fresh metrics for anomaly detection
+    let _ = state.engine.analysis().update_baselines(trace_uuid).await;
+
+    // Detect anomalies with updated baselines
     let anomalies = state
         .engine
-        .storage()
+        .analysis()
         .detect_anomalies(trace_uuid)
         .await
         .unwrap_or_default();
@@ -1040,7 +1047,7 @@ async fn get_dependencies_handler(
     })?;
 
     // Use storage backend directly
-    match state.engine.storage().get_service_dependencies(trace_uuid).await {
+    match state.engine.analysis().get_service_dependencies(trace_uuid).await {
         Ok(deps) => Ok((StatusCode::OK, Json(ApiResponse::success(deps)))),
         Err(e) => Err((
             StatusCode::NOT_FOUND,

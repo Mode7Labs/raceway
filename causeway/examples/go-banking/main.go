@@ -135,8 +135,7 @@ func health(c *gin.Context) {
 
 func getAccounts(c *gin.Context) {
 	ctx := c.Request.Context()
-
-	racewayClient.TrackFunctionCall(ctx, "getAccounts", map[string]interface{}{})
+	defer racewayClient.StartFunction(ctx, "getAccounts", map[string]interface{}{})()
 
 	accountsMu.RLock()
 	defer accountsMu.RUnlock()
@@ -148,9 +147,9 @@ func getBalance(c *gin.Context) {
 	ctx := c.Request.Context()
 	account := c.Query("account")
 
-	racewayClient.TrackFunctionCall(ctx, "getBalance", map[string]interface{}{
+	defer racewayClient.StartFunction(ctx, "getBalance", map[string]interface{}{
 		"account": account,
-	})
+	})()
 
 	accountsMu.RLock()
 	acc, exists := accounts[account]
@@ -181,11 +180,12 @@ func transfer(c *gin.Context) {
 		return
 	}
 
-	racewayClient.TrackFunctionCall(ctx, "transfer", map[string]interface{}{
+	// Track function with automatic duration measurement
+	defer racewayClient.StartFunction(ctx, "transfer", map[string]interface{}{
 		"from":   req.From,
 		"to":     req.To,
 		"amount": req.Amount,
-	})
+	})()
 
 	// Simulate processing time (makes race more likely)
 	time.Sleep(10 * time.Millisecond)
@@ -209,8 +209,6 @@ func transfer(c *gin.Context) {
 		"Read",
 	)
 
-	fmt.Printf("[%s] Read balance: %d\n", req.From, balance)
-
 	// Check sufficient funds
 	if balance < req.Amount {
 		c.JSON(400, gin.H{"error": "Insufficient funds"})
@@ -233,8 +231,6 @@ func transfer(c *gin.Context) {
 		newBalance,
 		"Write",
 	)
-
-	fmt.Printf("[%s] Wrote balance: %d\n", req.From, newBalance)
 
 	// Credit the recipient
 	accountsMu.Lock()
@@ -266,8 +262,8 @@ func transfer(c *gin.Context) {
 
 func resetAccounts(c *gin.Context) {
 	ctx := c.Request.Context()
+	defer racewayClient.StartFunction(ctx, "resetAccounts", map[string]interface{}{})()
 
-	racewayClient.TrackFunctionCall(ctx, "resetAccounts", map[string]interface{}{})
 
 	accountsMu.Lock()
 	accounts["alice"] = &Account{Balance: 1000}

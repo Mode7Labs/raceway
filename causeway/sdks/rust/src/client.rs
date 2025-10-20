@@ -92,17 +92,16 @@ impl RacewayClient {
                     ctx.parent_id.clone(),
                     ctx.root_id.clone(),
                     ctx.clock,
-                    EventKind::StateChange {
-                        state_change: StateChangeData {
-                            variable: variable.to_string(),
-                            old_value: serde_json::to_value(old_value)
-                                .unwrap_or(serde_json::Value::Null),
-                            new_value: serde_json::to_value(new_value)
-                                .unwrap_or(serde_json::Value::Null),
-                            location,
-                            access_type: access_type.to_string(),
-                        },
-                    },
+                    EventKind::StateChange(StateChangeData {
+                        variable: variable.to_string(),
+                        old_value: serde_json::to_value(old_value)
+                            .unwrap_or(serde_json::Value::Null),
+                        new_value: serde_json::to_value(new_value)
+                            .unwrap_or(serde_json::Value::Null),
+                        location,
+                        access_type: access_type.to_string(),
+                    }),
+                    None,
                 );
 
                 // Update context: new parent and increment clock
@@ -117,6 +116,15 @@ impl RacewayClient {
     }
 
     pub fn track_function_call<T: Serialize>(&self, function_name: &str, args: T) {
+        self.track_function_call_with_duration(function_name, args, None);
+    }
+
+    pub fn track_function_call_with_duration<T: Serialize>(
+        &self,
+        function_name: &str,
+        args: T,
+        duration_ns: Option<u64>,
+    ) {
         RACEWAY_CONTEXT
             .try_with(|ctx_cell| {
                 let ctx = ctx_cell.borrow().clone();
@@ -126,15 +134,14 @@ impl RacewayClient {
                     ctx.parent_id.clone(),
                     ctx.root_id.clone(),
                     ctx.clock,
-                    EventKind::FunctionCall {
-                        function_call: FunctionCallData {
-                            function_name: function_name.to_string(),
-                            module: self.module_name.clone(),
-                            args: serde_json::to_value(args).unwrap_or(serde_json::Value::Null),
-                            file: file!().to_string(),
-                            line: line!(),
-                        },
-                    },
+                    EventKind::FunctionCall(FunctionCallData {
+                        function_name: function_name.to_string(),
+                        module: self.module_name.clone(),
+                        args: serde_json::to_value(args).unwrap_or(serde_json::Value::Null),
+                        file: file!().to_string(),
+                        line: line!(),
+                    }),
+                    duration_ns,
                 );
 
                 // Update context
@@ -148,6 +155,32 @@ impl RacewayClient {
             .ok();
     }
 
+    /// Track a function with automatic duration measurement (async)
+    pub async fn track_function<F, T>(&self, function_name: &str, args: impl Serialize, f: F) -> T
+    where
+        F: std::future::Future<Output = T>,
+    {
+        let start = std::time::Instant::now();
+        let result = f.await;
+        let duration_ns = start.elapsed().as_nanos() as u64;
+
+        self.track_function_call_with_duration(function_name, args, Some(duration_ns));
+        result
+    }
+
+    /// Track a function with automatic duration measurement (sync)
+    pub fn track_function_sync<F, T>(&self, function_name: &str, args: impl Serialize, f: F) -> T
+    where
+        F: FnOnce() -> T,
+    {
+        let start = std::time::Instant::now();
+        let result = f();
+        let duration_ns = start.elapsed().as_nanos() as u64;
+
+        self.track_function_call_with_duration(function_name, args, Some(duration_ns));
+        result
+    }
+
     fn track_http_request(&self, method: &str, url: &str) {
         RACEWAY_CONTEXT
             .try_with(|ctx_cell| {
@@ -158,14 +191,13 @@ impl RacewayClient {
                     ctx.parent_id.clone(),
                     ctx.root_id.clone(),
                     ctx.clock,
-                    EventKind::HttpRequest {
-                        http_request: HttpRequestData {
-                            method: method.to_string(),
-                            url: url.to_string(),
-                            headers: HashMap::new(),
-                            body: None,
-                        },
-                    },
+                    EventKind::HttpRequest(HttpRequestData {
+                        method: method.to_string(),
+                        url: url.to_string(),
+                        headers: HashMap::new(),
+                        body: None,
+                    }),
+                    None,
                 );
 
                 // Update context
@@ -184,19 +216,21 @@ impl RacewayClient {
             .try_with(|ctx_cell| {
                 let ctx = ctx_cell.borrow().clone();
 
+                // Convert duration from ms to ns for metadata
+                let duration_ns = duration_ms * 1_000_000;
+
                 let event_id = self.capture_event(
                     &ctx.trace_id,
                     ctx.parent_id.clone(),
                     ctx.root_id.clone(),
                     ctx.clock,
-                    EventKind::HttpResponse {
-                        http_response: HttpResponseData {
-                            status,
-                            headers: HashMap::new(),
-                            body: None,
-                            duration_ms,
-                        },
-                    },
+                    EventKind::HttpResponse(HttpResponseData {
+                        status,
+                        headers: HashMap::new(),
+                        body: None,
+                        duration_ms,
+                    }),
+                    Some(duration_ns),
                 );
 
                 // Update context
@@ -214,6 +248,7 @@ impl RacewayClient {
         root_event_id: Option<String>,
         clock: u64,
         kind: EventKind,
+        duration_ns: Option<u64>,
     ) -> String {
         // Get or create trace
         let mut traces = self.traces.write();
@@ -250,7 +285,7 @@ impl RacewayClient {
                 service_name: self.service_name.clone(),
                 environment: "development".to_string(),
                 tags: HashMap::new(),
-                duration_ns: None,
+                duration_ns,
             },
             causality_vector,
             lock_set: vec![],
@@ -268,11 +303,6 @@ impl RacewayClient {
 
             for (_trace_id, trace) in traces.iter_mut() {
                 if !trace.events.is_empty() {
-                    let event_count = trace.events.len();
-                    eprintln!(
-                        "[Raceway] Moving {} events from trace {} to buffer",
-                        event_count, trace.trace_id
-                    );
                     buffer.extend(trace.events.drain(..));
                 }
             }
@@ -284,21 +314,27 @@ impl RacewayClient {
             return;
         }
 
-        eprintln!("[Raceway] Flushing {} events to server", events.len());
         let payload = serde_json::json!({ "events": events });
-        if let Err(e) = self
+        match self
             .http_client
             .post(format!("{}/events", self.endpoint))
             .json(&payload)
             .send()
             .await
         {
-            eprintln!("[Raceway] Error sending events: {}", e);
-        } else {
-            eprintln!(
-                "[Raceway] Successfully sent {} events",
-                events.len()
-            );
+            Ok(response) => {
+                let status = response.status();
+                if !status.is_success() {
+                    let body = response.text().await.unwrap_or_else(|_| "No body".to_string());
+                    eprintln!(
+                        "[Raceway] Server returned {}: {}",
+                        status, body
+                    );
+                }
+            }
+            Err(e) => {
+                eprintln!("[Raceway] Error sending events: {}", e);
+            }
         }
     }
 }

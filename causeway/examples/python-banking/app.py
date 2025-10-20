@@ -125,8 +125,6 @@ def transfer():
         "Read"
     )
 
-    print(f"[{from_account}] Read balance: {balance}")
-
     # Check sufficient funds
     if balance < amount:
         return jsonify({"error": "Insufficient funds"}), 400
@@ -145,8 +143,6 @@ def transfer():
         new_balance,
         "Write"
     )
-
-    print(f"[{from_account}] Wrote balance: {new_balance}")
 
     # Credit the recipient
     with accounts_lock:

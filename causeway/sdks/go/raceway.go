@@ -116,6 +116,7 @@ func (c *Client) TrackStateChange(
 				AccessType: accessType,
 			},
 		},
+		nil,
 	)
 
 	raceCtx.Update(event.ID, isFirstEvent)
@@ -127,13 +128,23 @@ func (c *Client) TrackFunctionCall(
 	functionName string,
 	args map[string]interface{},
 ) {
+	c.TrackFunctionCallWithDuration(ctx, functionName, args, nil)
+}
+
+// TrackFunctionCallWithDuration tracks a function entry with optional duration
+func (c *Client) TrackFunctionCallWithDuration(
+	ctx context.Context,
+	functionName string,
+	args map[string]interface{},
+	durationNs *uint64,
+) {
 	raceCtx := GetRacewayContext(ctx)
 	if raceCtx == nil {
 		return
 	}
 
 	// Capture location
-	_, file, line, _ := runtime.Caller(1)
+	_, file, line, _ := runtime.Caller(2)
 
 	// Check if first event while holding lock
 	raceCtx.mu.Lock()
@@ -151,9 +162,42 @@ func (c *Client) TrackFunctionCall(
 				Line:         line,
 			},
 		},
+		durationNs,
 	)
 
 	raceCtx.Update(event.ID, isFirstEvent)
+}
+
+// TrackFunction tracks a function with automatic duration measurement
+func (c *Client) TrackFunction(
+	ctx context.Context,
+	functionName string,
+	args map[string]interface{},
+	fn func() interface{},
+) interface{} {
+	start := time.Now()
+	result := fn()
+	duration := uint64(time.Since(start).Nanoseconds())
+
+	c.TrackFunctionCallWithDuration(ctx, functionName, args, &duration)
+	return result
+}
+
+// StartFunction starts tracking a function and returns a done() func to be called with defer.
+// This is the idiomatic Go pattern for tracking function duration.
+//
+// Example:
+//   defer client.StartFunction(ctx, "myFunction", args)()
+func (c *Client) StartFunction(
+	ctx context.Context,
+	functionName string,
+	args map[string]interface{},
+) func() {
+	start := time.Now()
+	return func() {
+		duration := uint64(time.Since(start).Nanoseconds())
+		c.TrackFunctionCallWithDuration(ctx, functionName, args, &duration)
+	}
 }
 
 // trackHTTPRequest tracks an HTTP request (internal - called by middleware)
@@ -173,6 +217,7 @@ func (c *Client) trackHTTPRequest(ctx context.Context, method, url string) {
 				Body:    nil,
 			},
 		},
+		nil,
 	)
 
 	raceCtx.Update(event.ID, true) // HTTP request is always a root
@@ -185,6 +230,9 @@ func (c *Client) TrackHTTPResponse(ctx context.Context, status int, durationMs u
 		return
 	}
 
+	// Convert duration from ms to ns for metadata
+	durationNs := durationMs * 1_000_000
+
 	event := c.captureEvent(
 		raceCtx,
 		map[string]interface{}{
@@ -195,13 +243,14 @@ func (c *Client) TrackHTTPResponse(ctx context.Context, status int, durationMs u
 				DurationMs: durationMs,
 			},
 		},
+		&durationNs,
 	)
 
 	raceCtx.Update(event.ID, false)
 }
 
 // captureEvent creates and buffers an event
-func (c *Client) captureEvent(raceCtx *RacewayContext, kind map[string]interface{}) *Event {
+func (c *Client) captureEvent(raceCtx *RacewayContext, kind map[string]interface{}, durationNs *uint64) *Event {
 	// Lock to read current state
 	raceCtx.mu.Lock()
 	traceID := raceCtx.TraceID
@@ -227,7 +276,7 @@ func (c *Client) captureEvent(raceCtx *RacewayContext, kind map[string]interface
 		ParentID:        parentID,
 		Timestamp:       time.Now().UTC().Format(time.RFC3339),
 		Kind:            kind,
-		Metadata:        c.buildMetadata(goroutineID),
+		Metadata:        c.buildMetadata(goroutineID, durationNs),
 		CausalityVector: causalityVector,
 		LockSet:         []string{},
 	}
@@ -242,13 +291,13 @@ func (c *Client) captureEvent(raceCtx *RacewayContext, kind map[string]interface
 }
 
 // buildMetadata creates event metadata
-func (c *Client) buildMetadata(goroutineID string) EventMetadata {
+func (c *Client) buildMetadata(goroutineID string, durationNs *uint64) EventMetadata {
 	return EventMetadata{
 		ThreadID:    goroutineID,
 		ProcessID:   os.Getpid(),
 		ServiceName: c.config.ServiceName,
 		Environment: c.config.Environment,
 		Tags:        c.config.Tags,
-		DurationNs:  nil,
+		DurationNs:  durationNs,
 	}
 }

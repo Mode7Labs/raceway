@@ -12,24 +12,11 @@ pub struct Metadata {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(untagged)]
 pub enum EventKind {
-    StateChange {
-        #[serde(rename = "StateChange")]
-        state_change: StateChangeData,
-    },
-    FunctionCall {
-        #[serde(rename = "FunctionCall")]
-        function_call: FunctionCallData,
-    },
-    HttpRequest {
-        #[serde(rename = "HttpRequest")]
-        http_request: HttpRequestData,
-    },
-    HttpResponse {
-        #[serde(rename = "HttpResponse")]
-        http_response: HttpResponseData,
-    },
+    StateChange(StateChangeData),
+    FunctionCall(FunctionCallData),
+    HttpRequest(HttpRequestData),
+    HttpResponse(HttpResponseData),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -72,7 +59,6 @@ pub struct Event {
     pub trace_id: String,
     pub parent_id: Option<String>,
     pub timestamp: String,
-    #[serde(flatten)]
     pub kind: EventKind,
     pub metadata: Metadata,
     pub causality_vector: Vec<(String, u64)>,

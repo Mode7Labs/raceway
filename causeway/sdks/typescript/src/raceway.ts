@@ -134,6 +134,9 @@ export class Raceway {
 
     const location = this.captureLocation();
 
+    // Convert duration from ms to ns for metadata
+    const durationNs = Math.floor(durationMs * 1_000_000);
+
     const event = this.captureEvent(
       ctx.traceId,
       ctx.parentId,
@@ -147,7 +150,8 @@ export class Raceway {
           duration_ms: durationMs,
         },
       },
-      location
+      location,
+      durationNs
     );
 
     ctx.parentId = event.id;
@@ -157,7 +161,7 @@ export class Raceway {
   /**
    * Track function call (simplified API)
    */
-  public trackFunctionCall(functionName: string, args: Record<string, any>): void {
+  public trackFunctionCall(functionName: string, args: Record<string, any>, durationNs?: number): void {
     const ctx = racewayContext.getStore();
     if (!ctx) return;
 
@@ -178,7 +182,8 @@ export class Raceway {
           line,
         },
       },
-      location
+      location,
+      durationNs
     );
 
     if (ctx.rootId === null) {
@@ -186,6 +191,68 @@ export class Raceway {
     }
     ctx.parentId = event.id;
     ctx.clock += 1;
+  }
+
+  /**
+   * Wrap a function to automatically track its execution with duration
+   *
+   * @example
+   * ```typescript
+   * const result = await raceway.trackFunction('processPayment', { userId: 123 }, async () => {
+   *   // Your function logic here
+   *   return await processPayment(userId);
+   * });
+   * ```
+   */
+  public async trackFunction<T>(
+    functionName: string,
+    args: Record<string, any>,
+    fn: () => T | Promise<T>
+  ): Promise<T> {
+    const startTime = process.hrtime.bigint();
+
+    try {
+      const result = await Promise.resolve(fn());
+      const endTime = process.hrtime.bigint();
+      const durationNs = Number(endTime - startTime);
+
+      this.trackFunctionCall(functionName, args, durationNs);
+
+      return result;
+    } catch (error) {
+      const endTime = process.hrtime.bigint();
+      const durationNs = Number(endTime - startTime);
+
+      this.trackFunctionCall(functionName, args, durationNs);
+      throw error;
+    }
+  }
+
+  /**
+   * Synchronous version of trackFunction for non-async functions
+   */
+  public trackFunctionSync<T>(
+    functionName: string,
+    args: Record<string, any>,
+    fn: () => T
+  ): T {
+    const startTime = process.hrtime.bigint();
+
+    try {
+      const result = fn();
+      const endTime = process.hrtime.bigint();
+      const durationNs = Number(endTime - startTime);
+
+      this.trackFunctionCall(functionName, args, durationNs);
+
+      return result;
+    } catch (error) {
+      const endTime = process.hrtime.bigint();
+      const durationNs = Number(endTime - startTime);
+
+      this.trackFunctionCall(functionName, args, durationNs);
+      throw error;
+    }
   }
 
   /**
@@ -235,7 +302,8 @@ export class Raceway {
     rootId: string | null,
     clock: number,
     kind: EventData,
-    location: string
+    location: string,
+    durationNs?: number
   ): Event {
     if (!this.config.enabled) {
       return this.createDummyEvent();
@@ -253,7 +321,7 @@ export class Raceway {
       parent_id: parentId,
       timestamp: new Date().toISOString(),
       kind,
-      metadata: this.buildMetadata(),
+      metadata: this.buildMetadata(durationNs),
       causality_vector: causalityVector,
       lock_set: [],  // Add required lock_set field
     };
@@ -306,7 +374,7 @@ export class Raceway {
   /**
    * Build event metadata
    */
-  private buildMetadata(): EventMetadata {
+  private buildMetadata(durationNs?: number): EventMetadata {
     const ctx = racewayContext.getStore();
 
     return {
@@ -315,7 +383,7 @@ export class Raceway {
       service_name: this.config.serviceName,
       environment: this.config.environment,
       tags: { ...this.config.tags },
-      duration_ns: null,
+      duration_ns: durationNs !== undefined ? durationNs : null,
     };
   }
 

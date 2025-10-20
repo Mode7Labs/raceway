@@ -1,27 +1,27 @@
 use super::storage_trait::StorageBackend;
-use super::types::{
-    AuditTrailData, CrossTraceRace, DurationStats, TraceAnalysisData, TraceSummary, VariableAccessData,
-};
+use super::types::{DurationStats, TraceSummary};
 use crate::config::StorageConfig;
 use crate::event::Event;
-use crate::graph::{
-    Anomaly, AuditTrail, CausalGraph, CriticalPath, GraphStats, ServiceDependencies, TreeNode,
-};
 use anyhow::Result;
 use async_trait::async_trait;
-use std::collections::HashMap;
+use dashmap::DashMap;
+use std::sync::RwLock;
 use uuid::Uuid;
 
-/// In-memory storage backend wrapping the existing CausalGraph
-/// This will be fully refactored in Phase 2 to directly implement the trait
+/// Pure in-memory storage backend using DashMaps
+/// This is now a proper storage layer without computation logic
 pub struct MemoryBackend {
-    graph: CausalGraph,
+    events: DashMap<Uuid, Event>,
+    trace_events: DashMap<Uuid, RwLock<Vec<Uuid>>>, // trace_id -> event IDs
+    baselines: DashMap<String, DurationStats>,
 }
 
 impl MemoryBackend {
     pub fn new(_config: &StorageConfig) -> Result<Self> {
         Ok(Self {
-            graph: CausalGraph::new(),
+            events: DashMap::new(),
+            trace_events: DashMap::new(),
+            baselines: DashMap::new(),
         })
     }
 }
@@ -29,67 +29,58 @@ impl MemoryBackend {
 #[async_trait]
 impl StorageBackend for MemoryBackend {
     async fn add_event(&self, event: Event) -> Result<()> {
-        self.graph.add_event(event)
+        let event_id = event.id;
+        let trace_id = event.trace_id;
+
+        // Store the event
+        self.events.insert(event_id, event);
+
+        // Add event ID to trace's event list
+        self.trace_events
+            .entry(trace_id)
+            .or_insert_with(|| RwLock::new(Vec::new()))
+            .write()
+            .unwrap()
+            .push(event_id);
+
+        Ok(())
     }
 
     async fn get_event(&self, id: Uuid) -> Result<Option<Event>> {
-        // Not currently implemented in CausalGraph
-        // For now, we'll search through all events
-        let trace_ids = self.graph.get_all_trace_ids();
-        for trace_id in trace_ids {
-            if let Ok(events) = self.graph.get_causal_order(trace_id) {
-                if let Some(event) = events.into_iter().find(|e| e.id == id) {
-                    return Ok(Some(event));
-                }
-            }
-        }
-        Ok(None)
+        Ok(self.events.get(&id).map(|e| e.clone()))
     }
 
     async fn get_trace_events(&self, trace_id: Uuid) -> Result<Vec<Event>> {
-        self.graph.get_causal_order(trace_id)
-    }
+        let event_ids = self
+            .trace_events
+            .get(&trace_id)
+            .map(|ids| ids.read().unwrap().clone())
+            .unwrap_or_default();
 
-    async fn get_causal_order(&self, trace_id: Uuid) -> Result<Vec<Event>> {
-        self.graph.get_causal_order(trace_id)
-    }
-
-    async fn get_trace_analysis_data(&self, trace_id: Uuid) -> Result<TraceAnalysisData> {
-        // Get events
-        let events = self.graph.get_causal_order(trace_id)?;
-
-        // Extract unique variables from StateChange events
-        let mut variables = std::collections::HashSet::new();
-        for event in &events {
-            if let crate::event::EventKind::StateChange { variable, .. } = &event.kind {
-                variables.insert(variable.clone());
+        let mut events = Vec::new();
+        for event_id in event_ids {
+            if let Some(event) = self.events.get(&event_id) {
+                events.push(event.clone());
             }
         }
 
-        // Build audit trails for each variable
-        let mut audit_trails = HashMap::new();
-        for variable in variables {
-            if let Ok(audit_trail) = self.graph.get_audit_trail(trace_id, &variable) {
-                audit_trails.insert(variable, audit_trail.accesses);
-            }
-        }
+        // Sort by timestamp
+        events.sort_by_key(|e| e.timestamp);
 
-        // Get critical path, anomalies, and dependencies from CausalGraph
-        let critical_path = self.graph.get_critical_path(trace_id).ok();
-        let anomalies = self.graph.detect_anomalies(trace_id).unwrap_or_default();
-        let dependencies = self.graph.get_service_dependencies(trace_id).ok();
+        Ok(events)
+    }
 
-        Ok(TraceAnalysisData {
-            events,
-            audit_trails,
-            critical_path,
-            anomalies,
-            dependencies,
-        })
+    async fn get_all_events(&self) -> Result<Vec<Event>> {
+        let mut events: Vec<Event> = self.events.iter().map(|e| e.value().clone()).collect();
+
+        // Sort by timestamp for consistent ordering
+        events.sort_by_key(|e| e.timestamp);
+
+        Ok(events)
     }
 
     async fn get_all_trace_ids(&self) -> Result<Vec<Uuid>> {
-        Ok(self.graph.get_all_trace_ids())
+        Ok(self.trace_events.iter().map(|e| *e.key()).collect())
     }
 
     async fn get_trace_summaries(
@@ -97,24 +88,35 @@ impl StorageBackend for MemoryBackend {
         page: usize,
         page_size: usize,
     ) -> Result<(Vec<TraceSummary>, usize)> {
-        let all_trace_ids = self.graph.get_all_trace_ids();
-
-        // Build summaries for all traces
         let mut summaries: Vec<TraceSummary> = Vec::new();
-        for trace_id in all_trace_ids {
-            if let Ok(events) = self.graph.get_causal_order(trace_id) {
-                if !events.is_empty() {
-                    let event_count = events.len() as i64;
-                    let first_timestamp = events.iter().map(|e| e.timestamp).min().unwrap();
-                    let last_timestamp = events.iter().map(|e| e.timestamp).max().unwrap();
 
-                    summaries.push(TraceSummary {
-                        trace_id,
-                        event_count,
-                        first_timestamp,
-                        last_timestamp,
-                    });
+        for trace_entry in self.trace_events.iter() {
+            let trace_id = *trace_entry.key();
+            let event_ids = trace_entry.value().read().unwrap();
+
+            if event_ids.is_empty() {
+                continue;
+            }
+
+            // Collect events for this trace
+            let mut events = Vec::new();
+            for event_id in event_ids.iter() {
+                if let Some(event) = self.events.get(event_id) {
+                    events.push(event.clone());
                 }
+            }
+
+            if !events.is_empty() {
+                let event_count = events.len() as i64;
+                let first_timestamp = events.iter().map(|e| e.timestamp).min().unwrap();
+                let last_timestamp = events.iter().map(|e| e.timestamp).max().unwrap();
+
+                summaries.push(TraceSummary {
+                    trace_id,
+                    event_count,
+                    first_timestamp,
+                    last_timestamp,
+                });
             }
         }
 
@@ -134,154 +136,83 @@ impl StorageBackend for MemoryBackend {
         Ok((paginated, total_count))
     }
 
-    async fn get_trace_roots(&self, _trace_id: Uuid) -> Result<Vec<Uuid>> {
-        // Not directly exposed by CausalGraph
-        // Would need to access trace_roots DashMap
-        Ok(Vec::new())
+    async fn get_trace_roots(&self, trace_id: Uuid) -> Result<Vec<Uuid>> {
+        let events = self.get_trace_events(trace_id).await?;
+
+        // Find events with no parent_id
+        let roots: Vec<Uuid> = events
+            .into_iter()
+            .filter(|e| e.parent_id.is_none())
+            .map(|e| e.id)
+            .collect();
+
+        Ok(roots)
     }
 
-    async fn get_trace_tree(&self, trace_id: Uuid) -> Result<Vec<TreeNode>> {
-        self.graph.get_trace_tree(trace_id)
+    async fn save_baseline(&self, operation: &str, stats: DurationStats) -> Result<()> {
+        self.baselines.insert(operation.to_string(), stats);
+        Ok(())
     }
 
-    async fn find_concurrent_events(&self, trace_id: Uuid) -> Result<Vec<(Event, Event)>> {
-        self.graph.find_concurrent_events(trace_id)
+    async fn save_baselines_batch(&self, baselines: std::collections::HashMap<String, DurationStats>) -> Result<()> {
+        for (operation, stats) in baselines {
+            self.baselines.insert(operation, stats);
+        }
+        Ok(())
     }
 
-    async fn find_global_concurrent_events(&self) -> Result<Vec<(Event, Event)>> {
-        self.graph.find_global_concurrent_events()
+    async fn get_baseline_metric(&self, operation: &str) -> Result<Option<DurationStats>> {
+        Ok(self.baselines.get(operation).map(|s| s.clone()))
     }
 
-    async fn get_cross_trace_races(&self, variable: &str) -> Result<Vec<CrossTraceRace>> {
-        // Not currently implemented in CausalGraph
-        // This would need to be added or we can compute it from global concurrent events
-        let concurrent_pairs = self.graph.find_global_concurrent_events()?;
+    async fn get_all_baseline_operations(&self) -> Result<Vec<String>> {
+        Ok(self.baselines.iter().map(|e| e.key().clone()).collect())
+    }
 
-        let mut races = Vec::new();
-        for (event1, event2) in concurrent_pairs {
-            // Extract variable names from StateChange events
-            if let (
-                crate::event::EventKind::StateChange {
-                    variable: var1,
-                    new_value: val1,
-                    location: loc1,
-                    ..
-                },
-                crate::event::EventKind::StateChange {
-                    variable: var2,
-                    new_value: val2,
-                    location: loc2,
-                    ..
-                },
-            ) = (&event1.kind, &event2.kind)
-            {
-                if var1 == variable && var2 == variable {
-                    races.push(CrossTraceRace {
-                        variable: variable.to_string(),
-                        event1_id: event1.id,
-                        event1_trace_id: event1.trace_id,
-                        event1_timestamp: event1.timestamp,
-                        event1_thread_id: event1.metadata.thread_id.clone(),
-                        event1_value: val1.clone(),
-                        event1_location: loc1.clone(),
-                        event2_id: event2.id,
-                        event2_trace_id: event2.trace_id,
-                        event2_timestamp: event2.timestamp,
-                        event2_thread_id: event2.metadata.thread_id.clone(),
-                        event2_value: val2.clone(),
-                        event2_location: loc2.clone(),
-                        confidence: 0.8, // Default confidence
-                    });
+    async fn cleanup_old_traces(&self, retention_hours: u64) -> Result<usize> {
+        let cutoff_time = chrono::Utc::now() - chrono::Duration::hours(retention_hours as i64);
+        let mut deleted_count = 0;
+
+        // Collect trace IDs to delete
+        let mut traces_to_delete = Vec::new();
+        for trace_entry in self.trace_events.iter() {
+            let trace_id = *trace_entry.key();
+            let event_ids = trace_entry.value().read().unwrap();
+
+            // Check if all events in this trace are older than cutoff
+            let mut all_old = true;
+            for event_id in event_ids.iter() {
+                if let Some(event) = self.events.get(event_id) {
+                    if event.timestamp > cutoff_time {
+                        all_old = false;
+                        break;
+                    }
                 }
+            }
+
+            if all_old && !event_ids.is_empty() {
+                traces_to_delete.push(trace_id);
             }
         }
 
-        Ok(races)
-    }
-
-    async fn get_critical_path(&self, trace_id: Uuid) -> Result<CriticalPath> {
-        self.graph.get_critical_path(trace_id)
-    }
-
-    async fn update_baselines(&self, trace_id: Uuid) -> Result<()> {
-        self.graph.update_baselines(trace_id)
-    }
-
-    async fn get_baseline_metric(&self, _operation: &str) -> Result<Option<DurationStats>> {
-        // Not directly exposed by CausalGraph in the right format
-        // Would need to access baseline_metrics DashMap and convert
-        Ok(None)
-    }
-
-    async fn detect_anomalies(&self, trace_id: Uuid) -> Result<Vec<Anomaly>> {
-        self.graph.detect_anomalies(trace_id)
-    }
-
-    async fn get_service_dependencies(&self, trace_id: Uuid) -> Result<ServiceDependencies> {
-        self.graph.get_service_dependencies(trace_id)
-    }
-
-    async fn get_audit_trail(&self, trace_id: Uuid, variable: &str) -> Result<AuditTrail> {
-        self.graph.get_audit_trail(trace_id, variable)
-    }
-
-    async fn get_audit_trail_data(&self, variable: &str) -> Result<Option<AuditTrailData>> {
-        // Find all traces that have this variable
-        let all_trace_ids = self.graph.get_all_trace_ids();
-
-        for trace_id in all_trace_ids {
-            if let Ok(audit_trail) = self.graph.get_audit_trail(trace_id, variable) {
-                if !audit_trail.accesses.is_empty() {
-                    // Convert AuditTrail to AuditTrailData
-                    let race_count = audit_trail.accesses.iter().filter(|a| a.is_race).count();
-                    let accesses: Vec<VariableAccessData> = audit_trail
-                        .accesses
-                        .into_iter()
-                        .map(|a| VariableAccessData {
-                            event_id: a.event_id,
-                            timestamp: a.timestamp,
-                            thread_id: a.thread_id,
-                            service_name: a.service_name,
-                            access_type: a.access_type,
-                            old_value: a.old_value,
-                            new_value: a.new_value,
-                            location: a.location,
-                            has_causal_link_to_previous: a.has_causal_link_to_previous,
-                            is_race: a.is_race,
-                        })
-                        .collect();
-
-                    return Ok(Some(AuditTrailData {
-                        trace_id: audit_trail.trace_id,
-                        variable: audit_trail.variable,
-                        total_accesses: accesses.len(),
-                        race_count,
-                        accesses,
-                    }));
+        // Delete traces and their events
+        for trace_id in traces_to_delete {
+            if let Some((_, event_ids)) = self.trace_events.remove(&trace_id) {
+                let event_ids = event_ids.read().unwrap();
+                for event_id in event_ids.iter() {
+                    self.events.remove(event_id);
                 }
+                deleted_count += 1;
             }
         }
 
-        Ok(None)
-    }
-
-    async fn stats(&self) -> Result<GraphStats> {
-        Ok(self.graph.stats())
-    }
-
-    async fn has_cycles(&self) -> Result<bool> {
-        Ok(self.graph.has_cycles())
-    }
-
-    async fn cleanup_old_traces(&self, _retention_hours: u64) -> Result<usize> {
-        // Not implemented in CausalGraph yet
-        // Would need to iterate through traces and check timestamps
-        Ok(0)
+        Ok(deleted_count)
     }
 
     async fn clear(&self) -> Result<()> {
-        // Not implemented in CausalGraph
-        // Would need to clear all DashMaps and the graph
+        self.events.clear();
+        self.trace_events.clear();
+        self.baselines.clear();
         Ok(())
     }
 }

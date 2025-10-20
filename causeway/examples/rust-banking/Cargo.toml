@@ -20,11 +20,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
 # Raceway SDK (use local path for now, would be crates.io in production)
-# raceway-sdk = "0.1"
-# For now, inline the SDK types
-uuid = { version = "1.6", features = ["v4", "serde"] }
-reqwest = { version = "0.11", features = ["json"] }
-chrono = { version = "0.4", features = ["serde"] }
+raceway-sdk = { path = "../../sdks/rust" }
 
 # Other
 parking_lot = "0.12"

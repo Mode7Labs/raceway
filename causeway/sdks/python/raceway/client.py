@@ -74,6 +74,7 @@ class RacewayClient:
         self,
         function_name: str,
         args: Any = None,
+        duration_ns: Optional[int] = None,
     ):
         """
         Track a function call.
@@ -81,6 +82,7 @@ class RacewayClient:
         Args:
             function_name: Name of the function
             args: Function arguments (optional)
+            duration_ns: Optional duration in nanoseconds
         """
         ctx = get_context()
         if ctx is None:
@@ -108,10 +110,41 @@ class RacewayClient:
                     "file": file,
                     "line": line,
                 }
-            )
+            ),
+            duration_ns
         )
 
         update_context(event.id, is_first_event)
+
+    def track_function(
+        self,
+        function_name: str,
+        args: Any,
+        fn: Any,
+    ):
+        """
+        Track a function with automatic duration measurement.
+
+        Args:
+            function_name: Name of the function
+            args: Function arguments
+            fn: Function to execute
+
+        Returns:
+            Function result
+        """
+        import time
+        start = time.perf_counter_ns()
+
+        try:
+            result = fn()
+            duration_ns = time.perf_counter_ns() - start
+            self.track_function_call(function_name, args, duration_ns)
+            return result
+        except Exception as e:
+            duration_ns = time.perf_counter_ns() - start
+            self.track_function_call(function_name, args, duration_ns)
+            raise e
 
     def track_http_request(
         self,
@@ -153,6 +186,9 @@ class RacewayClient:
         if ctx is None:
             return
 
+        # Convert duration from ms to ns for metadata
+        duration_ns = duration_ms * 1_000_000
+
         event = self._capture_event(
             ctx,
             EventKind(
@@ -162,18 +198,20 @@ class RacewayClient:
                     "body": body,
                     "duration_ms": duration_ms,
                 }
-            )
+            ),
+            duration_ns
         )
 
         update_context(event.id, False)
 
-    def _capture_event(self, ctx, kind: EventKind) -> Event:
+    def _capture_event(self, ctx, kind: EventKind, duration_ns: Optional[int] = None) -> Event:
         """
         Internal: Capture an event.
 
         Args:
             ctx: RacewayContext
             kind: Event kind
+            duration_ns: Optional duration in nanoseconds
 
         Returns:
             Created event
@@ -190,7 +228,7 @@ class RacewayClient:
             parent_id=ctx.parent_id,
             timestamp=datetime.now(timezone.utc).isoformat(),
             kind=kind,
-            metadata=self._build_metadata(ctx.execution_id),
+            metadata=self._build_metadata(ctx.execution_id, duration_ns),
             causality_vector=causality_vector,
             lock_set=[],
         )
@@ -209,7 +247,7 @@ class RacewayClient:
 
         return event
 
-    def _build_metadata(self, execution_id: str) -> EventMetadata:
+    def _build_metadata(self, execution_id: str, duration_ns: Optional[int] = None) -> EventMetadata:
         """Build event metadata."""
         return EventMetadata(
             thread_id=execution_id,  # Use execution ID as thread ID
@@ -217,7 +255,7 @@ class RacewayClient:
             service_name=self.config.service_name,
             environment=self.config.environment,
             tags={},
-            duration_ns=None,
+            duration_ns=duration_ns,
         )
 
     def _capture_location(self) -> str:

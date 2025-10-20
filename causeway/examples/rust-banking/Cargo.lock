@@ -859,6 +859,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "69cdb34c158ceb288df11e18b4bd39de994f6657d83847bdffdbd7f346754b0f"
 
 [[package]]
+name = "raceway-sdk"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "chrono",
+ "parking_lot",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "redox_syscall"
 version = "0.5.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -912,15 +926,13 @@ name = "rust-banking-demo"
 version = "0.1.0"
 dependencies = [
  "axum",
- "chrono",
  "parking_lot",
- "reqwest",
+ "raceway-sdk",
  "serde",
  "serde_json",
  "tokio",
  "tower 0.4.13",
  "tower-http",
- "uuid",
 ]
 
 [[package]]

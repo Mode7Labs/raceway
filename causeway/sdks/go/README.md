@@ -188,13 +188,34 @@ client.TrackStateChange(ctx, "counter", 5, 6, "Write")
 
 #### `client.TrackFunctionCall(ctx, functionName, args)`
 
-Track a function entry with arguments.
+Track a function entry with arguments (no duration tracking).
 
 ```go
 client.TrackFunctionCall(ctx, "processPayment", map[string]interface{}{
     "userId": 123,
     "amount": 50,
 })
+```
+
+#### `client.StartFunction(ctx, functionName, args) func()`
+
+**Recommended**: Track a function with automatic duration measurement. Returns a function to be called with `defer`.
+
+```go
+func transferHandler(client *raceway.Client) http.HandlerFunc {
+    return func(w http.ResponseWriter, r *http.Request) {
+        ctx := r.Context()
+
+        // Automatically measures duration from this line until function returns
+        defer client.StartFunction(ctx, "transfer", map[string]interface{}{
+            "from":   "alice",
+            "to":     "bob",
+            "amount": 100,
+        })()
+
+        // Your function logic here...
+    }
+}
 ```
 
 #### `client.TrackHTTPResponse(ctx, status, durationMs)`

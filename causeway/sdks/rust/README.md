@@ -184,7 +184,7 @@ client.track_state_change(
 
 #### `client.track_function_call<T: Serialize>(function_name, args)`
 
-Track a function entry. File and line information are captured automatically.
+Track a function entry (no duration tracking). File and line information are captured automatically.
 
 **Parameters:**
 - `function_name: &str` - Name of the function
@@ -197,6 +197,55 @@ client.track_function_call(
     "process_payment",
     serde_json::json!({ "amount": 100 })
 );
+```
+
+#### `client.track_function<F, T>(function_name, args, f) -> T` (async)
+
+**Recommended**: Track an async function with automatic duration measurement.
+
+**Parameters:**
+- `function_name: &str` - Name of the function
+- `args: impl Serialize` - Function arguments (any serializable type)
+- `f: F` - Async function to execute
+
+**Returns:** The result of the async function
+
+```rust
+async fn process_payment(client: &RacewayClient, amount: i64) -> Result<(), Error> {
+    client.track_function(
+        "process_payment",
+        serde_json::json!({ "amount": amount }),
+        async {
+            // Your async logic here
+            let result = do_payment(amount).await?;
+            Ok(result)
+        }
+    ).await
+}
+```
+
+#### `client.track_function_sync<F, T>(function_name, args, f) -> T`
+
+**Recommended**: Track a synchronous function with automatic duration measurement.
+
+**Parameters:**
+- `function_name: &str` - Name of the function
+- `args: impl Serialize` - Function arguments (any serializable type)
+- `f: F` - Function to execute (closure)
+
+**Returns:** The result of the function
+
+```rust
+fn calculate_total(client: &RacewayClient, items: &[i64]) -> i64 {
+    client.track_function_sync(
+        "calculate_total",
+        serde_json::json!({ "item_count": items.len() }),
+        || {
+            // Your logic here
+            items.iter().sum()
+        }
+    )
+}
 ```
 
 #### `client.track_http_response(status, duration_ms)`
