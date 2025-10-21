@@ -24,6 +24,14 @@ class RacewayClient:
         self.event_buffer: List[Event] = []
         self.lock = threading.RLock()
         self.session = requests.Session()
+
+        # Use provided API key from config
+        if self.config.api_key:
+            token = self.config.api_key.strip()
+            self.session.headers.update({
+                "Authorization": f"Bearer {token}",
+                "X-Raceway-Key": token,
+            })
         self.running = True
 
         # Start auto-flush thread

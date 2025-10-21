@@ -1,27 +1,84 @@
 use anyhow::Result;
 use axum::{
-    extract::{Path, Query, State},
-    http::{Method, StatusCode},
-    response::{IntoResponse, Json},
+    body::Body,
+    extract::{ConnectInfo, Path, Query, State},
+    http::{HeaderMap, Method, Request, StatusCode},
+    middleware::{self, Next},
+    response::{IntoResponse, Json, Response},
     routing::{get, post},
     Router,
 };
 use chrono::Local;
+use governor::{clock::DefaultClock, state::keyed::DefaultKeyedStateStore, Quota, RateLimiter};
 use raceway_core::analysis::{WarmupPhase, WarmupStatus};
 use raceway_core::engine::EngineConfig;
 use raceway_core::graph::{Anomaly, ServiceDependencies, VariableAccess};
 use raceway_core::storage::TraceAnalysisData;
 use raceway_core::{create_storage_backend, Config, Event, RacewayEngine};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::net::SocketAddr;
+use std::num::NonZeroU32;
 use std::sync::Arc;
 use tower_http::cors::{Any, CorsLayer};
 use uuid::Uuid;
-
 #[derive(Clone)]
 struct AppState {
     engine: Arc<RacewayEngine>,
     verbose: bool,
+    auth: AuthConfig,
+}
+
+#[derive(Clone)]
+struct AuthConfig {
+    enabled: bool,
+    valid_keys: Arc<HashSet<String>>,
+    rate_limiter: Option<Arc<KeyedRateLimiter>>,
+}
+
+type KeyedRateLimiter = RateLimiter<String, DefaultKeyedStateStore<String>, DefaultClock>;
+
+impl AuthConfig {
+    fn from_server_config(cfg: &raceway_core::config::ServerConfig) -> Self {
+        let valid_keys: HashSet<String> = cfg.api_keys.iter().cloned().collect();
+
+        let rate_limiter = if cfg.rate_limit_enabled {
+            if let Some(rpm) = NonZeroU32::new(cfg.rate_limit_rpm) {
+                let quota = Quota::per_minute(rpm);
+                Some(Arc::new(RateLimiter::keyed(quota)))
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        Self {
+            enabled: cfg.auth_enabled,
+            valid_keys: Arc::new(valid_keys),
+            rate_limiter,
+        }
+    }
+
+    fn is_authorized(&self, provided: Option<&str>) -> bool {
+        if !self.enabled {
+            return true;
+        }
+
+        match provided {
+            Some(key) => self.valid_keys.contains(key),
+            None => false,
+        }
+    }
+
+    fn check_rate_limit(&self, key: &str) -> bool {
+        if let Some(limiter) = &self.rate_limiter {
+            let key_owned = key.to_string();
+            limiter.check_key(&key_owned).is_ok()
+        } else {
+            true
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -138,7 +195,11 @@ pub async fn start_server(config: Config) -> Result<()> {
         addr, addr, addr, addr, addr, addr
     );
 
-    axum::serve(listener, app).await?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await?;
     Ok(())
 }
 
@@ -159,10 +220,13 @@ pub async fn init_engine(config: &Config) -> Result<Arc<RacewayEngine>> {
 }
 
 pub fn build_router(config: &Config, engine: Arc<RacewayEngine>) -> Router {
+    let auth = AuthConfig::from_server_config(&config.server);
     let state = AppState {
         engine,
         verbose: config.server.verbose,
+        auth,
     };
+    let auth_state = state.clone();
 
     Router::new()
         .route("/", get(root_handler))
@@ -192,8 +256,83 @@ pub fn build_router(config: &Config, engine: Arc<RacewayEngine>) -> Router {
             get(get_audit_trail_handler),
         )
         .route("/api/analyze/global", get(analyze_global_handler))
+        .layer(middleware::from_fn_with_state(auth_state, auth_middleware))
         .layer(build_cors(config))
         .with_state(state)
+}
+
+async fn auth_middleware(
+    State(state): State<AppState>,
+    req: Request<Body>,
+    next: Next,
+) -> Result<Response, (StatusCode, Json<ApiResponse<String>>)> {
+    let headers = req.headers().clone();
+    let auth_key = extract_api_key(&headers);
+
+    if !state.auth.is_authorized(auth_key.as_deref()) {
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            Json(ApiResponse::error("Unauthorized".to_string())),
+        ));
+    }
+
+    let limiter_key = extract_client_identifier(&req, &headers, auth_key.as_deref());
+    if !state.auth.check_rate_limit(&limiter_key) {
+        return Err((
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(ApiResponse::error("Too Many Requests".to_string())),
+        ));
+    }
+
+    Ok(next.run(req).await)
+}
+
+fn extract_api_key(headers: &HeaderMap) -> Option<String> {
+    if let Some(value) = headers.get(axum::http::header::AUTHORIZATION) {
+        if let Ok(value) = value.to_str() {
+            if let Some(token) = value.strip_prefix("Bearer ") {
+                return Some(token.trim().to_string());
+            }
+            if let Some(token) = value.strip_prefix("bearer ") {
+                return Some(token.trim().to_string());
+            }
+        }
+    }
+
+    if let Some(value) = headers.get("x-raceway-key") {
+        if let Ok(value) = value.to_str() {
+            if !value.trim().is_empty() {
+                return Some(value.trim().to_string());
+            }
+        }
+    }
+
+    None
+}
+
+fn extract_client_identifier(
+    req: &Request<Body>,
+    headers: &HeaderMap,
+    auth_key: Option<&str>,
+) -> String {
+    if let Some(key) = auth_key {
+        return key.to_string();
+    }
+
+    if let Some(header) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()) {
+        if let Some(first) = header.split(',').next() {
+            let trimmed = first.trim();
+            if !trimmed.is_empty() {
+                return trimmed.to_string();
+            }
+        }
+    }
+
+    if let Some(connect) = req.extensions().get::<ConnectInfo<SocketAddr>>() {
+        return connect.0.ip().to_string();
+    }
+
+    "anonymous".to_string()
 }
 
 fn build_cors(config: &Config) -> CorsLayer {

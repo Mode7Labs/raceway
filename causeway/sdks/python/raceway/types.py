@@ -14,6 +14,7 @@ class Config:
     batch_size: int = 50
     flush_interval: float = 1.0  # seconds
     debug: bool = False
+    api_key: Optional[str] = None
 
 
 @dataclass

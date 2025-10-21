@@ -21,6 +21,7 @@ use ratatui::{
     Frame, Terminal,
 };
 use reqwest;
+use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION};
 use std::collections::{HashMap, HashSet};
 use std::io;
 use std::time::Instant;
@@ -69,9 +70,19 @@ struct App {
 impl App {
     fn new(server_url: String) -> Self {
         // Create a single reusable HTTP client
+        let mut headers = HeaderMap::new();
+        if let Ok(api_key) = std::env::var("RACEWAY_API_KEY") {
+            if !api_key.trim().is_empty() {
+                if let Ok(value) = HeaderValue::from_str(&format!("Bearer {}", api_key.trim())) {
+                    headers.insert(AUTHORIZATION, value);
+                }
+            }
+        }
+
         let client = reqwest::blocking::Client::builder()
             .timeout(std::time::Duration::from_secs(10))
-            .pool_max_idle_per_host(1) // Prevent connection leak
+            .pool_max_idle_per_host(1)
+            .default_headers(headers)
             .build()
             .unwrap_or_else(|_| reqwest::blocking::Client::new());
 

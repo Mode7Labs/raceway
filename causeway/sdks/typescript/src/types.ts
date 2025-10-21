@@ -159,6 +159,9 @@ export interface RacewayConfig {
   /** URL of the Raceway server */
   serverUrl: string;
 
+  /** API key for authenticated servers */
+  apiKey?: string;
+
   /** Name of this service */
   serviceName?: string;
 

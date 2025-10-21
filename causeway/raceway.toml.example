@@ -1,365 +1,52 @@
 # Raceway Configuration File
-# This file controls all aspects of the Raceway server and engine
+# Minimal settings for Raceway 0.1.0
 
-# ============================================================================
-# SERVER CONFIGURATION
-# ============================================================================
+# Server runtime configuration
 [server]
-# Network binding
 host = "127.0.0.1"
 port = 8080
-
-# Enable verbose logging
 verbose = false
 
-# CORS settings
+# CORS controls
 cors_enabled = true
-cors_origins = ["*"]  # ["http://localhost:3000", "https://yourdomain.com"]
+cors_origins = ["*"]
 
-# API rate limiting (requests per minute per IP)
+# Request throttling (per minute)
 rate_limit_enabled = false
 rate_limit_rpm = 1000
 
-# Authentication
+# API authentication
 auth_enabled = false
-# auth_type = "api_key"  # Options: "api_key", "jwt", "none"
 # api_keys = ["your-secret-key-here"]
 
-# TLS/HTTPS
-tls_enabled = false
-# tls_cert_path = "/path/to/cert.pem"
-# tls_key_path = "/path/to/key.pem"
-
-# ============================================================================
-# STORAGE CONFIGURATION
-# ============================================================================
+# Storage backends: "memory", "postgres", "supabase"
 [storage]
-# Storage backend: "memory", "postgres", "mysql", "sqlite", "supabase"
-# - "memory": Fast, in-memory only (data lost on restart)
-# - "postgres": PostgreSQL database
-# - "mysql": MySQL/MariaDB database
-# - "sqlite": SQLite file-based database
-# - "supabase": Supabase (PostgreSQL) - same as postgres, just use postgres backend
 backend = "memory"
 
-# How long to retain traces (in hours, 0 = forever)
-retention_hours = 24
-
-# Maximum events to keep in memory before eviction
-max_events_in_memory = 100000
-
-# For "memory" backend only
-[storage.memory]
-# Whether to persist to disk on shutdown
-persist_on_shutdown = false
-# persist_path = "./raceway-data.bin"
-
-# For "postgres" backend (also works with Supabase!)
 [storage.postgres]
-# enabled = true
-#
-# For Supabase, get your connection string from:
-# Project Settings -> Database -> Connection String (Direct connection)
-# Example Supabase connection string:
-# connection_string = "postgres://postgres.xxxxxxxxxxxx:password@aws-0-region.pooler.supabase.com:5432/postgres"
-#
-# For standard PostgreSQL:
-# connection_string = "postgres://user:password@localhost/raceway"
-#
-# max_connections = 10
-# min_connections = 2
-# connection_timeout_seconds = 30
-# Create tables automatically if they don't exist
-# auto_migrate = true
+# connection_string = "postgresql://user:pass@localhost/raceway"
+max_connections = 10
+min_connections = 2
+connection_timeout_seconds = 30
+auto_migrate = true
 
-# For "mysql" backend
-[storage.mysql]
-# enabled = false
-# connection_string = "mysql://user:password@localhost/raceway"
-# max_connections = 10
-# min_connections = 2
-# connection_timeout_seconds = 30
-# auto_migrate = true
-
-# For "sqlite" backend
-[storage.sqlite]
-# enabled = false
-# database_path = "./raceway.db"
-# auto_migrate = true
-
-# ============================================================================
-# ENGINE CONFIGURATION
-# ============================================================================
+# Event processing pipeline
 [engine]
-# Event processing
-buffer_size = 10000           # Events buffered before processing
-batch_size = 100             # Events processed per batch
-flush_interval_ms = 100      # Auto-flush interval
+buffer_size = 10000
+batch_size = 100
+flush_interval_ms = 100
 
-# Sampling configuration
-sampling_enabled = false
-sampling_rate = 1.0          # 1.0 = 100%, 0.01 = 1%
-
-# Always trace requests with these headers
-# always_trace_header = "X-Force-Trace"
-# always_trace_value = "true"
-
-# Performance
-worker_threads = 4           # Number of processing threads
-async_runtime_threads = 8    # Tokio runtime threads
-
-# Memory limits
-max_trace_size_mb = 100     # Maximum size of a single trace
-max_graph_nodes = 1000000   # Maximum nodes in causal graph
-
-# ============================================================================
-# RACE DETECTION CONFIGURATION
-# ============================================================================
 [race_detection]
-# Enable race condition detection
 enabled = true
 
-# Cross-trace race detection
-cross_trace_enabled = true
-
-# Minimum time window for considering events concurrent (microseconds)
-concurrency_window_us = 1000
-
-# Ignore read-only operations
-ignore_read_only = false
-
-# Confidence threshold (0.0-1.0) - only report races above this confidence
-confidence_threshold = 0.5
-
-# Patterns to ignore (regex)
-ignore_patterns = [
-    # ".*test.*",           # Ignore test code
-    # ".*_internal.*",      # Ignore internal variables
-]
-
-# Known safe patterns (won't be flagged as races)
-safe_patterns = [
-    # "counter_.*",         # Atomic counters
-    # ".*_readonly",        # Read-only shared state
-]
-
-# Lock detection
-detect_lock_patterns = true
-lock_variable_patterns = [
-    ".*_lock",
-    ".*_mutex",
-    ".*_semaphore",
-]
-
-# ============================================================================
-# ANOMALY DETECTION CONFIGURATION
-# ============================================================================
 [anomaly_detection]
-# Enable anomaly detection
 enabled = true
 
-# Slow operation detection
-slow_operation_threshold_ms = 1000
-
-# Standard deviations from mean to consider anomalous
-std_dev_threshold = 2.0
-
-# Minimum samples needed before anomaly detection kicks in
-min_samples = 10
-
-# Types of anomalies to detect
-detect_slow_operations = true
-detect_timeouts = true
-detect_retries = true
-detect_unusual_patterns = true
-
-# ============================================================================
-# CRITICAL PATH ANALYSIS
-# ============================================================================
-[critical_path]
-# Enable critical path calculation
-enabled = true
-
-# Include async operations in critical path
-include_async = true
-
-# Minimum duration (ms) for an operation to be included
-min_duration_ms = 1.0
-
-# ============================================================================
-# INSTRUMENTATION CONFIGURATION
-# ============================================================================
-[instrumentation]
-# Auto-instrumentation settings (for SDK)
-auto_instrument = true
-
-# Capture function arguments
-capture_args = false
-
-# Capture return values
-capture_returns = false
-
-# Maximum depth of call stack to instrument
-max_stack_depth = 50
-
-# Patterns to exclude from instrumentation
-exclude_patterns = [
-    "**/node_modules/**",
-    "**/test/**",
-    "**/tests/**",
-    "**/*.test.*",
-    "**/*.spec.*",
-]
-
-# Sensitive data patterns (will be redacted)
-sensitive_patterns = [
-    "password",
-    "secret",
-    "token",
-    "api_key",
-    "credit_card",
-    "ssn",
-]
-
-# ============================================================================
-# EXPORT CONFIGURATION
-# ============================================================================
-[export]
-# Enable trace export
-enabled = false
-
-# Export format: "json", "otlp", "jaeger", "zipkin"
-# format = "otlp"
-
-# Export endpoint
-# endpoint = "http://localhost:4317"
-
-# Export batch size
-# batch_size = 100
-
-# Export interval (seconds)
-# interval_seconds = 10
-
-# ============================================================================
-# WEB UI CONFIGURATION
-# ============================================================================
-[web_ui]
-# Enable built-in web UI
-enabled = true
-
-# Path to custom UI build (if you want to use a custom frontend)
-# custom_ui_path = "./custom-ui/dist"
-
-# Default page size for lists
-default_page_size = 50
-
-# Maximum events to display in timeline
-max_timeline_events = 1000
-
-# ============================================================================
-# LOGGING CONFIGURATION
-# ============================================================================
 [logging]
-# Log level: "trace", "debug", "info", "warn", "error"
 level = "info"
-
-# Log format: "json", "pretty", "compact"
-format = "compact"
-
-# Log to file
-file_enabled = false
-# file_path = "./raceway.log"
-# file_max_size_mb = 100
-# file_max_backups = 5
-
-# Log to stdout
-stdout_enabled = true
-
-# Include timestamps
-include_timestamps = true
-
-# Include module names
 include_modules = false
 
-# ============================================================================
-# METRICS CONFIGURATION
-# ============================================================================
-[metrics]
-# Enable Prometheus metrics endpoint
-enabled = false
-
-# Metrics endpoint path
-# endpoint = "/metrics"
-
-# Update interval (seconds)
-# update_interval_seconds = 10
-
-# ============================================================================
-# ALERTING CONFIGURATION
-# ============================================================================
-[alerting]
-# Enable alerting
-enabled = false
-
-# Alert on races
-# alert_on_races = true
-
-# Alert on anomalies
-# alert_on_anomalies = true
-
-# Slack webhook
-# [alerting.slack]
-# webhook_url = "https://hooks.slack.com/services/YOUR/WEBHOOK/URL"
-# channel = "#alerts"
-
-# PagerDuty
-# [alerting.pagerduty]
-# integration_key = "your-integration-key"
-# severity = "error"
-
-# Email
-# [alerting.email]
-# smtp_host = "smtp.gmail.com"
-# smtp_port = 587
-# smtp_username = "your-email@gmail.com"
-# smtp_password = "your-password"
-# from = "raceway@yourdomain.com"
-# to = ["oncall@yourdomain.com"]
-
-# ============================================================================
-# DEVELOPMENT & DEBUGGING
-# ============================================================================
+# Development-only toggles
 [development]
-# Enable development mode (more verbose errors, no caching, etc.)
-dev_mode = false
-
-# Enable debug endpoints (potentially dangerous in production!)
-debug_endpoints = false
-
-# Pretty-print JSON responses
-pretty_json = false
-
-# Enable request logging
-request_logging = false
-
-# Enable CORS for all origins (development only!)
 cors_allow_all = false
 
-# ============================================================================
-# EXPERIMENTAL FEATURES
-# ============================================================================
-[experimental]
-# Enable AI-based anomaly detection (requires Python ML backend)
-ai_anomaly_detection = false
-
-# Enable automatic test case generation
-auto_test_generation = false
-
-# Enable deadlock detection
-deadlock_detection = false
-
-# Enable distributed tracing across services
-distributed_tracing = true
-
-# Enable real-time streaming (WebSockets)
-realtime_streaming = false

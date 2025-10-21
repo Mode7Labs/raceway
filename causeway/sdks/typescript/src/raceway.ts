@@ -20,13 +20,22 @@ const racewayContext = new AsyncLocalStorage<RacewayContext>();
  * Main Raceway SDK class with plug-and-play architecture
  */
 export class Raceway {
-  private config: Required<RacewayConfig>;
+  private config: RacewayConfig & {
+    serviceName: string;
+    environment: string;
+    enabled: boolean;
+    batchSize: number;
+    flushInterval: number;
+    tags: Record<string, string>;
+    debug: boolean;
+  };
   private client: RacewayClient;
 
   constructor(config: RacewayConfig) {
     // Set defaults
     this.config = {
       serverUrl: config.serverUrl,
+      apiKey: config.apiKey,
       serviceName: config.serviceName || 'unknown-service',
       environment: config.environment || process.env.NODE_ENV || 'development',
       enabled: config.enabled !== undefined ? config.enabled : true,
@@ -41,7 +50,8 @@ export class Raceway {
       this.config.serverUrl,
       this.config.batchSize,
       this.config.flushInterval,
-      this.config.debug
+      this.config.debug,
+      this.config.apiKey
     );
 
     if (this.config.debug) {

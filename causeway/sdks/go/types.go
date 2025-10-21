@@ -70,4 +70,5 @@ type Config struct {
 	FlushInterval time.Duration     // Flush interval (default: 1 second)
 	Tags          map[string]string // Custom tags for all events
 	Debug         bool              // Debug logging (default: false)
+	APIKey        *string           // Optional API key for authentication
 }

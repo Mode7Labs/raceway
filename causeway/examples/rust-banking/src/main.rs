@@ -84,7 +84,13 @@ async fn main() {
     accounts.insert("bob".to_string(), Account { balance: 500 });
     accounts.insert("charlie".to_string(), Account { balance: 300 });
 
-    let raceway = Arc::new(RacewayClient::new("http://localhost:8080", "banking-api"));
+    // Initialize Raceway client with optional API key from environment
+    let api_key = std::env::var("RACEWAY_KEY").ok();
+    let raceway = Arc::new(RacewayClient::new_with_api_key(
+        "http://localhost:8080",
+        "banking-api",
+        api_key.as_deref(),
+    ));
 
     let state = AppState {
         accounts: Arc::new(RwLock::new(accounts)),

@@ -67,6 +67,37 @@ Raceway captures events from your application (function calls, state changes, lo
 
 ## Quick Start
 
+### Security First
+
+Raceway runs as an HTTP service. If you expose it beyond localhost you should:
+
+1. Enable API key authentication (`auth_enabled = true`, set `api_keys` in `raceway.toml`).
+2. Run behind HTTPS (reverse proxy or enable TLS once implemented) so SDKs talk over TLS.
+3. Configure rate limiting (`rate_limit_enabled = true`) to avoid abuse.
+4. Use environment variables for secrets (e.g. `RACEWAY_API_KEY` referenced in config) and avoid logging confidential data.
+
+Authentication headers:
+
+```http
+Authorization: Bearer <api-key>
+X-Raceway-Key: <api-key>
+```
+
+SDKs will default to sending `Authorization` once you provide `apiKey` in their configuration. The Terminal UI picks up the `RACEWAY_API_KEY` environment variable automatically.
+
+Example configuration:
+
+```toml
+[server]
+auth_enabled = true
+api_keys = ["my-secret-key"]
+rate_limit_enabled = true
+rate_limit_rpm = 600
+
+[engine]
+# ... other settings ...
+```
+
 ### 1. Start the Server
 
 ```bash
@@ -88,6 +119,9 @@ Server runs on http://localhost:8080 by default (configurable via `raceway.toml`
 
 **Terminal UI (recommended for development):**
 ```bash
+# If your server enforces API keys
+export RACEWAY_API_KEY=your-key-here
+
 ./target/release/raceway tui
 # or during development
 cargo run -p raceway -- tui
@@ -419,10 +453,10 @@ We're looking for contributors to help with:
 - Tutorial for each SDK
 
 **7. Production Readiness**
-- Rate limiting enforcement (config exists)
-- Authentication (config exists, not enforced)
-- Sampling strategies
-- Metrics and monitoring integration
+- Harden authentication & rate limiting policies
+- Sampling and backpressure strategies
+- Prometheus/metrics endpoint
+- Alerting and on-call integrations
 
 ### Nice to Have
 
@@ -460,18 +494,29 @@ Each includes:
 
 ## Configuration
 
-Edit `raceway.toml`:
+Create a `raceway.toml` (or copy `raceway.toml.example`) with the fields that are currently supported:
 
 ```toml
 [server]
-host = "0.0.0.0"
-port = 4242
+host = "127.0.0.1"
+port = 8080
+verbose = false
+cors_enabled = true
+cors_origins = ["*"]
+rate_limit_enabled = false
+rate_limit_rpm = 1000
+auth_enabled = false
+# api_keys = ["your-secret-key-here"]
 
 [storage]
-backend = "postgres"  # or "memory"
-connection_string = "postgresql://user:pass@localhost/raceway"
-# Or use Supabase:
-# connection_string = "postgresql://postgres:[password]@db.[project].supabase.co:5432/postgres"
+backend = "memory" # or "postgres" / "supabase"
+
+[storage.postgres]
+# connection_string = "postgresql://user:pass@localhost/raceway"
+max_connections = 10
+min_connections = 2
+connection_timeout_seconds = 30
+auto_migrate = true
 
 [engine]
 buffer_size = 10000
@@ -483,11 +528,16 @@ enabled = true
 
 [anomaly_detection]
 enabled = true
-threshold_stddev = 1.5  # Flag anomalies > 1.5 standard deviations
 
-[critical_path]
-enabled = true
+[logging]
+level = "info"
+include_modules = false
+
+[development]
+cors_allow_all = false
 ```
+
+Everything else (metrics endpoints, alerting hooks, automatic instrumentation toggles, etc.) is intentionally omitted until those features land. Check the ["What Needs Work"](#what-needs-work) section for ideas on what to build next.
 
 ## Performance
 

@@ -27,6 +27,7 @@ const raceway = new Raceway({
   serviceName: 'banking-api',
   environment: 'development',
   debug: true,
+  apiKey: process.env.RACEWAY_KEY,
 });
 
 // In-memory account database

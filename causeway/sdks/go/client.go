@@ -14,17 +14,19 @@ type httpClient struct {
 	serverURL   string
 	batchSize   int
 	debug       bool
+	apiKey      *string
 	eventBuffer []*Event
 	mu          sync.Mutex
 	httpClient  *http.Client
 }
 
 // newHTTPClient creates a new HTTP client
-func newHTTPClient(serverURL string, batchSize int, debug bool) *httpClient {
+func newHTTPClient(serverURL string, batchSize int, debug bool, apiKey *string) *httpClient {
 	return &httpClient{
 		serverURL:   serverURL,
 		batchSize:   batchSize,
 		debug:       debug,
+		apiKey:      apiKey,
 		eventBuffer: make([]*Event, 0, batchSize),
 		httpClient:  &http.Client{},
 	}
@@ -92,11 +94,20 @@ func (c *httpClient) sendEvents(events []*Event) {
 		log.Printf("[Raceway] Sample event JSON: %s\n", preview)
 	}
 
-	resp, err := c.httpClient.Post(
-		fmt.Sprintf("%s/events", c.serverURL),
-		"application/json",
-		bytes.NewBuffer(jsonData),
-	)
+	req, err := http.NewRequest("POST", fmt.Sprintf("%s/events", c.serverURL), bytes.NewBuffer(jsonData))
+	if err != nil {
+		log.Printf("[Raceway] Error creating request: %v\n", err)
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	// Add API key headers if provided
+	if c.apiKey != nil && *c.apiKey != "" {
+		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", *c.apiKey))
+		req.Header.Set("X-Raceway-Key", *c.apiKey)
+	}
+
+	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		log.Printf("[Raceway] Error sending events: %v\n", err)
 		return

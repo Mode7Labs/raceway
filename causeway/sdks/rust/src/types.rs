@@ -69,3 +69,32 @@ pub struct TraceContext {
     pub trace_id: String,
     pub events: Vec<Event>,
 }
+
+#[derive(Debug, Clone)]
+pub struct ClientConfig {
+    pub endpoint: String,
+    pub service_name: String,
+    pub module_name: String,
+    pub api_key: Option<String>,
+}
+
+impl ClientConfig {
+    pub fn new(endpoint: &str, service_name: &str) -> Self {
+        Self {
+            endpoint: endpoint.to_string(),
+            service_name: service_name.to_string(),
+            module_name: "app".to_string(),
+            api_key: None,
+        }
+    }
+
+    pub fn with_api_key(mut self, key: Option<String>) -> Self {
+        self.api_key = key;
+        self
+    }
+
+    pub fn module(mut self, module: &str) -> Self {
+        self.module_name = module.to_string();
+        self
+    }
+}

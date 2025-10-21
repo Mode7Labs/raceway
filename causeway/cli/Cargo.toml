@@ -32,3 +32,4 @@ axum = "0.7"
 tower = "0.4"
 tower-http = { version = "0.5", features = ["cors", "trace"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+governor = { version = "0.6", features = ["dashmap"] }

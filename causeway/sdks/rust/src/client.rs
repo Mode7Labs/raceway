@@ -18,17 +18,35 @@ pub struct RacewayClient {
 
 impl RacewayClient {
     pub fn new(endpoint: &str, service_name: &str) -> Self {
-        Self::with_module(endpoint, service_name, "app")
+        Self::new_with_api_key(endpoint, service_name, None)
     }
 
-    pub fn with_module(endpoint: &str, service_name: &str, module_name: &str) -> Self {
+    pub fn new_with_api_key(endpoint: &str, service_name: &str, api_key: Option<&str>) -> Self {
+        Self::with_module(endpoint, service_name, "app", api_key)
+    }
+
+    pub fn with_module(endpoint: &str, service_name: &str, module_name: &str, api_key: Option<&str>) -> Self {
+        let mut headers = reqwest::header::HeaderMap::new();
+        if let Some(key) = api_key {
+            let bearer = format!("Bearer {}", key.trim());
+            if let Ok(value) = reqwest::header::HeaderValue::from_str(&bearer) {
+                headers.insert(reqwest::header::AUTHORIZATION, value);
+            }
+            if let Ok(value) = reqwest::header::HeaderValue::from_str(key.trim()) {
+                headers.insert("X-Raceway-Key", value);
+            }
+        }
+
         let client = Self {
             endpoint: endpoint.to_string(),
             service_name: service_name.to_string(),
             module_name: module_name.to_string(),
             traces: Arc::new(RwLock::new(HashMap::new())),
             event_buffer: Arc::new(RwLock::new(Vec::new())),
-            http_client: reqwest::Client::new(),
+            http_client: reqwest::Client::builder()
+                .default_headers(headers)
+                .build()
+                .unwrap_or_else(|_| reqwest::Client::new()),
         };
 
         // Start auto-flush background task

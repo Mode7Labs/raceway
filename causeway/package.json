@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "description": "Scripts for Raceway development",
+  "license": "MIT",
   "scripts": {
     "seed": "ts-node scripts/seed-database.ts",
     "validate": "ts-node scripts/validate-trace.ts"

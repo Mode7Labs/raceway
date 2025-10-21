@@ -57,13 +57,19 @@ var (
 )
 
 func main() {
-	// Initialize Raceway client
+	// Initialize Raceway client with optional API key from environment
+	var apiKey *string
+	if key := os.Getenv("RACEWAY_KEY"); key != "" {
+		apiKey = &key
+	}
+
 	racewayClient = raceway.NewClient(raceway.Config{
 		ServerURL:   "http://localhost:8080",
 		ServiceName: "banking-api",
 		Environment: "development",
 		BatchSize:   10, // Lower batch size for faster flushing
 		Debug:       true,
+		APIKey:      apiKey,
 	})
 	defer racewayClient.Stop()
 

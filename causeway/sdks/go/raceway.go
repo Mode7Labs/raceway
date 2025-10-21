@@ -41,7 +41,7 @@ func NewClient(config Config) *Client {
 
 	client := &Client{
 		config:     config,
-		httpClient: newHTTPClient(config.ServerURL, config.BatchSize, config.Debug),
+		httpClient: newHTTPClient(config.ServerURL, config.BatchSize, config.Debug, config.APIKey),
 		stopCh:     make(chan struct{}),
 	}
 

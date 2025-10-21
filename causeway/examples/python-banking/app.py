@@ -31,6 +31,7 @@ raceway = RacewayClient(Config(
     endpoint="http://localhost:8080",
     service_name="banking-api",
     debug=False,
+    api_key=os.getenv("RACEWAY_KEY"),
 ))
 
 # In-memory account database

@@ -13,6 +13,8 @@ const API_BASE = '';  // Empty because we're using Vite proxy
 
 export class RacewayAPI {
   private static async fetchJSON<T>(url: string): Promise<T> {
+    // Note: In dev mode, headers are added by Vite proxy (see vite.config.ts)
+    // The proxy reads from RACEWAY_KEY environment variable
     const response = await fetch(url);
     if (!response.ok) {
       throw new Error(`HTTP error! status: ${response.status}`);

@@ -1747,10 +1747,7 @@ mod tests {
             .add_event(make_root(root_id, trace_id, base, "root"))
             .unwrap();
 
-        for (thread, offset_ms, new_value) in [
-            ("worker-a", 1_i64, 15),
-            ("worker-b", 2_i64, 20),
-        ] {
+        for (thread, offset_ms, new_value) in [("worker-a", 1_i64, 15), ("worker-b", 2_i64, 20)] {
             graph
                 .add_event(Event {
                     id: Uuid::new_v4(),
@@ -1867,7 +1864,10 @@ mod tests {
 
         let global = graph.find_global_concurrent_events().unwrap();
         assert!(
-            global.iter().any(|(a, b)| a.trace_id != b.trace_id && a.metadata.thread_id != b.metadata.thread_id),
+            global
+                .iter()
+                .any(|(a, b)| a.trace_id != b.trace_id
+                    && a.metadata.thread_id != b.metadata.thread_id),
             "expected cross-trace concurrent pair, got {:?}",
             global
         );

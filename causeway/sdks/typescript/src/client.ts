@@ -11,17 +11,20 @@ export class RacewayClient {
   private flushTimer: NodeJS.Timeout | null = null;
   private isFlushing: boolean = false;
   private debug: boolean;
+  private apiKey?: string;
 
   constructor(
     serverUrl: string,
     batchSize: number = 100,
     flushInterval: number = 1000,
-    debug: boolean = false
+    debug: boolean = false,
+    apiKey?: string
   ) {
     this.serverUrl = serverUrl.replace(/\/$/, ''); // Remove trailing slash
     this.batchSize = batchSize;
     this.flushInterval = flushInterval;
     this.debug = debug;
+    this.apiKey = apiKey;
 
     // Start periodic flush
     this.startFlushTimer();
@@ -64,6 +67,12 @@ export class RacewayClient {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          ...(this.apiKey
+            ? {
+                Authorization: `Bearer ${this.apiKey}`,
+                'X-Raceway-Key': this.apiKey,
+              }
+            : {}),
         },
         body: JSON.stringify({ events: eventsToSend }),
       });

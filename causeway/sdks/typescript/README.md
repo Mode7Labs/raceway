@@ -26,6 +26,7 @@ import { Raceway } from '@mode-7/raceway-node';
 
 const raceway = new Raceway({
   serverUrl: 'http://localhost:8080',
+  apiKey: process.env.RACEWAY_API_KEY,
   serviceName: 'my-service',
   environment: 'production'
 });
@@ -101,6 +102,10 @@ app.post('/transfer', async (req, res) => {
 
 ## API Reference
 
+### Authentication
+
+If your Raceway server requires API keys, provide `apiKey` when constructing the SDK (or set `RACEWAY_API_KEY` in the environment). The client will automatically attach both `Authorization: Bearer <key>` and `X-Raceway-Key` headers to every request.
+
 ### `new Raceway(config)`
 
 Creates a new Raceway client instance.
@@ -110,6 +115,7 @@ Creates a new Raceway client instance.
 ```typescript
 interface RacewayConfig {
   serverUrl: string;              // Raceway server URL (required)
+  apiKey?: string;                // API key (uses process.env.RACEWAY_API_KEY if omitted)
   serviceName?: string;           // Service identifier (default: 'unknown-service')
   environment?: string;           // Environment (default: process.env.NODE_ENV || 'development')
   enabled?: boolean;              // Enable/disable tracking (default: true)
