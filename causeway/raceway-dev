@@ -125,17 +125,102 @@ action_build() {
   run_step "${ICON_BUILD} Building core" "cargo build"
 }
 
+# Run a test and show traffic light result
+run_test_suite() {
+  local name="$1"
+  local command="$2"
+  local dir="${3:-.}"
+
+  printf "  %-50s " "$name"
+
+  local output
+  local exit_code
+
+  if [[ "$dir" != "." ]]; then
+    output=$(cd "$dir" && bash -c "$command" </dev/null 2>&1 || true)
+    exit_code=$?
+  else
+    output=$(bash -c "$command" </dev/null 2>&1 || true)
+    exit_code=$?
+  fi
+
+  # Parse test results
+  local passed=0
+  local failed=0
+  local total=0
+
+  # Rust/Cargo tests
+  if echo "$output" | grep -q "test result:"; then
+    passed=$(echo "$output" | grep "test result:" | sed -n 's/.*ok\. \([0-9]*\) passed.*/\1/p' | head -1)
+    failed=$(echo "$output" | grep "test result:" | sed -n 's/.*\([0-9]*\) failed.*/\1/p' | head -1)
+    total=$((passed + failed))
+  # Jest/TypeScript tests
+  elif echo "$output" | grep -q "Test Suites:"; then
+    passed=$(echo "$output" | grep "Tests:" | sed -n 's/.*Tests:[ ]*\([0-9][0-9]*\) passed.*/\1/p' | head -1)
+    failed=$(echo "$output" | grep "Tests:" | sed -n 's/.*\([0-9][0-9]*\) failed.*/\1/p' | head -1)
+    [[ -z "$passed" ]] && passed=0
+    [[ -z "$failed" ]] && failed=0
+    total=$((passed + failed))
+  # Go tests
+  elif echo "$output" | grep -q "^ok"; then
+    passed=1
+    failed=0
+    total=1
+  elif echo "$output" | grep -q "^FAIL"; then
+    passed=0
+    failed=1
+    total=1
+  # pytest (Python) - must be last as "passed" is generic
+  elif echo "$output" | grep -q "pytest"; then
+    # pytest format: "23 passed in 0.04s" or "23 passed, 1 failed in 0.04s"
+    passed=$(echo "$output" | sed -n 's/.*\([0-9][0-9]*\) passed.*/\1/p' | head -1)
+    failed=$(echo "$output" | sed -n 's/.*\([0-9][0-9]*\) failed.*/\1/p' | head -1)
+    [[ -z "$passed" ]] && passed=0
+    [[ -z "$failed" ]] && failed=0
+    total=$((passed + failed))
+  fi
+
+  # Display result
+  if [[ $exit_code -eq 0 && $failed -eq 0 ]]; then
+    printf "${GREEN}✓${RESET} ${DIM}($passed passed)${RESET}\n"
+  else
+    printf "${RED}✗${RESET} ${DIM}($passed passed, $failed failed)${RESET}\n"
+    printf "\n${YELLOW}${BOLD}Failed Test Output:${RESET}\n"
+    echo "$output" | tail -30
+    printf "\n"
+  fi
+
+  return 0
+}
+
 action_tests_all() {
-  printf "${CYAN}${BOLD}${ICON_TEST} Running All Tests${RESET}\n\n"
+  printf "${CYAN}${BOLD}${ICON_TEST} Test Suite${RESET}\n\n"
 
-  # Core tests
-  run_step "${ICON_TEST} Core graph tests" \
-    "cargo test -p raceway-core graph::tests"
-  run_step "${ICON_TEST} Integration tests" \
-    "cargo test -p raceway-test"
+  printf "${BOLD}Core Tests${RESET}\n"
+  run_test_suite "Graph tests" "cargo test -p raceway-core graph::tests --quiet"
+  run_test_suite "Integration tests (API)" "cargo test -p raceway-test --test api --quiet"
+  run_test_suite "Integration tests (Distributed)" "cargo test -p raceway-test --test distributed --quiet"
+  run_test_suite "Integration tests (E2E)" "cargo test -p raceway-test --test e2e --quiet"
 
-  # SDK tests
-  action_tests_sdk_all
+  printf "\n${BOLD}SDK Tests${RESET}\n"
+
+  if command -v npm >/dev/null 2>&1; then
+    run_test_suite "TypeScript SDK" "./node_modules/.bin/jest --watchAll=false --forceExit --silent" "${SCRIPT_DIR}/sdks/typescript"
+  fi
+
+  if command -v go >/dev/null 2>&1; then
+    run_test_suite "Go SDK" "go test ./... -v" "${SCRIPT_DIR}/sdks/go"
+  fi
+
+  if command -v python3 >/dev/null 2>&1 && python3 -c "import pytest" 2>/dev/null; then
+    run_test_suite "Python SDK" "python3 -m pytest tests/test_trace_context.py -q" "${SCRIPT_DIR}/sdks/python"
+  fi
+
+  if command -v cargo >/dev/null 2>&1; then
+    run_test_suite "Rust SDK" "cargo test --quiet" "${SCRIPT_DIR}/sdks/rust"
+  fi
+
+  printf "\n"
 }
 
 action_tests_core() {

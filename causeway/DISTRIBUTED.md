@@ -375,6 +375,562 @@ This proves the system scales to arbitrary chain lengths!
 
 ---
 
+## Phase 2.5 – Complete Engine Work (Causal Analysis Across Services)
+
+### Status: ⏳ Ready to Implement
+
+**Why This Matters:**
+Phase 2 Core successfully merges distributed traces (events from multiple services appear together). However, **causal analysis doesn't span services yet**. Critical path, race detection, and happens-before relationships are currently computed per-service only. Phase 2.5 makes distributed tracing **fully functional** by extending the CausalGraph to understand cross-service edges.
+
+**Estimated Effort:** Medium
+**Impact:** HIGH - Makes distributed tracing production-ready
+
+---
+
+### Phase 2.5 Tasks
+
+#### 1. ✅ Vector Clock Merge Logic (ALREADY IMPLEMENTED!)
+
+**Status:** ✅ Complete in `core/src/graph.rs:185-220`
+
+**What's Working:**
+- Element-wise max merge already implemented
+- Incoming `causality_vector` from SDK propagation preserved
+- Parent clocks merged correctly using `max()` for overlapping components
+- Service/instance identification using `service#instance` format
+
+**Code Reference:** `core/src/graph.rs:185-220` (add_event method)
+
+```rust
+// Start with any pre-existing causality vector (from distributed propagation via SDKs)
+let mut causality_vector: Vec<(String, u64)> = event.causality_vector.clone();
+
+// If there's a parent, merge parent's vector clock (take max of each component)
+if let Some(parent_id) = event.parent_id {
+    if let Some(parent_entry) = self.nodes.get(&parent_id) {
+        let parent_event = &parent_entry.value().1.event;
+
+        // Merge vector clocks: for each component in parent, take max with existing
+        for (parent_component, parent_clock) in &parent_event.causality_vector {
+            if let Some(existing) = causality_vector.iter_mut().find(|(c, _)| c == parent_component) {
+                // Component exists in both - take the maximum
+                existing.1 = existing.1.max(*parent_clock);
+            } else {
+                // Component only in parent - add it
+                causality_vector.push((parent_component.clone(), *parent_clock));
+            }
+        }
+    }
+}
+```
+
+**Tests:** 7 comprehensive vector clock tests in `core/src/graph.rs` (#[cfg(test)] module)
+
+**No Further Work Needed** - This was fixed during Priority 1 testing when a bug was discovered and resolved.
+
+---
+
+#### 2. Add Cross-Service Edge Support (External Edges)
+
+**Status:** ⏳ Not Started
+**Estimated Effort:** 4-6 hours
+
+**Current Situation:**
+- `DistributedEdge` struct exists in `core/src/event.rs:19`
+- Database tables exist and populated during ingestion
+- `CausalGraph` only tracks local edges (within same service)
+- Critical path and race detection don't cross service boundaries
+
+**What Needs to Change:**
+
+##### 2a. Extend CausalGraph to Load Distributed Edges
+
+**File:** `core/src/graph.rs`
+
+**Add new field to CausalGraph:**
+```rust
+pub struct CausalGraph {
+    // ... existing fields ...
+
+    /// External edges connecting events across services (Phase 2.5)
+    /// Maps from downstream event_id to (upstream_event_id, edge_type)
+    pub distributed_edges: DashMap<Uuid, Vec<(Uuid, EdgeLinkType)>>,
+}
+```
+
+**Modify graph construction** to load distributed edges when building the graph:
+
+```rust
+impl CausalGraph {
+    pub async fn from_events_with_distributed(
+        events: Vec<Event>,
+        distributed_edges: Vec<DistributedEdge>,
+        storage: Arc<dyn Storage>,
+    ) -> Result<Self> {
+        let graph = Self::from_events(events)?;
+
+        // Add distributed edges to the graph
+        for dist_edge in distributed_edges {
+            // Find events matching the span IDs
+            let upstream_event = graph.find_event_by_span(&dist_edge.from_span);
+            let downstream_event = graph.find_event_by_span(&dist_edge.to_span);
+
+            if let (Some(up_id), Some(down_id)) = (upstream_event, downstream_event) {
+                graph.distributed_edges
+                    .entry(down_id)
+                    .or_insert_with(Vec::new)
+                    .push((up_id, dist_edge.link_type));
+            }
+        }
+
+        Ok(graph)
+    }
+
+    // Helper to find event by distributed_span_id
+    fn find_event_by_span(&self, span_id: &str) -> Option<Uuid> {
+        for node_entry in self.nodes.iter() {
+            let (event_id, (_, node)) = node_entry.pair();
+            if let Some(ref event_span) = node.event.metadata.distributed_span_id {
+                if event_span == span_id {
+                    return Some(*event_id);
+                }
+            }
+        }
+        None
+    }
+}
+```
+
+##### 2b. Update Critical Path to Use Distributed Edges
+
+**File:** `core/src/graph.rs` (critical_path method)
+
+**Current:** Only considers local parent_id edges
+**Change:** Also consider distributed_edges when traversing
+
+```rust
+pub fn critical_path(&self, trace_id: Uuid) -> Result<CriticalPath> {
+    // ... existing setup ...
+
+    // When building the graph, include distributed edges:
+    for node_entry in self.nodes.iter() {
+        let (event_id, (_, node)) = node_entry.pair();
+
+        // Add local parent edge
+        if let Some(parent_id) = node.event.parent_id {
+            if self.nodes.contains_key(&parent_id) {
+                graph.add_edge(parent_node, node_index, edge_type);
+            }
+        }
+
+        // Add distributed edges (NEW)
+        if let Some(dist_edges) = self.distributed_edges.get(event_id) {
+            for (upstream_id, edge_type) in dist_edges.value() {
+                if let Some(upstream_node) = event_to_node.get(upstream_id) {
+                    graph.add_edge(*upstream_node, node_index, *edge_type);
+                }
+            }
+        }
+    }
+
+    // ... rest of critical path algorithm unchanged ...
+}
+```
+
+##### 2c. Update Race Detection to Use Distributed Edges
+
+**File:** `core/src/graph.rs` (detect_races method)
+
+**Current:** Only considers events concurrent within same service
+**Change:** Use vector clocks to detect races across services
+
+```rust
+pub fn detect_races(&self, trace_id: Uuid) -> Result<Vec<RaceCondition>> {
+    // ... existing setup ...
+
+    // When checking happens-before, distributed edges establish causality:
+    fn happens_before(
+        &self,
+        event_a: &Event,
+        event_b: &Event,
+        distributed_edges: &DashMap<Uuid, Vec<(Uuid, EdgeLinkType)>>
+    ) -> bool {
+        // 1. Check direct parent chain (existing)
+        if self.is_ancestor(event_a.id, event_b.id) {
+            return true;
+        }
+
+        // 2. Check distributed edges (NEW)
+        if let Some(b_upstreams) = distributed_edges.get(&event_b.id) {
+            for (upstream_id, _) in b_upstreams.value() {
+                if *upstream_id == event_a.id || self.is_ancestor(event_a.id, *upstream_id) {
+                    return true;
+                }
+            }
+        }
+
+        // 3. Use vector clocks for cross-service causality (existing)
+        vector_clocks_establish_order(&event_a.causality_vector, &event_b.causality_vector)
+    }
+
+    // ... rest of race detection unchanged ...
+}
+```
+
+**Expected Outcome:**
+- ✅ Critical path spans services (e.g., TS → Python → Go → Rust)
+- ✅ Race detection works across services
+- ✅ Happens-before relationships respect distributed edges
+- ✅ All existing tests continue to pass
+- ✅ Distributed tests show full graph connectivity
+
+**Code References:**
+- `core/src/event.rs:19` - DistributedEdge struct
+- `core/src/graph.rs` - CausalGraph implementation
+- `core/src/analysis.rs:316-447` - Recursive BFS (already fetches distributed_edges)
+
+---
+
+#### 3. Add Config Toggle for Distributed Tracing
+
+**Status:** ⏳ Not Started
+**Estimated Effort:** 2-3 hours
+
+**Current Situation:**
+- `DistributedTracingConfig` exists in `core/src/config.rs:267-276`
+- Defaults to `enabled: false`
+- **Currently not checked anywhere** - distributed tracing always runs
+
+**What Needs to Change:**
+
+##### 3a. Check Config During Event Ingestion
+
+**File:** `core/src/engine.rs` or wherever events are ingested
+
+```rust
+async fn process_event(&self, event: Event, storage: Arc<dyn Storage>) -> Result<()> {
+    // ... existing event processing ...
+
+    // Only process distributed metadata if enabled
+    if self.config.distributed_tracing.enabled {
+        if let Some(ref span_id) = event.metadata.distributed_span_id {
+            // Create distributed span
+            storage.upsert_distributed_span(...).await?;
+
+            // Create distributed edge if upstream_span_id exists
+            if let Some(ref upstream_span) = event.metadata.upstream_span_id {
+                storage.upsert_distributed_edge(...).await?;
+            }
+        }
+    }
+
+    // ... rest of processing ...
+}
+```
+
+##### 3b. Check Config During Graph Construction
+
+**File:** `core/src/analysis.rs:316` (get_trace_with_distributed)
+
+```rust
+pub async fn get_trace_with_distributed(
+    storage: Arc<dyn Storage>,
+    trace_id: Uuid,
+    config: &Config,  // NEW parameter
+) -> Result<TraceWithAnalysis> {
+    let events = if config.distributed_tracing.enabled {
+        // Use recursive BFS to merge distributed traces
+        merge_distributed_events(storage.clone(), trace_id).await?
+    } else {
+        // Just get events for this trace_id (existing behavior)
+        storage.get_events(trace_id).await?
+    };
+
+    // Build graph and analyze
+    let distributed_edges = if config.distributed_tracing.enabled {
+        storage.get_distributed_edges(trace_id).await?
+    } else {
+        Vec::new()
+    };
+
+    let graph = CausalGraph::from_events_with_distributed(
+        events,
+        distributed_edges,
+        storage.clone()
+    ).await?;
+
+    // ... rest of analysis ...
+}
+```
+
+##### 3c. Document Config Flag
+
+**File:** `core/src/config.rs:264-276`
+
+Update comments to be clear about behavior:
+
+```rust
+/// Controls whether distributed tracing is enabled (Phase 2).
+///
+/// When enabled:
+/// - Events with distributed_span_id create spans and edges in distributed tables
+/// - Traces are merged across services using recursive BFS
+/// - Critical path and race detection span services
+/// - Vector clocks track causality across service boundaries
+///
+/// When disabled:
+/// - Each service's events remain isolated
+/// - Distributed metadata ignored (backward compatible)
+/// - Single-service behavior unchanged
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct DistributedTracingConfig {
+    #[serde(default = "default_false")]
+    pub enabled: bool,
+}
+```
+
+**Expected Outcome:**
+- ✅ Config flag `distributed_tracing.enabled = true` enables all Phase 2 features
+- ✅ Config flag `distributed_tracing.enabled = false` reverts to Phase 1 behavior
+- ✅ Default remains `false` for backward compatibility
+- ✅ Demo and tests explicitly enable it
+
+**Code References:**
+- `core/src/config.rs:267-276` - DistributedTracingConfig
+- `core/src/engine.rs` - Event ingestion
+- `core/src/analysis.rs:316` - get_trace_with_distributed
+
+---
+
+#### 4. Complete Property Tests for Vector Clock Semantics
+
+**Status:** ⏳ Not Started
+**Estimated Effort:** 3-4 hours
+
+**Current Situation:**
+- 7 vector clock unit tests exist in `core/src/graph.rs` (#[cfg(test)])
+- Tests cover merge, concurrent detection, serialization
+- Missing: property-based tests for invariants
+
+**What Needs to Change:**
+
+##### 4a. Add proptest Dependency
+
+**File:** `core/Cargo.toml`
+
+```toml
+[dev-dependencies]
+proptest = "1.0"
+```
+
+##### 4b. Add Property Tests
+
+**File:** `core/src/graph.rs` (in #[cfg(test)] module)
+
+```rust
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    // ... existing unit tests ...
+
+    // Property: Merge is commutative
+    proptest! {
+        #[test]
+        fn prop_vector_clock_merge_commutative(
+            clock_a in prop_vector_clock(),
+            clock_b in prop_vector_clock(),
+        ) {
+            let mut merged_ab = clock_a.clone();
+            merge_vector_clocks(&mut merged_ab, &clock_b);
+
+            let mut merged_ba = clock_b.clone();
+            merge_vector_clocks(&mut merged_ba, &clock_a);
+
+            // Order shouldn't matter
+            assert_eq_clocks(&merged_ab, &merged_ba);
+        }
+    }
+
+    // Property: Merge is associative
+    proptest! {
+        #[test]
+        fn prop_vector_clock_merge_associative(
+            clock_a in prop_vector_clock(),
+            clock_b in prop_vector_clock(),
+            clock_c in prop_vector_clock(),
+        ) {
+            // (A ⊔ B) ⊔ C
+            let mut merged_ab = clock_a.clone();
+            merge_vector_clocks(&mut merged_ab, &clock_b);
+            merge_vector_clocks(&mut merged_ab, &clock_c);
+
+            // A ⊔ (B ⊔ C)
+            let mut merged_bc = clock_b.clone();
+            merge_vector_clocks(&mut merged_bc, &clock_c);
+            let mut merged_a_bc = clock_a.clone();
+            merge_vector_clocks(&mut merged_a_bc, &merged_bc);
+
+            assert_eq_clocks(&merged_ab, &merged_a_bc);
+        }
+    }
+
+    // Property: Merge is idempotent
+    proptest! {
+        #[test]
+        fn prop_vector_clock_merge_idempotent(clock in prop_vector_clock()) {
+            let mut merged = clock.clone();
+            merge_vector_clocks(&mut merged, &clock);
+
+            assert_eq_clocks(&merged, &clock);
+        }
+    }
+
+    // Property: Happens-before is transitive
+    proptest! {
+        #[test]
+        fn prop_happens_before_transitive(
+            clock_a in prop_vector_clock(),
+            clock_b_increment in prop::collection::vec(1u64..10, 1..5),
+            clock_c_increment in prop::collection::vec(1u64..10, 1..5),
+        ) {
+            // Create A ≺ B ≺ C chain
+            let mut clock_b = clock_a.clone();
+            for incr in clock_b_increment {
+                increment_clock(&mut clock_b, incr);
+            }
+
+            let mut clock_c = clock_b.clone();
+            for incr in clock_c_increment {
+                increment_clock(&mut clock_c, incr);
+            }
+
+            // If A ≺ B and B ≺ C, then A ≺ C
+            assert!(happens_before(&clock_a, &clock_b));
+            assert!(happens_before(&clock_b, &clock_c));
+            assert!(happens_before(&clock_a, &clock_c));
+        }
+    }
+
+    // Property: Concurrent events remain concurrent after merge
+    proptest! {
+        #[test]
+        fn prop_concurrent_stays_concurrent(
+            clock_a in prop_vector_clock(),
+            clock_b in prop_vector_clock(),
+        ) {
+            // If A and B are concurrent
+            if !happens_before(&clock_a, &clock_b) && !happens_before(&clock_b, &clock_a) {
+                // Merging with a third clock shouldn't make them ordered
+                let mut merged_a = clock_a.clone();
+                merge_vector_clocks(&mut merged_a, &clock_b);
+
+                // merged_a now dominates both (happens-after both)
+                assert!(happens_before(&clock_a, &merged_a));
+                assert!(happens_before(&clock_b, &merged_a));
+            }
+        }
+    }
+
+    // Helper: Generate arbitrary vector clocks
+    fn prop_vector_clock() -> impl Strategy<Value = Vec<(String, u64)>> {
+        prop::collection::vec(
+            (
+                prop::string::string_regex("[a-z-]+#[a-z0-9-]+").unwrap(),
+                1u64..1000,
+            ),
+            0..10,
+        )
+    }
+
+    fn assert_eq_clocks(a: &[(String, u64)], b: &[(String, u64)]) {
+        let mut sorted_a = a.to_vec();
+        let mut sorted_b = b.to_vec();
+        sorted_a.sort_by(|x, y| x.0.cmp(&y.0));
+        sorted_b.sort_by(|x, y| x.0.cmp(&y.0));
+        assert_eq!(sorted_a, sorted_b);
+    }
+}
+```
+
+**Expected Outcome:**
+- ✅ Property tests validate vector clock invariants
+- ✅ Commutativity, associativity, idempotency proven
+- ✅ Happens-before transitivity verified
+- ✅ Concurrent events behavior validated
+- ✅ Run via `cargo test prop_` to execute property tests
+
+**Code References:**
+- `core/src/graph.rs` - Existing tests (#[cfg(test)] module)
+- Property testing guide: https://docs.rs/proptest/latest/proptest/
+
+---
+
+### Phase 2.5 Implementation Order
+
+**Recommended Sequence:**
+
+1. **Task 3: Config Toggle** (2-3 hours) ✅ Low risk, high clarity
+   - Easiest to implement
+   - Provides gating mechanism for all features
+   - Can be tested immediately with existing demo
+
+2. **Task 2: Cross-Service Edges** (4-6 hours) ⚠️ Core functionality
+   - Most impactful change
+   - Enables critical path and race detection across services
+   - Requires careful testing with distributed tests
+
+3. **Task 4: Property Tests** (3-4 hours) ✅ Validation
+   - Validates all vector clock logic
+   - Catches edge cases
+   - Builds confidence in distributed causality
+
+**Total Estimated Effort:** 9-13 hours (1-2 days of focused work)
+
+---
+
+### Phase 2.5 Exit Criteria
+
+**Must Have:**
+- ✅ Config flag `distributed_tracing.enabled` controls all Phase 2 features
+- ✅ CausalGraph loads and uses distributed edges
+- ✅ Critical path spans services in 4-service chain demo
+- ✅ Race detection works across service boundaries
+- ✅ All existing tests continue to pass
+- ✅ Distributed tests validate cross-service analysis
+
+**Success Metric:**
+```bash
+$ cd examples/distributed && ./patterns/full-chain.sh
+
+# With distributed_tracing.enabled = true:
+✅ Critical Path Analysis:
+  Total Duration: 127ms
+  Path:
+    1. TypeScript: HTTP /chain (45ms)
+    2. Python: HTTP /process (38ms)      ← SPANS SERVICES!
+    3. Go: HTTP /transform (29ms)
+    4. Rust: HTTP /finalize (15ms)
+
+✅ Race Detection:
+  Detected 0 races across 4 services
+
+✅ Vector Clocks:
+  typescript-service#ts-1: 4
+  python-service#py-1: 3
+  go-service#go-1: 2
+  rust-service#rust-1: 1
+```
+
+**When Phase 2.5 Complete:**
+- Distributed tracing is **production-ready**
+- All causal analysis works across services
+- Config flag provides clean opt-in/opt-out
+- Comprehensive test coverage validates correctness
+
+---
+
 ## Phase 3 – UI & Analytics
 
 ### Terminal UI
@@ -444,9 +1000,14 @@ This proves the system scales to arbitrary chain lengths!
    - ✅ Storage tables and queries working
    - ✅ Recursive BFS merging arbitrary-length chains
    - ✅ 4-service chain validated end-to-end
-   - ⏳ Remaining: CausalGraph updates, config toggles, comprehensive testing
-4. ⏳ **M3 (UI support)** – TUI/web show multi-service traces; feature flag default-on for beta users.
-5. ⏳ **M4 (Full release)** – gRPC/queues supported; resilience tooling; documentation and sample apps updated.
+4. ⏳ **M2.5 (Complete Engine Work)** – causal analysis spans services; config toggles; property tests. **READY TO IMPLEMENT**
+   - ⏳ Task 1: Vector clock merge (✅ ALREADY DONE!)
+   - ⏳ Task 2: Cross-service edges in CausalGraph (4-6 hours)
+   - ⏳ Task 3: Config toggle for distributed_tracing.enabled (2-3 hours)
+   - ⏳ Task 4: Property tests for vector clock invariants (3-4 hours)
+   - **Total Effort:** 9-13 hours (1-2 days focused work)
+5. ⏳ **M3 (UI support)** – TUI/web show multi-service traces; feature flag default-on for beta users.
+6. ⏳ **M4 (Full release)** – gRPC/queues supported; resilience tooling; documentation and sample apps updated.
 
 ---
 
