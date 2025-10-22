@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"runtime"
 	"sync"
 	"time"
 
@@ -20,6 +21,8 @@ type Config struct {
 	Endpoint string
 	// ServiceName identifies this service in event metadata
 	ServiceName string
+	// InstanceID distinguishes this instance in distributed clocks (default: hostname-pid)
+	InstanceID string
 	// Environment specifies the deployment environment (development, staging, production)
 	Environment string
 	// BatchSize is the number of events to buffer before sending (default: 50)
@@ -40,6 +43,7 @@ func DefaultConfig() Config {
 	return Config{
 		Endpoint:      "http://localhost:8080",
 		ServiceName:   "unknown-service",
+		InstanceID:    "",
 		Environment:   env,
 		BatchSize:     50,
 		FlushInterval: time.Second,
@@ -50,6 +54,7 @@ func DefaultConfig() Config {
 // Client is the main Raceway SDK client.
 type Client struct {
 	config      Config
+	instanceID  string
 	eventBuffer []Event
 	mu          sync.Mutex
 	httpClient  *http.Client
@@ -57,10 +62,30 @@ type Client struct {
 	stopChan    chan struct{}
 }
 
+// ServiceName returns the configured service name.
+func (c *Client) ServiceName() string {
+	return c.config.ServiceName
+}
+
+// InstanceID returns the instance identifier.
+func (c *Client) InstanceID() string {
+	return c.instanceID
+}
+
 // New creates a new Raceway client.
 func New(config Config) *Client {
+	instanceID := config.InstanceID
+	if instanceID == "" {
+		host, err := os.Hostname()
+		if err != nil || host == "" {
+			host = "instance"
+		}
+		instanceID = fmt.Sprintf("%s-%d", host, os.Getpid())
+	}
+
 	client := &Client{
 		config:      config,
+		instanceID:  instanceID,
 		eventBuffer: make([]Event, 0, config.BatchSize),
 		httpClient:  &http.Client{Timeout: 10 * time.Second},
 		flushTicker: time.NewTicker(config.FlushInterval),
@@ -85,22 +110,25 @@ func (c *Client) Middleware() func(ctx interface{}) {
 		}
 
 		// Extract trace ID from header or generate new one
-		var traceID string
 		if gc, ok := ginCtx.(interface{ Request() *http.Request }); ok {
 			req := gc.Request()
-			traceID = req.Header.Get("X-Trace-ID")
-			if traceID == "" {
-				traceID = uuid.New().String()
-			}
+			parsed := ParseIncomingHeaders(req.Header, c.config.ServiceName, c.instanceID)
 
 			// Create Raceway context and attach to request context
-			ctx := NewContext(req.Context(), traceID)
+			ctxWith := NewContext(req.Context(), parsed.TraceID, c.config.ServiceName, c.instanceID)
+			if rctx := FromContext(ctxWith); rctx != nil {
+				rctx.SpanID = parsed.SpanID
+				rctx.ParentSpanID = parsed.ParentSpanID
+				rctx.Distributed = parsed.Distributed
+				rctx.ClockVector = parsed.ClockVector
+				rctx.TraceState = parsed.TraceState
+			}
 
 			// Track HTTP request as root event
-			c.TrackHTTPRequest(ctx, req.Method, req.URL.Path, nil, nil)
+			c.TrackHTTPRequest(ctxWith, req.Method, req.URL.Path, nil, nil)
 
 			// Update request with new context
-			*req = *req.WithContext(ctx)
+			*req = *req.WithContext(ctxWith)
 		}
 
 		// Call next handler
@@ -176,9 +204,9 @@ func (c *Client) TrackHTTPResponse(ctx context.Context, status int, headers map[
 func (c *Client) TrackAsyncSpawn(ctx context.Context, taskID, taskName, location string) {
 	c.captureEvent(ctx, EventKind{
 		AsyncSpawn: &AsyncSpawnData{
-			TaskID:     taskID,
-			TaskName:   taskName,
-			SpawnedAt:  location,
+			TaskID:    taskID,
+			TaskName:  taskName,
+			SpawnedAt: location,
 		},
 	})
 }
@@ -225,6 +253,31 @@ func (c *Client) TrackError(ctx context.Context, errorType, message string, stac
 	})
 }
 
+// PropagationHeaders builds outbound headers for distributed tracing.
+func (c *Client) PropagationHeaders(ctx context.Context, extra map[string]string) (map[string]string, error) {
+	rctx := FromContext(ctx)
+	if rctx == nil {
+		return nil, fmt.Errorf("raceway: propagation headers requested outside of active context")
+	}
+
+	result := BuildPropagationHeaders(rctx.TraceID, rctx.SpanID, rctx.TraceState, rctx.ClockVector, rctx.ServiceName, rctx.InstanceID)
+
+	rctx.ClockVector = result.ClockVector
+	rctx.Distributed = true
+	rctx.ParentSpanID = &rctx.SpanID
+	rctx.SpanID = result.ChildSpanID
+
+	headers := make(map[string]string, len(result.Headers))
+	for k, v := range result.Headers {
+		headers[k] = v
+	}
+	for k, v := range extra {
+		headers[k] = v
+	}
+
+	return headers, nil
+}
+
 func (c *Client) captureEvent(ctx context.Context, kind EventKind) {
 	rctx := FromContext(ctx)
 	if rctx == nil {
@@ -234,14 +287,10 @@ func (c *Client) captureEvent(ctx context.Context, kind EventKind) {
 		return
 	}
 
-	// Build causality vector: [(root_id, clock)]
-	causalityVector := []CausalityEntry{}
-	if rctx.RootID != nil {
-		causalityVector = append(causalityVector, CausalityEntry{
-			EventID: *rctx.RootID,
-			Clock:   uint64(rctx.Clock),
-		})
-	}
+	// Increment local clock component and clone vector for event payload
+	rctx.ClockVector = incrementClockVector(rctx.ClockVector, rctx.ServiceName, rctx.InstanceID)
+	causalityVector := make([]CausalityEntry, len(rctx.ClockVector))
+	copy(causalityVector, rctx.ClockVector)
 
 	event := Event{
 		ID:              uuid.New().String(),

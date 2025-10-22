@@ -1,9 +1,14 @@
 use crate::context::{RacewayContext, RACEWAY_CONTEXT};
+use crate::trace_context::{
+    build_propagation_headers, increment_clock_vector, parse_incoming_headers,
+};
 use crate::types::*;
 use axum::{extract::Request, http::HeaderMap, middleware::Next, response::Response};
 use parking_lot::RwLock;
 use serde::Serialize;
 use std::collections::HashMap;
+use std::env;
+use std::process;
 use std::sync::Arc;
 
 #[derive(Clone)]
@@ -11,6 +16,7 @@ pub struct RacewayClient {
     endpoint: String,
     service_name: String,
     module_name: String,
+    instance_id: String,
     traces: Arc<RwLock<HashMap<String, TraceContext>>>,
     event_buffer: Arc<RwLock<Vec<Event>>>,
     http_client: reqwest::Client,
@@ -25,7 +31,12 @@ impl RacewayClient {
         Self::with_module(endpoint, service_name, "app", api_key)
     }
 
-    pub fn with_module(endpoint: &str, service_name: &str, module_name: &str, api_key: Option<&str>) -> Self {
+    pub fn with_module(
+        endpoint: &str,
+        service_name: &str,
+        module_name: &str,
+        api_key: Option<&str>,
+    ) -> Self {
         let mut headers = reqwest::header::HeaderMap::new();
         if let Some(key) = api_key {
             let bearer = format!("Bearer {}", key.trim());
@@ -37,10 +48,13 @@ impl RacewayClient {
             }
         }
 
+        let instance_id = resolve_instance_id();
+
         let client = Self {
             endpoint: endpoint.to_string(),
             service_name: service_name.to_string(),
             module_name: module_name.to_string(),
+            instance_id,
             traces: Arc::new(RwLock::new(HashMap::new())),
             event_buffer: Arc::new(RwLock::new(Vec::new())),
             http_client: reqwest::Client::builder()
@@ -69,15 +83,18 @@ impl RacewayClient {
         request: Request,
         next: Next,
     ) -> Response {
-        // Extract or generate trace ID
-        let trace_id = headers
-            .get("x-trace-id")
-            .and_then(|v| v.to_str().ok())
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+        let parsed = parse_incoming_headers(&headers, &client.service_name, &client.instance_id);
 
-        // Initialize context for this request
-        let ctx = RacewayContext::new(trace_id.clone());
+        let mut ctx = RacewayContext::new(
+            parsed.trace_id.clone(),
+            client.service_name.clone(),
+            client.instance_id.clone(),
+        );
+        ctx.span_id = parsed.span_id.clone();
+        ctx.parent_span_id = parsed.parent_span_id.clone();
+        ctx.distributed = parsed.distributed;
+        ctx.clock_vector = parsed.clock_vector.clone();
+        ctx.tracestate = parsed.tracestate.clone();
 
         // Run the rest of the request within this context
         RACEWAY_CONTEXT
@@ -105,11 +122,13 @@ impl RacewayClient {
                 let ctx = ctx_cell.borrow().clone();
                 let location = format!("{}:{}", file!(), line!());
 
+                let updated_vector =
+                    increment_clock_vector(&ctx.clock_vector, &ctx.service_name, &ctx.instance_id);
+
                 let event_id = self.capture_event(
                     &ctx.trace_id,
                     ctx.parent_id.clone(),
-                    ctx.root_id.clone(),
-                    ctx.clock,
+                    updated_vector.clone(),
                     EventKind::StateChange(StateChangeData {
                         variable: variable.to_string(),
                         old_value: serde_json::to_value(old_value)
@@ -129,6 +148,7 @@ impl RacewayClient {
                 }
                 ctx_mut.parent_id = Some(event_id);
                 ctx_mut.clock += 1;
+                ctx_mut.clock_vector = updated_vector;
             })
             .ok();
     }
@@ -147,11 +167,13 @@ impl RacewayClient {
             .try_with(|ctx_cell| {
                 let ctx = ctx_cell.borrow().clone();
 
+                let updated_vector =
+                    increment_clock_vector(&ctx.clock_vector, &ctx.service_name, &ctx.instance_id);
+
                 let event_id = self.capture_event(
                     &ctx.trace_id,
                     ctx.parent_id.clone(),
-                    ctx.root_id.clone(),
-                    ctx.clock,
+                    updated_vector.clone(),
                     EventKind::FunctionCall(FunctionCallData {
                         function_name: function_name.to_string(),
                         module: self.module_name.clone(),
@@ -169,6 +191,7 @@ impl RacewayClient {
                 }
                 ctx_mut.parent_id = Some(event_id);
                 ctx_mut.clock += 1;
+                ctx_mut.clock_vector = updated_vector;
             })
             .ok();
     }
@@ -204,11 +227,13 @@ impl RacewayClient {
             .try_with(|ctx_cell| {
                 let ctx = ctx_cell.borrow().clone();
 
+                let updated_vector =
+                    increment_clock_vector(&ctx.clock_vector, &ctx.service_name, &ctx.instance_id);
+
                 let event_id = self.capture_event(
                     &ctx.trace_id,
                     ctx.parent_id.clone(),
-                    ctx.root_id.clone(),
-                    ctx.clock,
+                    updated_vector.clone(),
                     EventKind::HttpRequest(HttpRequestData {
                         method: method.to_string(),
                         url: url.to_string(),
@@ -225,6 +250,7 @@ impl RacewayClient {
                 }
                 ctx_mut.parent_id = Some(event_id);
                 ctx_mut.clock += 1;
+                ctx_mut.clock_vector = updated_vector;
             })
             .ok();
     }
@@ -237,11 +263,13 @@ impl RacewayClient {
                 // Convert duration from ms to ns for metadata
                 let duration_ns = duration_ms * 1_000_000;
 
+                let updated_vector =
+                    increment_clock_vector(&ctx.clock_vector, &ctx.service_name, &ctx.instance_id);
+
                 let event_id = self.capture_event(
                     &ctx.trace_id,
                     ctx.parent_id.clone(),
-                    ctx.root_id.clone(),
-                    ctx.clock,
+                    updated_vector.clone(),
                     EventKind::HttpResponse(HttpResponseData {
                         status,
                         headers: HashMap::new(),
@@ -255,16 +283,55 @@ impl RacewayClient {
                 let mut ctx_mut = ctx_cell.borrow_mut();
                 ctx_mut.parent_id = Some(event_id);
                 ctx_mut.clock += 1;
+                ctx_mut.clock_vector = updated_vector;
             })
             .ok();
+    }
+
+    pub fn propagation_headers(
+        &self,
+        extra: Option<HashMap<String, String>>,
+    ) -> Result<HashMap<String, String>, String> {
+        RACEWAY_CONTEXT
+            .try_with(|ctx_cell| {
+                let mut ctx = ctx_cell.borrow_mut();
+                let result = build_propagation_headers(
+                    &ctx.trace_id,
+                    &ctx.span_id,
+                    ctx.tracestate.as_deref(),
+                    &ctx.clock_vector,
+                    &ctx.service_name,
+                    &ctx.instance_id,
+                );
+
+                ctx.clock_vector = result.clock_vector.clone();
+                ctx.distributed = true;
+                ctx.parent_span_id = Some(ctx.span_id.clone());
+                ctx.span_id = result.child_span_id.clone();
+
+                let mut headers_map = HashMap::new();
+                for (key, value) in result.headers.iter() {
+                    if let Ok(val_str) = value.to_str() {
+                        headers_map.insert(key.to_string(), val_str.to_string());
+                    }
+                }
+
+                if let Some(additional) = extra {
+                    for (key, value) in additional {
+                        headers_map.insert(key, value);
+                    }
+                }
+
+                Ok(headers_map)
+            })
+            .map_err(|_| "Raceway context is not active".to_string())?
     }
 
     fn capture_event(
         &self,
         trace_id: &str,
         parent_id: Option<String>,
-        root_event_id: Option<String>,
-        clock: u64,
+        clock_vector: Vec<(String, u64)>,
         kind: EventKind,
         duration_ns: Option<u64>,
     ) -> String {
@@ -284,13 +351,6 @@ impl RacewayClient {
 
         let trace = traces.get_mut(trace_id).unwrap();
 
-        // Build causality vector
-        let causality_vector = if let Some(root_id) = root_event_id {
-            vec![(root_id, clock)]
-        } else {
-            vec![] // Root event has empty vector
-        };
-
         let event = Event {
             id: uuid::Uuid::new_v4().to_string(),
             trace_id: trace.trace_id.clone(),
@@ -305,7 +365,7 @@ impl RacewayClient {
                 tags: HashMap::new(),
                 duration_ns,
             },
-            causality_vector,
+            causality_vector: clock_vector,
             lock_set: vec![],
         };
         let event_id = event.id.clone();
@@ -343,11 +403,11 @@ impl RacewayClient {
             Ok(response) => {
                 let status = response.status();
                 if !status.is_success() {
-                    let body = response.text().await.unwrap_or_else(|_| "No body".to_string());
-                    eprintln!(
-                        "[Raceway] Server returned {}: {}",
-                        status, body
-                    );
+                    let body = response
+                        .text()
+                        .await
+                        .unwrap_or_else(|_| "No body".to_string());
+                    eprintln!("[Raceway] Server returned {}: {}", status, body);
                 }
             }
             Err(e) => {
@@ -355,4 +415,17 @@ impl RacewayClient {
             }
         }
     }
+}
+
+fn resolve_instance_id() -> String {
+    if let Ok(explicit) = env::var("RACEWAY_INSTANCE_ID") {
+        return explicit;
+    }
+    if let Ok(host) = env::var("HOSTNAME") {
+        return format!("{}-{}", host, process::id());
+    }
+    if let Ok(host) = env::var("COMPUTERNAME") {
+        return format!("{}-{}", host, process::id());
+    }
+    format!("instance-{}", process::id())
 }

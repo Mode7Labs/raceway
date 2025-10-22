@@ -158,6 +158,7 @@ Creates a new Raceway client instance.
 type Config struct {
     ServerURL     string            // Raceway server URL (required)
     ServiceName   string            // Service identifier (default: "unknown-service")
+    InstanceID    string            // Optional instance identifier for distributed tracing
     Environment   string            // Environment (default: "development")
     BatchSize     int               // Event batch size (default: 100)
     FlushInterval time.Duration     // Flush interval (default: 1 second)
@@ -226,6 +227,23 @@ Track an HTTP response with status code and duration.
 duration := uint64(time.Since(startTime).Milliseconds())
 client.TrackHTTPResponse(ctx, 200, duration)
 ```
+
+#### `client.PropagationHeaders(ctx, extraHeaders)`
+
+Generate outbound headers (`traceparent`, `tracestate`, and `raceway-clock`) for propagating the current trace across service boundaries.
+
+```go
+headers, err := client.PropagationHeaders(ctx, map[string]string{"X-Service": "payments"})
+if err == nil {
+    req, _ := http.NewRequestWithContext(ctx, http.MethodPost, ledgerURL, body)
+    for key, value := range headers {
+        req.Header.Set(key, value)
+    }
+    http.DefaultClient.Do(req)
+}
+```
+
+Call this inside a request after the middleware has initialised the Raceway context; it returns an error if no context is active.
 
 ### Context Management
 

@@ -1,6 +1,7 @@
 """Raceway client implementation."""
 
 import os
+import socket
 import threading
 import time
 import uuid
@@ -12,6 +13,7 @@ from typing import Optional, Any, List, Dict, Tuple
 import requests
 
 from .context import get_context, update_context
+from .trace_context import build_propagation_headers, increment_clock_vector
 from .types import Config, Event, EventKind, EventMetadata
 
 
@@ -21,6 +23,11 @@ class RacewayClient:
     def __init__(self, config: Optional[Config] = None):
         """Initialize the client."""
         self.config = config or Config()
+        self.instance_id = (
+            self.config.instance_id
+            or os.getenv("RACEWAY_INSTANCE_ID")
+            or f"{self._safe_hostname()}-{os.getpid()}"
+        )
         self.event_buffer: List[Event] = []
         self.lock = threading.RLock()
         self.session = requests.Session()
@@ -212,6 +219,46 @@ class RacewayClient:
 
         update_context(event.id, False)
 
+    def propagation_headers(self, extra_headers: Optional[Dict[str, str]] = None) -> Dict[str, str]:
+        """Build outbound headers for propagating the current trace."""
+        ctx = get_context()
+        if ctx is None:
+            raise RuntimeError("Raceway propagation_headers() called outside of an active context")
+
+        result = build_propagation_headers(
+            trace_id=ctx.trace_id,
+            current_span_id=ctx.span_id,
+            tracestate=ctx.tracestate,
+            clock_vector=ctx.clock_vector,
+            service_name=self.config.service_name,
+            instance_id=self.instance_id,
+        )
+
+        ctx.clock_vector = result.clock_vector
+        ctx.parent_span_id = ctx.span_id
+        ctx.span_id = result.child_span_id
+        ctx.distributed = True
+
+        headers = dict(result.headers)
+        if extra_headers:
+            headers.update(extra_headers)
+        return headers
+
+    def request(self, method: str, url: str, **kwargs) -> requests.Response:
+        """Perform an HTTP request with automatic Raceway propagation."""
+        headers = kwargs.pop("headers", {}) or {}
+        try:
+            propagation = self.propagation_headers()
+        except RuntimeError:
+            propagation = {}
+            if self.config.debug:
+                print("[Raceway] propagation_headers called without active context; sending request without trace headers")
+
+        # Merge headers with preference to explicit headers
+        merged_headers = {**propagation, **headers}
+        response = self.session.request(method, url, headers=merged_headers, **kwargs)
+        return response
+
     def _capture_event(self, ctx, kind: EventKind, duration_ns: Optional[int] = None) -> Event:
         """
         Internal: Capture an event.
@@ -224,10 +271,15 @@ class RacewayClient:
         Returns:
             Created event
         """
-        # Build causality vector
-        causality_vector: List[Tuple[str, int]] = []
-        if ctx.root_id is not None:
-            causality_vector = [(ctx.root_id, ctx.clock)]
+        # Increment local clock component for distributed tracing
+        ctx.clock_vector = increment_clock_vector(
+            ctx.clock_vector,
+            service_name=self.config.service_name,
+            instance_id=self.instance_id,
+        )
+
+        # Build causality vector using updated clock
+        causality_vector: List[Tuple[str, int]] = list(ctx.clock_vector)
 
         # Create event
         event = Event(
@@ -265,6 +317,13 @@ class RacewayClient:
             tags={},
             duration_ns=duration_ns,
         )
+
+    @staticmethod
+    def _safe_hostname() -> str:
+        try:
+            return socket.gethostname()
+        except Exception:
+            return "instance"
 
     def _capture_location(self) -> str:
         """Capture location from stack trace."""

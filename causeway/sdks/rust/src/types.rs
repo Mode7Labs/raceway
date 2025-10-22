@@ -76,6 +76,7 @@ pub struct ClientConfig {
     pub service_name: String,
     pub module_name: String,
     pub api_key: Option<String>,
+    pub instance_id: Option<String>,
 }
 
 impl ClientConfig {
@@ -85,6 +86,7 @@ impl ClientConfig {
             service_name: service_name.to_string(),
             module_name: "app".to_string(),
             api_key: None,
+            instance_id: None,
         }
     }
 
@@ -95,6 +97,11 @@ impl ClientConfig {
 
     pub fn module(mut self, module: &str) -> Self {
         self.module_name = module.to_string();
+        self
+    }
+
+    pub fn with_instance_id(mut self, instance: &str) -> Self {
+        self.instance_id = Some(instance.to_string());
         self
     }
 }

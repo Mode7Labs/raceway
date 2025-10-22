@@ -12,8 +12,8 @@ type Metadata struct {
 
 // CausalityEntry represents a single entry in the causality vector.
 type CausalityEntry struct {
-	EventID string `json:"0"`
-	Clock   uint64 `json:"1"`
+	Component string `json:"component"`
+	Value     uint64 `json:"value"`
 }
 
 // Event represents a single instrumentation event.

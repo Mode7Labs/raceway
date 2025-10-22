@@ -165,6 +165,9 @@ export interface RacewayConfig {
   /** Name of this service */
   serviceName?: string;
 
+  /** Instance identifier for vector clock keys */
+  instanceId?: string;
+
   /** Environment (dev, staging, production) */
   environment?: string;
 
@@ -202,6 +205,11 @@ export interface RacewayContext {
   parentId: UUID | null;
   rootId: UUID | null;
   clock: number;
+  spanId: string;
+  parentSpanId: string | null;
+  distributed: boolean;
+  clockVector: Array<[string, number]>;
+  tracestate: string | null;
 }
 
 /**

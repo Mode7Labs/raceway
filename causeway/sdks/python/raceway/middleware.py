@@ -1,12 +1,12 @@
 """Middleware for automatic Raceway context management."""
 
 import time
-import uuid
 from functools import wraps
 from typing import Callable, Optional
 
-from .context import create_context, set_context, get_context
+from .context import create_context, set_context
 from .client import RacewayClient
+from .trace_context import parse_incoming_headers
 
 
 def flask_middleware(client: RacewayClient):
@@ -38,14 +38,23 @@ def flask_middleware(client: RacewayClient):
             """Initialize Raceway context before request."""
             from flask import request
 
-            # Extract or generate trace ID
-            trace_id = request.headers.get('X-Trace-ID')
-            if not trace_id or not self._is_valid_uuid(trace_id):
-                trace_id = str(uuid.uuid4())
+            parsed = parse_incoming_headers(
+                request.headers,
+                service_name=self.client.config.service_name,
+                instance_id=self.client.instance_id,
+            )
 
             # Create and set context
-            ctx = create_context(trace_id)
+            ctx = create_context(
+                trace_id=parsed.trace_id,
+                span_id=parsed.span_id,
+                parent_span_id=parsed.parent_span_id,
+                distributed=parsed.distributed,
+                clock_vector=parsed.clock_vector,
+                tracestate=parsed.tracestate,
+            )
             set_context(ctx)
+            request.raceway_context = ctx
 
             # Store start time for duration tracking
             request._raceway_start_time = time.time()
@@ -68,15 +77,6 @@ def flask_middleware(client: RacewayClient):
             )
 
             return response
-
-        @staticmethod
-        def _is_valid_uuid(val: str) -> bool:
-            """Check if string is a valid UUID."""
-            try:
-                uuid.UUID(val)
-                return True
-            except (ValueError, AttributeError):
-                return False
 
     return FlaskMiddleware(client)
 
@@ -133,14 +133,23 @@ try:
             self.client = client
 
         async def dispatch(self, request: Request, call_next):
-            # Extract or generate trace ID
-            trace_id = request.headers.get('x-trace-id')
-            if not trace_id or not self._is_valid_uuid(trace_id):
-                trace_id = str(uuid.uuid4())
+            parsed = parse_incoming_headers(
+                request.headers,
+                service_name=self.client.config.service_name,
+                instance_id=self.client.instance_id,
+            )
 
             # Create and set context (contextvars work with async!)
-            ctx = create_context(trace_id)
+            ctx = create_context(
+                trace_id=parsed.trace_id,
+                span_id=parsed.span_id,
+                parent_span_id=parsed.parent_span_id,
+                distributed=parsed.distributed,
+                clock_vector=parsed.clock_vector,
+                tracestate=parsed.tracestate,
+            )
             set_context(ctx)
+            request.state.raceway_context = ctx
 
             # Track HTTP request
             start_time = time.time()
@@ -157,15 +166,6 @@ try:
             )
 
             return response
-
-        @staticmethod
-        def _is_valid_uuid(val: str) -> bool:
-            """Check if string is a valid UUID."""
-            try:
-                uuid.UUID(val)
-                return True
-            except (ValueError, AttributeError):
-                return False
 
 except ImportError:
     # FastAPI not installed, skip FastAPI middleware

@@ -59,6 +59,7 @@ class Config:
     """Raceway client configuration."""
     endpoint: str = "http://localhost:8080"
     service_name: str = "unknown-service"
+    instance_id: Optional[str] = None  # Optional instance identifier for distributed tracing
     environment: str = "development"
     batch_size: int = 50
     flush_interval: float = 1.0  # seconds
@@ -193,6 +194,25 @@ client.track_error(
     "Invalid email format",
     ["app.py:100", "main.py:50"]
 )
+```
+
+### `propagation_headers(extra_headers=None)`
+
+Returns a dictionary containing `traceparent`, `tracestate` (when present), and `raceway-clock` headers for forwarding the current trace to downstream services.
+
+```python
+headers = client.propagation_headers({"x-service-name": "payments"})
+requests.post("http://ledger.internal/debit", headers=headers, json={"amount": 100})
+```
+
+Call this within a request context (i.e., after the Flask/FastAPI middleware has run). It raises `RuntimeError` if invoked outside a trace.
+
+### `request(method, url, **kwargs)`
+
+Convenience wrapper around `requests.Session.request` that automatically adds propagation headers when a trace context is active.
+
+```python
+response = client.request("POST", "http://ledger.internal/debit", json={"amount": 100})
 ```
 
 ### `shutdown()`

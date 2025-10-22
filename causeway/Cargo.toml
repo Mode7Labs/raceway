@@ -1,5 +1,6 @@
 [workspace]
 members = ["core", "cli", "raceway-test"]
+exclude = ["examples/distributed/services/rust-service"]
 resolver = "2"
 
 [workspace.package]

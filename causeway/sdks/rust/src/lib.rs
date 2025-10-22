@@ -12,45 +12,35 @@ Lightweight SDK for race condition detection in Rust applications with automatic
 
 ## Example
 
-```rust
-use raceway_sdk::{RacewayClient, context::RACEWAY_CONTEXT};
-use axum::{Router, routing::post, extract::State, Json};
-use std::sync::Arc;
+```rust,no_run
+use raceway_sdk::RacewayClient;
+use serde::Serialize;
 
-#[tokio::main]
-async fn main() {
-    let client = Arc::new(RacewayClient::new(
-        "http://localhost:8080",
-        "my-service"
-    ));
-
-    let app = Router::new()
-        .route("/api/transfer", post(transfer))
-        .layer(axum::middleware::from_fn(|headers, request, next| {
-            RacewayClient::middleware(client.clone(), headers, request, next)
-        }))
-        .with_state(client);
-
-    // Server runs...
+#[derive(Serialize)]
+struct TransferData {
+    from: String,
+    to: String,
+    amount: u64,
 }
 
-async fn transfer(
-    State(raceway): State<Arc<RacewayClient>>,
-    Json(payload): Json<TransferRequest>
-) -> Json<Response> {
-    // Track function call (no .await needed!)
-    raceway.track_function_call("transfer", &payload);
+// Create a client
+let client = RacewayClient::new("http://localhost:8080", "my-service");
 
-    // All tracking happens automatically within the request context
-    raceway.track_state_change("balance", Some(100), 50, "Write");
+// Track events
+let transfer = TransferData {
+    from: "alice".to_string(),
+    to: "bob".to_string(),
+    amount: 100,
+};
 
-    Json(Response { success: true })
-}
+client.track_function_call("transfer", &transfer);
+client.track_state_change("balance", Some(100), 50, "Write");
 ```
 */
 
 mod client;
 mod context;
+mod trace_context;
 mod types;
 
 pub use client::RacewayClient;

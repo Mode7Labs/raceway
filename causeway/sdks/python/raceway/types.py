@@ -10,6 +10,7 @@ class Config:
     """Raceway client configuration."""
     endpoint: str = "http://localhost:8080"
     service_name: str = "unknown-service"
+    instance_id: Optional[str] = None
     environment: str = field(default_factory=lambda: os.getenv("ENV", "development"))
     batch_size: int = 50
     flush_interval: float = 1.0  # seconds

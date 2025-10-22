@@ -117,6 +117,7 @@ interface RacewayConfig {
   serverUrl: string;              // Raceway server URL (required)
   apiKey?: string;                // API key (uses process.env.RACEWAY_API_KEY if omitted)
   serviceName?: string;           // Service identifier (default: 'unknown-service')
+  instanceId?: string;            // Instance identifier for distributed clocks (default: hostname-PID)
   environment?: string;           // Environment (default: process.env.NODE_ENV || 'development')
   enabled?: boolean;              // Enable/disable tracking (default: true)
   batchSize?: number;             // Event batch size (default: 100)
@@ -138,10 +139,10 @@ app.use(raceway.middleware());
 ```
 
 **What it does:**
-- Extracts or generates trace ID from `X-Trace-ID` header
-- Generates unique virtual thread ID for this request
-- Initializes AsyncLocalStorage context
-- Automatically tracks HTTP request/response
+- Parses incoming `traceparent`, `tracestate`, and `raceway-clock` headers (if present)
+- Generates a new span/trace when no headers are provided
+- Initializes AsyncLocalStorage context shared by all SDK helpers
+- Automatically tracks HTTP request/response events
 
 ---
 
@@ -207,6 +208,29 @@ Track an HTTP response.
 ```typescript
 raceway.trackHttpResponse(200, 45);
 ```
+
+#### `raceway.propagationHeaders(additionalHeaders?)`
+
+Generate outbound headers for cross-service calls. The SDK increments the local vector clock and returns a header map you can spread into `fetch`, `axios`, or any HTTP client.
+
+```typescript
+const headers = raceway.propagationHeaders();
+
+await fetch('http://ledger.internal/debit', {
+  method: 'POST',
+  headers: {
+    ...headers,
+    'content-type': 'application/json'
+  },
+  body: JSON.stringify({ amount: 100 })
+});
+```
+
+The map includes:
+- `traceparent` / `tracestate` (W3C Trace Context)
+- `raceway-clock` (Raceway vector clock payload)
+
+Call this only after the middleware has initialised the request context; otherwise the SDK throws an error.
 
 ### Lifecycle Methods
 

@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from 'async_hooks';
+import os from 'os';
 import { v4 as uuidv4 } from 'uuid';
 import {
   RacewayConfig,
@@ -10,11 +11,24 @@ import {
 } from './types';
 import { RacewayClient } from './client';
 import { createAutoTracker, AutoTrackOptions, PropertyAccess } from './auto-track';
+import {
+  parseIncomingTraceHeaders,
+  buildPropagationHeaders,
+  incrementClockVector,
+} from './trace-context';
 
 /**
  * AsyncLocalStorage for automatic context propagation
  */
 const racewayContext = new AsyncLocalStorage<RacewayContext>();
+
+const safeHostname = (): string => {
+  try {
+    return os.hostname();
+  } catch {
+    return 'instance';
+  }
+};
 
 /**
  * Main Raceway SDK class with plug-and-play architecture
@@ -22,6 +36,7 @@ const racewayContext = new AsyncLocalStorage<RacewayContext>();
 export class Raceway {
   private config: RacewayConfig & {
     serviceName: string;
+    instanceId: string;
     environment: string;
     enabled: boolean;
     batchSize: number;
@@ -37,6 +52,10 @@ export class Raceway {
       serverUrl: config.serverUrl,
       apiKey: config.apiKey,
       serviceName: config.serviceName || 'unknown-service',
+      instanceId:
+        config.instanceId ||
+        process.env.RACEWAY_INSTANCE_ID ||
+        `${safeHostname()}-${process.pid}`,
       environment: config.environment || process.env.NODE_ENV || 'development',
       enabled: config.enabled !== undefined ? config.enabled : true,
       batchSize: config.batchSize || 100,
@@ -65,26 +84,30 @@ export class Raceway {
    */
   public middleware() {
     return (req: any, res: any, next: any) => {
-      // Extract trace ID from header or generate new one
-      // Validate UUID format (8-4-4-4-12 pattern)
-      let traceId = req.headers['x-trace-id'];
-      const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-      if (!traceId || !uuidPattern.test(traceId)) {
-        traceId = uuidv4();
-      }
-
       // Generate unique thread ID for this request context
       const threadId = `node-${process.pid}-${uuidv4().substring(0, 8)}`;
 
+      const parsed = parseIncomingTraceHeaders(req.headers, {
+        serviceName: this.config.serviceName,
+        instanceId: this.config.instanceId,
+      });
+
       // Initialize context for this request
       const ctx: RacewayContext = {
-        traceId,
+        traceId: parsed.traceId,
         threadId,
         parentId: null,
         rootId: null,
         clock: 0,
+        spanId: parsed.spanId,
+        parentSpanId: parsed.parentSpanId,
+        distributed: parsed.distributed,
+        clockVector: parsed.clockVector,
+        tracestate: parsed.tracestate,
       };
+
+      // Expose context on request object for advanced use-cases
+      req.racewayContext = ctx;
 
       // Run the rest of the request within this context
       racewayContext.run(ctx, () => {
@@ -94,6 +117,29 @@ export class Raceway {
         // Continue to handler
         next();
       });
+    };
+  }
+
+  /**
+   * Build outbound propagation headers for HTTP/gRPC requests.
+   */
+  public propagationHeaders(additional: Record<string, string> = {}): Record<string, string> {
+    const ctx = racewayContext.getStore();
+    if (!ctx) {
+      throw new Error('Raceway propagationHeaders() called outside of an active context');
+    }
+
+    const { headers, clockVector } = buildPropagationHeaders(ctx, {
+      serviceName: this.config.serviceName,
+      instanceId: this.config.instanceId,
+    });
+
+    ctx.clockVector = clockVector;
+    ctx.distributed = true;
+
+    return {
+      ...headers,
+      ...additional,
     };
   }
 
@@ -317,6 +363,14 @@ export class Raceway {
   ): Event {
     if (!this.config.enabled) {
       return this.createDummyEvent();
+    }
+
+    const ctx = racewayContext.getStore();
+    if (ctx) {
+      ctx.clockVector = incrementClockVector(ctx.clockVector, {
+        serviceName: this.config.serviceName,
+        instanceId: this.config.instanceId,
+      });
     }
 
     // Build causality vector

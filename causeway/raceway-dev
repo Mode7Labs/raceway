@@ -27,6 +27,7 @@ ICON_TUI="🎨"
 ICON_WEB="🌐"
 ICON_SEED="🌱"
 ICON_DEMO="💰"
+ICON_DISTRIBUTED="🌍"
 ICON_EXIT="👋"
 ICON_TEST="✅"
 
@@ -104,6 +105,34 @@ action_tests() {
     "cargo test -p raceway-core graph::tests"
   run_step "${ICON_TEST} Integration tests (cargo test -p raceway-test)" \
     "cargo test -p raceway-test"
+
+  # SDK tests
+  if command -v npm >/dev/null 2>&1; then
+    run_step "${ICON_TEST} TypeScript SDK tests (npm test)" \
+      "npm test" \
+      "${SCRIPT_DIR}/sdks/typescript"
+  fi
+
+  if command -v go >/dev/null 2>&1; then
+    run_step "${ICON_TEST} Go SDK tests (go test ./...)" \
+      "go test ./..." \
+      "${SCRIPT_DIR}/sdks/go"
+  fi
+
+  if command -v python3 >/dev/null 2>&1; then
+    # Check if pytest is available as a module
+    if python3 -c "import pytest" 2>/dev/null; then
+      run_step "${ICON_TEST} Python SDK tests (python3 -m pytest)" \
+        "python3 -m pytest tests/test_trace_context.py -v" \
+        "${SCRIPT_DIR}/sdks/python"
+    fi
+  fi
+
+  if command -v cargo >/dev/null 2>&1; then
+    run_step "${ICON_TEST} Rust SDK tests (cargo test)" \
+      "cargo test" \
+      "${SCRIPT_DIR}/sdks/rust"
+  fi
 }
 
 action_seed() {
@@ -149,6 +178,15 @@ action_demo_python() {
     "${SCRIPT_DIR}/examples/python-banking"
 }
 
+action_distributed_demo() {
+  printf "${CYAN}${BOLD}${ICON_DISTRIBUTED} Distributed Tracing Demo (Phase 1.5)${RESET}\n"
+  printf "${DIM}Testing header propagation: TypeScript → Python → Go → Rust${RESET}\n\n"
+
+  run_step "${ICON_DISTRIBUTED} Running distributed demo test suite" \
+    "./test.sh" \
+    "${SCRIPT_DIR}/examples/distributed"
+}
+
 # ─── Menu ───────────────────────────────────────────────────────────────────────
 print_menu() {
   print_header
@@ -166,6 +204,9 @@ ${GREEN}7)${RESET} ${ICON_DEMO} TypeScript Banking (Node.js/Express on port 3050
 ${GREEN}8)${RESET} ${ICON_DEMO} Rust Banking (Axum on port 3051)
 ${GREEN}9)${RESET} ${ICON_DEMO} Go Banking (Gin on port 3052)
 ${GREEN}10)${RESET} ${ICON_DEMO} Python Banking (Flask on port 3053)
+
+${BOLD}${CYAN}Distributed Tracing${RESET}
+${GREEN}11)${RESET} ${ICON_DISTRIBUTED} Phase 1.5 Demo (TS → Py → Go → Rust chain on ports 6001-6004)
 
 ${YELLOW}q)${RESET} ${ICON_EXIT} Quit
 EOF
@@ -189,6 +230,7 @@ main_loop() {
       8) action_demo_rust ;;
       9) action_demo_go ;;
       10) action_demo_python ;;
+      11) action_distributed_demo ;;
       q|Q) printf "${ICON_EXIT} Bye!\n"; exit 0 ;;
       *) printf "${RED}Invalid selection.${RESET} Try again.\n\n" ;;
     esac
