@@ -10,6 +10,7 @@ use raceway_sdk::RacewayClient;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
+use tokio::signal;
 
 const PORT: u16 = 6004;
 const SERVICE_NAME: &str = "rust-service";
@@ -43,6 +44,9 @@ struct HealthResponse {
 async fn main() {
     let client = Arc::new(RacewayClient::new("http://localhost:8080", SERVICE_NAME));
 
+    // Clone client for shutdown handler before moving into app state
+    let client_for_shutdown = client.clone();
+
     let app = Router::new()
         .route("/health", get(health_handler))
         .route("/process", post(process_handler))
@@ -57,7 +61,38 @@ async fn main() {
         .unwrap();
 
     println!("{} listening on port {}", SERVICE_NAME, PORT);
-    axum::serve(listener, app).await.unwrap();
+    axum::serve(listener, app)
+        .with_graceful_shutdown(async move {
+            shutdown_signal().await;
+            println!("[{}] Shutting down, flushing events...", SERVICE_NAME);
+            client_for_shutdown.shutdown();
+        })
+        .await
+        .unwrap();
+}
+
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        signal::ctrl_c()
+            .await
+            .expect("failed to install Ctrl+C handler");
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        signal::unix::signal(signal::unix::SignalKind::terminate())
+            .expect("failed to install signal handler")
+            .recv()
+            .await;
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {},
+        _ = terminate => {},
+    }
 }
 
 async fn raceway_middleware(
@@ -81,11 +116,6 @@ async fn process_handler(
     headers: HeaderMap,
     Json(req): Json<ProcessRequest>,
 ) -> (StatusCode, Json<ProcessResponse>) {
-    println!("\n[{}] Received request", SERVICE_NAME);
-    println!("  traceparent: {:?}", headers.get("traceparent"));
-    println!("  raceway-clock: {:?}", headers.get("raceway-clock"));
-    println!("  downstream: {:?}", req.downstream);
-
     // Track some work
     client.track_function_call("process_request", &req.payload);
     client.track_state_change("request_count", Some(0), 1, "Write");
@@ -94,37 +124,25 @@ async fn process_handler(
 
     // Call downstream service if specified
     if let Some(downstream_url) = &req.downstream {
-        println!("  Calling downstream: {}", downstream_url);
+        if let Ok(prop_headers) = client.propagation_headers(None) {
+            let http_client = reqwest::Client::new();
+            let payload = serde_json::json!({
+                "payload": format!("{} → {}", SERVICE_NAME, req.payload),
+                "downstream": req.next_downstream
+            });
 
-        match client.propagation_headers(None) {
-            Ok(prop_headers) => {
-                println!("  Propagating headers:");
-                println!("    traceparent: {:?}", prop_headers.get("traceparent"));
-                println!("    raceway-clock: {:?}", prop_headers.get("raceway-clock"));
-
-                let http_client = reqwest::Client::new();
-                let payload = serde_json::json!({
-                    "payload": format!("{} → {}", SERVICE_NAME, req.payload),
-                    "downstream": req.next_downstream
-                });
-
-                match http_client
-                    .post(downstream_url)
-                    .json(&payload)
-                    .header("traceparent", prop_headers.get("traceparent").unwrap())
-                    .header("raceway-clock", prop_headers.get("raceway-clock").unwrap())
-                    .send()
-                    .await
-                {
-                    Ok(resp) => {
-                        if let Ok(json) = resp.json::<serde_json::Value>().await {
-                            downstream_response = Some(json);
-                        }
-                    }
-                    Err(e) => println!("  Error calling downstream: {}", e),
+            if let Ok(resp) = http_client
+                .post(downstream_url)
+                .json(&payload)
+                .header("traceparent", prop_headers.get("traceparent").unwrap())
+                .header("raceway-clock", prop_headers.get("raceway-clock").unwrap())
+                .send()
+                .await
+            {
+                if let Ok(json) = resp.json::<serde_json::Value>().await {
+                    downstream_response = Some(json);
                 }
             }
-            Err(e) => println!("  Error getting propagation headers: {}", e),
         }
     }
 

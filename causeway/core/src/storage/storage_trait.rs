@@ -1,5 +1,5 @@
 use super::types::{DurationStats, TraceSummary};
-use crate::event::Event;
+use crate::event::{DistributedEdge, DistributedSpan, Event};
 use anyhow::Result;
 use async_trait::async_trait;
 use uuid::Uuid;
@@ -60,6 +60,25 @@ pub trait StorageBackend: Send + Sync {
 
     /// Get all operation names that have baseline metrics
     async fn get_all_baseline_operations(&self) -> Result<Vec<String>>;
+
+    // ========================================================================
+    // Distributed Tracing (Phase 2)
+    // ========================================================================
+
+    /// Add or update a distributed span
+    async fn save_distributed_span(&self, span: DistributedSpan) -> Result<()>;
+
+    /// Get a distributed span by span_id
+    async fn get_distributed_span(&self, span_id: &str) -> Result<Option<DistributedSpan>>;
+
+    /// Get all distributed spans for a trace
+    async fn get_distributed_spans(&self, trace_id: Uuid) -> Result<Vec<DistributedSpan>>;
+
+    /// Add a distributed edge (link between spans)
+    async fn add_distributed_edge(&self, edge: DistributedEdge) -> Result<()>;
+
+    /// Get all distributed edges for a trace
+    async fn get_distributed_edges(&self, trace_id: Uuid) -> Result<Vec<DistributedEdge>>;
 
     // ========================================================================
     // Maintenance

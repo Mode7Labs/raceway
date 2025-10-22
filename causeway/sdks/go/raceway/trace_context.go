@@ -79,13 +79,13 @@ func ParseIncomingHeaders(headers http.Header, serviceName, instanceID string) P
 	component := clockComponent(serviceName, instanceID)
 	hasComponent := false
 	for _, entry := range clockVector {
-		if entry.Component == component {
+		if entry.Component() == component {
 			hasComponent = true
 			break
 		}
 	}
 	if !hasComponent {
-		clockVector = append(clockVector, CausalityEntry{Component: component, Value: 0})
+		clockVector = append(clockVector, NewCausalityEntry(component, 0))
 	}
 
 	return ParsedTraceContext{
@@ -141,15 +141,15 @@ func incrementClockVector(clockVector []CausalityEntry, serviceName, instanceID 
 	next := make([]CausalityEntry, 0, len(clockVector)+1)
 	found := false
 	for _, entry := range clockVector {
-		if entry.Component == component {
-			next = append(next, CausalityEntry{Component: entry.Component, Value: entry.Value + 1})
+		if entry.Component() == component {
+			next = append(next, NewCausalityEntry(entry.Component(), entry.Value()+1))
 			found = true
 		} else {
 			next = append(next, entry)
 		}
 	}
 	if !found {
-		next = append(next, CausalityEntry{Component: component, Value: 1})
+		next = append(next, NewCausalityEntry(component, 1))
 	}
 	return next
 }
@@ -231,7 +231,7 @@ func parseRacewayClock(value string) (parsedClock, bool) {
 		default:
 			continue
 		}
-		entries = append(entries, CausalityEntry{Component: component, Value: valueUint})
+		entries = append(entries, NewCausalityEntry(component, valueUint))
 	}
 
 	var parentSpanID *string
@@ -268,7 +268,7 @@ func traceparentToUUID(value string) string {
 func encodeClockVector(clockVector []CausalityEntry) [][]interface{} {
 	encoded := make([][]interface{}, 0, len(clockVector))
 	for _, entry := range clockVector {
-		encoded = append(encoded, []interface{}{entry.Component, entry.Value})
+		encoded = append(encoded, []interface{}{entry.Component(), entry.Value()})
 	}
 	return encoded
 }

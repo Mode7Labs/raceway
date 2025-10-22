@@ -136,6 +136,10 @@ export interface EventMetadata {
   environment: string;
   tags: Record<string, string>;
   duration_ns: number | null;
+  // Phase 2: Distributed tracing fields
+  instance_id?: string | null;
+  distributed_span_id?: string | null;
+  upstream_span_id?: string | null;
 }
 
 /**

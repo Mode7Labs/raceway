@@ -1,7 +1,7 @@
 use super::storage_trait::StorageBackend;
 use super::types::{DurationStats, TraceSummary};
 use crate::config::StorageConfig;
-use crate::event::{Event, EventKind};
+use crate::event::{DistributedEdge, DistributedSpan, Event, EventKind};
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use sqlx::postgres::{PgPool, PgPoolOptions};
@@ -49,6 +49,12 @@ impl PostgresBackend {
                 include_str!("../../../migrations/postgres/002_add_performance_indexes.sql");
             sqlx::raw_sql(migration_002).execute(&pool).await?;
             tracing::info!("✓ Migration 002 (performance indexes) completed");
+
+            // Migration 003: Distributed tracing
+            let migration_003 =
+                include_str!("../../../migrations/postgres/003_distributed_tracing.sql");
+            sqlx::raw_sql(migration_003).execute(&pool).await?;
+            tracing::info!("✓ Migration 003 (distributed tracing) completed");
 
             tracing::info!("All migrations completed successfully");
         }
@@ -451,6 +457,119 @@ impl StorageBackend for PostgresBackend {
         Ok(rows.into_iter().map(|row| row.get("operation")).collect())
     }
 
+    async fn save_distributed_span(&self, span: DistributedSpan) -> Result<()> {
+        let span_json = serde_json::to_value(&span)?;
+
+        sqlx::query(
+            r#"
+            INSERT INTO distributed_spans (trace_id, span_id, service, instance, first_event, last_event, span_data)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            ON CONFLICT (span_id) DO UPDATE SET
+                last_event = EXCLUDED.last_event,
+                span_data = EXCLUDED.span_data
+            "#,
+        )
+        .bind(span.trace_id)
+        .bind(&span.span_id)
+        .bind(&span.service)
+        .bind(&span.instance)
+        .bind(span.first_event)
+        .bind(span.last_event)
+        .bind(span_json)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
+
+    async fn get_distributed_span(&self, span_id: &str) -> Result<Option<DistributedSpan>> {
+        let row = sqlx::query(
+            r#"
+            SELECT span_data
+            FROM distributed_spans
+            WHERE span_id = $1
+            "#,
+        )
+        .bind(span_id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        if let Some(row) = row {
+            let span_json: serde_json::Value = row.get("span_data");
+            let span: DistributedSpan = serde_json::from_value(span_json)?;
+            Ok(Some(span))
+        } else {
+            Ok(None)
+        }
+    }
+
+    async fn get_distributed_spans(&self, trace_id: Uuid) -> Result<Vec<DistributedSpan>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT span_data
+            FROM distributed_spans
+            WHERE trace_id = $1
+            ORDER BY first_event
+            "#,
+        )
+        .bind(trace_id)
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut spans = Vec::new();
+        for row in rows {
+            let span_json: serde_json::Value = row.get("span_data");
+            let span: DistributedSpan = serde_json::from_value(span_json)?;
+            spans.push(span);
+        }
+
+        Ok(spans)
+    }
+
+    async fn add_distributed_edge(&self, edge: DistributedEdge) -> Result<()> {
+        let edge_json = serde_json::to_value(&edge)?;
+        let link_type_str = format!("{:?}", edge.link_type);
+
+        sqlx::query(
+            r#"
+            INSERT INTO distributed_edges (from_span, to_span, link_type, edge_data)
+            VALUES ($1, $2, $3, $4)
+            ON CONFLICT (from_span, to_span) DO NOTHING
+            "#,
+        )
+        .bind(&edge.from_span)
+        .bind(&edge.to_span)
+        .bind(link_type_str)
+        .bind(edge_json)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
+
+    async fn get_distributed_edges(&self, trace_id: Uuid) -> Result<Vec<DistributedEdge>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT de.edge_data
+            FROM distributed_edges de
+            JOIN distributed_spans ds ON de.from_span = ds.span_id
+            WHERE ds.trace_id = $1
+            "#,
+        )
+        .bind(trace_id)
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut edges = Vec::new();
+        for row in rows {
+            let edge_json: serde_json::Value = row.get("edge_data");
+            let edge: DistributedEdge = serde_json::from_value(edge_json)?;
+            edges.push(edge);
+        }
+
+        Ok(edges)
+    }
+
     async fn cleanup_old_traces(&self, retention_hours: u64) -> Result<usize> {
         let result = sqlx::query(
             r#"
@@ -471,7 +590,7 @@ impl StorageBackend for PostgresBackend {
     }
 
     async fn clear(&self) -> Result<()> {
-        sqlx::query("TRUNCATE events, causal_edges, trace_roots, baseline_metrics, cross_trace_index CASCADE")
+        sqlx::query("TRUNCATE events, causal_edges, trace_roots, baseline_metrics, cross_trace_index, distributed_spans, distributed_edges CASCADE")
             .execute(&self.pool)
             .await?;
 

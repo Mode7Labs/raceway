@@ -78,6 +78,9 @@ mod tests {
             environment: "dev".to_string(),
             tags: HashMap::new(),
             duration_ns: None,
+            instance_id: None,
+            distributed_span_id: None,
+            upstream_span_id: None,
         };
 
         let event = Event::new(

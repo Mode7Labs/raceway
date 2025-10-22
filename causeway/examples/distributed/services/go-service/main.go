@@ -2,11 +2,16 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
 	raceway "github.com/mode-7/raceway/raceway"
 )
@@ -35,15 +40,35 @@ func main() {
 	config := raceway.DefaultConfig()
 	config.ServiceName = SERVICE_NAME
 	config.InstanceID = "go-1"
-	config.Debug = true
 	client = raceway.New(config)
-	defer client.Shutdown()
 
 	http.HandleFunc("/health", healthHandler)
 	http.HandleFunc("/process", processHandler)
 
+	// Setup graceful shutdown
+	server := &http.Server{
+		Addr: fmt.Sprintf(":%d", PORT),
+	}
+
+	// Handle shutdown signals
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+
+	go func() {
+		<-sigChan
+		fmt.Printf("\n[%s] Shutting down, flushing events...\n", SERVICE_NAME)
+		client.Shutdown()
+
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		server.Shutdown(ctx)
+		os.Exit(0)
+	}()
+
 	fmt.Printf("%s listening on port %d\n", SERVICE_NAME, PORT)
-	log.Fatal(http.ListenAndServe(fmt.Sprintf(":%d", PORT), nil))
+	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		log.Fatalf("Server error: %v", err)
+	}
 }
 
 func healthHandler(w http.ResponseWriter, r *http.Request) {
@@ -78,11 +103,6 @@ func processHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	fmt.Printf("\n[%s] Received request\n", SERVICE_NAME)
-	fmt.Printf("  traceparent: %s\n", r.Header.Get("traceparent"))
-	fmt.Printf("  raceway-clock: %s\n", r.Header.Get("raceway-clock"))
-	fmt.Printf("  downstream: %s\n", req.Downstream)
-
 	// Track some work
 	client.TrackFunctionCall(ctx, "processRequest", "", map[string]string{"payload": req.Payload}, "", 0)
 	client.TrackStateChange(ctx, "requestCount", nil, 1, "", "Write")
@@ -91,16 +111,8 @@ func processHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Call downstream service if specified
 	if req.Downstream != "" {
-		fmt.Printf("  Calling downstream: %s\n", req.Downstream)
-
 		headers, err := client.PropagationHeaders(ctx, nil)
-		if err != nil {
-			fmt.Printf("  Error getting propagation headers: %v\n", err)
-		} else {
-			fmt.Printf("  Propagating headers:\n")
-			fmt.Printf("    traceparent: %s\n", headers["traceparent"])
-			fmt.Printf("    raceway-clock: %s\n", headers["raceway-clock"])
-
+		if err == nil {
 			payload := map[string]interface{}{
 				"payload":    fmt.Sprintf("%s → %s", SERVICE_NAME, req.Payload),
 				"downstream": req.NextDownstream,
@@ -114,9 +126,7 @@ func processHandler(w http.ResponseWriter, r *http.Request) {
 			}
 
 			resp, err := http.DefaultClient.Do(httpReq)
-			if err != nil {
-				fmt.Printf("  Error calling downstream: %v\n", err)
-			} else {
+			if err == nil {
 				defer resp.Body.Close()
 				body, _ := io.ReadAll(resp.Body)
 				json.Unmarshal(body, &downstreamResponse)

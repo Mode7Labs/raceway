@@ -27,6 +27,9 @@ pub fn sample_trace_fixture() -> TraceFixture {
         environment: "test".into(),
         tags: Default::default(),
         duration_ns: Some(17_000_000),
+        instance_id: None,
+        distributed_span_id: None,
+        upstream_span_id: None,
     };
 
     let metadata_a = EventMetadata {
@@ -36,6 +39,9 @@ pub fn sample_trace_fixture() -> TraceFixture {
         environment: "test".into(),
         tags: Default::default(),
         duration_ns: Some(8_000_000),
+        instance_id: None,
+        distributed_span_id: None,
+        upstream_span_id: None,
     };
 
     let metadata_b = EventMetadata {
@@ -45,6 +51,9 @@ pub fn sample_trace_fixture() -> TraceFixture {
         environment: "test".into(),
         tags: Default::default(),
         duration_ns: Some(9_000_000),
+        instance_id: None,
+        distributed_span_id: None,
+        upstream_span_id: None,
     };
 
     let metadata_finish = EventMetadata {
@@ -54,6 +63,9 @@ pub fn sample_trace_fixture() -> TraceFixture {
         environment: "test".into(),
         tags: Default::default(),
         duration_ns: Some(3_000_000),
+        instance_id: None,
+        distributed_span_id: None,
+        upstream_span_id: None,
     };
 
     let root = Event {

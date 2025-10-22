@@ -1,7 +1,7 @@
 use super::storage_trait::StorageBackend;
 use super::types::{DurationStats, TraceSummary};
 use crate::config::StorageConfig;
-use crate::event::Event;
+use crate::event::{DistributedEdge, DistributedSpan, Event};
 use anyhow::Result;
 use async_trait::async_trait;
 use dashmap::DashMap;
@@ -14,6 +14,9 @@ pub struct MemoryBackend {
     events: DashMap<Uuid, Event>,
     trace_events: DashMap<Uuid, RwLock<Vec<Uuid>>>, // trace_id -> event IDs
     baselines: DashMap<String, DurationStats>,
+    // Distributed tracing (Phase 2)
+    distributed_spans: DashMap<String, DistributedSpan>, // span_id -> span
+    distributed_edges: DashMap<Uuid, RwLock<Vec<DistributedEdge>>>, // trace_id -> edges
 }
 
 impl MemoryBackend {
@@ -22,6 +25,8 @@ impl MemoryBackend {
             events: DashMap::new(),
             trace_events: DashMap::new(),
             baselines: DashMap::new(),
+            distributed_spans: DashMap::new(),
+            distributed_edges: DashMap::new(),
         })
     }
 }
@@ -168,6 +173,50 @@ impl StorageBackend for MemoryBackend {
         Ok(self.baselines.iter().map(|e| e.key().clone()).collect())
     }
 
+    async fn save_distributed_span(&self, span: DistributedSpan) -> Result<()> {
+        self.distributed_spans.insert(span.span_id.clone(), span);
+        Ok(())
+    }
+
+    async fn get_distributed_span(&self, span_id: &str) -> Result<Option<DistributedSpan>> {
+        Ok(self.distributed_spans.get(span_id).map(|s| s.clone()))
+    }
+
+    async fn get_distributed_spans(&self, trace_id: Uuid) -> Result<Vec<DistributedSpan>> {
+        let spans: Vec<DistributedSpan> = self
+            .distributed_spans
+            .iter()
+            .filter(|entry| entry.value().trace_id == trace_id)
+            .map(|entry| entry.value().clone())
+            .collect();
+        Ok(spans)
+    }
+
+    async fn add_distributed_edge(&self, edge: DistributedEdge) -> Result<()> {
+        // Get the trace_id from the span (we need to look it up)
+        // For now, we'll need to find which trace this edge belongs to
+        // by looking up the from_span
+        if let Some(from_span) = self.distributed_spans.get(&edge.from_span) {
+            let trace_id = from_span.trace_id;
+            self.distributed_edges
+                .entry(trace_id)
+                .or_insert_with(|| RwLock::new(Vec::new()))
+                .write()
+                .unwrap()
+                .push(edge);
+        }
+        Ok(())
+    }
+
+    async fn get_distributed_edges(&self, trace_id: Uuid) -> Result<Vec<DistributedEdge>> {
+        let edges = self
+            .distributed_edges
+            .get(&trace_id)
+            .map(|e| e.read().unwrap().clone())
+            .unwrap_or_default();
+        Ok(edges)
+    }
+
     async fn cleanup_old_traces(&self, retention_hours: u64) -> Result<usize> {
         let cutoff_time = chrono::Utc::now() - chrono::Duration::hours(retention_hours as i64);
         let mut deleted_count = 0;
@@ -212,6 +261,8 @@ impl StorageBackend for MemoryBackend {
         self.events.clear();
         self.trace_events.clear();
         self.baselines.clear();
+        self.distributed_spans.clear();
+        self.distributed_edges.clear();
         Ok(())
     }
 }

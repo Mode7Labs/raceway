@@ -1,4 +1,4 @@
-use crate::event::Event;
+use crate::event::{DistributedEdge, DistributedSpan, EdgeLinkType, Event};
 use crate::graph::{Anomaly, AuditTrail, CausalGraph, CriticalPath, ServiceDependencies, TreeNode};
 use crate::storage::{CrossTraceRace, StorageBackend, TraceAnalysisData};
 use anyhow::{Context, Result};
@@ -113,8 +113,68 @@ impl AnalysisService {
 
     /// Add an event (this goes through storage, then updates graph)
     pub async fn add_event(&self, event: Event) -> Result<()> {
+        // Debug logging for distributed tracing
+        if event.metadata.instance_id.is_some()
+            || event.metadata.distributed_span_id.is_some()
+            || event.metadata.upstream_span_id.is_some() {
+            tracing::debug!(
+                "Event {} has distributed metadata: instance_id={:?}, span_id={:?}, upstream={:?}",
+                event.id,
+                event.metadata.instance_id,
+                event.metadata.distributed_span_id,
+                event.metadata.upstream_span_id
+            );
+        }
+
         // Persist to storage first
         self.storage.add_event(event.clone()).await?;
+
+        // Handle distributed tracing metadata if present (Phase 2)
+        if let Some(span_id) = &event.metadata.distributed_span_id {
+            // Create or update distributed span
+            let existing_span = self.storage.get_distributed_span(span_id).await?;
+
+            let span = if let Some(mut existing) = existing_span {
+                // Update existing span's last_event timestamp
+                existing.last_event = Some(event.timestamp);
+                existing
+            } else {
+                // Create new span
+                DistributedSpan {
+                    trace_id: event.trace_id,
+                    span_id: span_id.clone(),
+                    service: event.metadata.service_name.clone(),
+                    instance: event.metadata.instance_id.clone().unwrap_or_default(),
+                    first_event: event.timestamp,
+                    last_event: Some(event.timestamp),
+                }
+            };
+
+            self.storage.save_distributed_span(span).await?;
+
+            // Create distributed edge if there's an upstream span
+            if let Some(upstream_span_id) = &event.metadata.upstream_span_id {
+                // Determine edge type based on event kind
+                let link_type = match &event.kind {
+                    crate::event::EventKind::HttpRequest { .. } => EdgeLinkType::HttpCall,
+                    crate::event::EventKind::HttpResponse { .. } => EdgeLinkType::HttpCall,
+                    crate::event::EventKind::DatabaseQuery { .. } => EdgeLinkType::DatabaseQuery,
+                    _ => EdgeLinkType::Custom,
+                };
+
+                let edge = DistributedEdge {
+                    from_span: upstream_span_id.clone(),
+                    to_span: span_id.clone(),
+                    link_type,
+                    metadata: serde_json::json!({
+                        "event_id": event.id,
+                        "timestamp": event.timestamp,
+                    }),
+                };
+
+                self.storage.add_distributed_edge(edge).await?;
+            }
+        }
 
         // Then update in-memory graph
         let graph = self.graph.write().await;
@@ -253,10 +313,143 @@ impl AnalysisService {
         graph.get_causal_order(trace_id)
     }
 
+    /// Get merged trace events across distributed spans (Phase 2)
+    /// This fetches events from the primary trace and all related traces connected via distributed edges
+    /// Uses BFS to recursively follow all edges through arbitrary-length service chains
+    async fn get_merged_trace_events(&self, trace_id: Uuid) -> Result<Vec<Event>> {
+        use std::collections::{HashSet, VecDeque, HashMap};
+
+        // Start with events from the primary trace
+        let mut all_events = self.storage.get_trace_events(trace_id).await?;
+
+        // Get all distributed spans for this trace
+        let spans = self.storage.get_distributed_spans(trace_id).await?;
+
+        if spans.is_empty() {
+            // No distributed tracing - return just the primary trace events
+            return Ok(all_events);
+        }
+
+        tracing::debug!(
+            "Merging distributed trace {}: found {} initial spans",
+            trace_id,
+            spans.len()
+        );
+
+        // BFS to recursively discover all connected spans through edges
+        let mut visited_spans: HashSet<String> = HashSet::new();
+        let mut span_queue: VecDeque<(String, Uuid)> = VecDeque::new(); // (span_id, trace_id)
+
+        // Start with all spans from the primary trace
+        for span in &spans {
+            span_queue.push_back((span.span_id.clone(), span.trace_id));
+            visited_spans.insert(span.span_id.clone());
+        }
+
+        // Keep track of which traces we've explored for edges (to avoid redundant queries)
+        let mut explored_traces: HashSet<Uuid> = HashSet::new();
+        explored_traces.insert(trace_id);
+
+        // BFS: recursively follow all edges to discover the entire distributed trace graph
+        while let Some((current_span_id, current_trace_id)) = span_queue.pop_front() {
+            // Get all edges from this trace (if we haven't explored it yet)
+            if explored_traces.insert(current_trace_id) {
+                let edges = self.storage.get_distributed_edges(current_trace_id).await?;
+
+                tracing::debug!(
+                    "Found {} edges from trace {} (span {})",
+                    edges.len(),
+                    current_trace_id,
+                    current_span_id
+                );
+
+                // Follow each edge to discover connected spans
+                for edge in edges {
+                    // Add both ends of the edge (from_span and to_span) to ensure we capture everything
+                    for next_span_id in [&edge.from_span, &edge.to_span] {
+                        if visited_spans.insert(next_span_id.clone()) {
+                            // New span discovered - look it up to get its trace_id
+                            if let Some(span) = self.storage.get_distributed_span(next_span_id).await? {
+                                span_queue.push_back((span.span_id.clone(), span.trace_id));
+
+                                tracing::debug!(
+                                    "Discovered span {} in trace {} via edge",
+                                    next_span_id,
+                                    span.trace_id
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        tracing::debug!(
+            "BFS complete: discovered {} total spans across {} traces",
+            visited_spans.len(),
+            explored_traces.len()
+        );
+
+        // Now collect events from all discovered spans
+        // Group spans by trace_id to minimize queries
+        let mut trace_to_spans: HashMap<Uuid, Vec<String>> = HashMap::new();
+
+        for span_id in &visited_spans {
+            if let Some(span) = self.storage.get_distributed_span(span_id).await? {
+                trace_to_spans
+                    .entry(span.trace_id)
+                    .or_insert_with(Vec::new)
+                    .push(span_id.clone());
+            }
+        }
+
+        // Fetch events from each trace and filter by span_id
+        for (tid, span_ids) in trace_to_spans {
+            if tid != trace_id {
+                // Fetch events from related trace
+                let related_events = self.storage.get_trace_events(tid).await?;
+
+                // Filter to only events belonging to our discovered spans
+                let span_set: HashSet<&String> = span_ids.iter().collect();
+                let filtered_events: Vec<Event> = related_events
+                    .into_iter()
+                    .filter(|e| {
+                        e.metadata
+                            .distributed_span_id
+                            .as_ref()
+                            .map_or(false, |sid| span_set.contains(sid))
+                    })
+                    .collect();
+
+                tracing::debug!(
+                    "Adding {} events from {} spans in trace {}",
+                    filtered_events.len(),
+                    span_ids.len(),
+                    tid
+                );
+
+                all_events.extend(filtered_events);
+            }
+        }
+
+        // Sort all events by timestamp to create a unified timeline
+        all_events.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
+
+        tracing::info!(
+            "Merged trace {}: {} total events from {} spans across {} traces",
+            trace_id,
+            all_events.len(),
+            visited_spans.len(),
+            explored_traces.len()
+        );
+
+        Ok(all_events)
+    }
+
     /// Get trace analysis data (batch fetch for UI)
     pub async fn get_trace_analysis_data(&self, trace_id: Uuid) -> Result<TraceAnalysisData> {
-        // Fetch events from storage
-        let events = self.storage.get_trace_events(trace_id).await?;
+        // Fetch events from storage (Phase 2: merge distributed traces)
+        let events = self.get_merged_trace_events(trace_id).await?;
 
         self.ensure_trace_loaded_from_events(trace_id, &events)
             .await?;

@@ -45,6 +45,12 @@ class RacewayClient:
         self.flush_thread = threading.Thread(target=self._auto_flush, daemon=True)
         self.flush_thread.start()
 
+        # Debug logging on initialization
+        if self.config.debug:
+            print(f"[Raceway] Initialized with config: endpoint={self.config.endpoint}, "
+                  f"service={self.config.service_name}, instance={self.instance_id}, "
+                  f"batch_size={self.config.batch_size}, flush_interval={self.config.flush_interval}")
+
     def track_state_change(
         self,
         variable: str,
@@ -64,7 +70,7 @@ class RacewayClient:
         ctx = get_context()
         if ctx is None:
             if self.config.debug:
-                print("[Raceway] track_state_change called outside of context")
+                print("[Raceway] track_state_change called outside of context", flush=True)
             return
 
         location = self._capture_location()
@@ -252,7 +258,7 @@ class RacewayClient:
         except RuntimeError:
             propagation = {}
             if self.config.debug:
-                print("[Raceway] propagation_headers called without active context; sending request without trace headers")
+                print("[Raceway] propagation_headers called without active context; sending request without trace headers", flush=True)
 
         # Merge headers with preference to explicit headers
         merged_headers = {**propagation, **headers}
@@ -296,27 +302,45 @@ class RacewayClient:
         # Buffer event
         with self.lock:
             self.event_buffer.append(event)
+            buffer_size = len(self.event_buffer)
 
             # Flush if batch size reached
-            if len(self.event_buffer) >= self.config.batch_size:
+            if buffer_size >= self.config.batch_size:
                 threading.Thread(target=self.flush, daemon=True).start()
 
         if self.config.debug:
             kind_name = list(kind.__dict__.keys())[0] if hasattr(kind, '__dict__') else "Unknown"
-            print(f"[Raceway] Captured event {event.id}: {kind_name}")
+            print(f"[Raceway] Buffered event {event.id[:8]} (buffer size: {buffer_size})", flush=True)
+            print(f"[Raceway] Captured event {event.id[:8]}: {kind_name}", flush=True)
 
         return event
 
     def _build_metadata(self, execution_id: str, duration_ns: Optional[int] = None) -> EventMetadata:
         """Build event metadata."""
-        return EventMetadata(
+        ctx = get_context()
+
+        metadata = EventMetadata(
             thread_id=execution_id,  # Use execution ID as thread ID
             process_id=os.getpid(),
             service_name=self.config.service_name,
             environment=self.config.environment,
             tags={},
             duration_ns=duration_ns,
+            # Phase 2: Distributed tracing fields
+            # Always set distributed metadata when we have a context (not gated by distributed flag)
+            # This ensures entry-point services also create distributed spans
+            instance_id=self.instance_id if ctx else None,
+            distributed_span_id=ctx.span_id if ctx else None,
+            upstream_span_id=ctx.parent_span_id if ctx else None,
         )
+
+        # Debug logging for distributed tracing
+        if self.config.debug and ctx:
+            print(f"[Raceway] Distributed metadata: distributed={ctx.distributed}, "
+                  f"instance_id={metadata.instance_id}, span_id={metadata.distributed_span_id}, "
+                  f"upstream={metadata.upstream_span_id}")
+
+        return metadata
 
     @staticmethod
     def _safe_hostname() -> str:
@@ -345,6 +369,9 @@ class RacewayClient:
             events = self.event_buffer[:]
             self.event_buffer.clear()
 
+        if self.config.debug:
+            print(f"[Raceway] Flushing {len(events)} events to {self.config.endpoint}/events", flush=True)
+
         try:
             # Convert events to dictionaries
             events_dict = []
@@ -366,11 +393,11 @@ class RacewayClient:
 
             if response.status_code == 200:
                 if self.config.debug:
-                    print(f"[Raceway] Sent {len(events)} events")
+                    print(f"[Raceway] Sent {len(events)} events", flush=True)
             else:
-                print(f"[Raceway] Failed to send events: {response.status_code} - {response.text}")
+                print(f"[Raceway] Failed to send events: {response.status_code} - {response.text}", flush=True)
         except Exception as e:
-            print(f"[Raceway] Error sending events: {e}")
+            print(f"[Raceway] Error sending events: {e}", flush=True)
 
     def _auto_flush(self):
         """Auto-flush background thread."""

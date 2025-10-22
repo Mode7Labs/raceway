@@ -179,25 +179,44 @@ impl CausalGraph {
         drop(clock_value);
 
         // Build the causality vector for this event
-        let mut causality_vector: Vec<(Uuid, u64)> = Vec::new();
+        // For single-service traces: component = trace_id.to_string()
+        // For distributed traces: component = "service#instance"
+        // Start with any pre-existing causality vector (from distributed propagation via SDKs)
+        let mut causality_vector: Vec<(String, u64)> = event.causality_vector.clone();
 
-        // If there's a parent, merge parent's vector clock
+        // If there's a parent, merge parent's vector clock (take max of each component)
         if let Some(parent_id) = event.parent_id {
             if let Some(parent_entry) = self.nodes.get(&parent_id) {
                 let parent_event = &parent_entry.value().1.event;
 
-                // Merge vector clocks (take max of each component)
-                for (parent_trace_id, parent_clock) in &parent_event.causality_vector {
-                    causality_vector.push((*parent_trace_id, *parent_clock));
+                // Merge vector clocks: for each component in parent, take max with existing
+                for (parent_component, parent_clock) in &parent_event.causality_vector {
+                    if let Some(existing) = causality_vector.iter_mut().find(|(c, _)| c == parent_component) {
+                        // Component exists in both - take the maximum
+                        existing.1 = existing.1.max(*parent_clock);
+                    } else {
+                        // Component only in parent - add it
+                        causality_vector.push((parent_component.clone(), *parent_clock));
+                    }
                 }
             }
         }
 
-        // Update or add this trace's entry in the causality vector
-        if let Some(existing) = causality_vector.iter_mut().find(|(id, _)| *id == trace_id) {
+        // Determine the component key for this event's clock
+        // Use distributed span info if available, otherwise use trace_id
+        let component = if let Some(instance) = &event.metadata.instance_id {
+            // Distributed trace: use "service#instance" format
+            format!("{}#{}", event.metadata.service_name, instance)
+        } else {
+            // Single-service trace: use trace_id as component
+            trace_id.to_string()
+        };
+
+        // Update or add this component's entry in the causality vector
+        if let Some(existing) = causality_vector.iter_mut().find(|(c, _)| c == &component) {
             existing.1 = current_clock;
         } else {
-            causality_vector.push((trace_id, current_clock));
+            causality_vector.push((component, current_clock));
         }
 
         event.causality_vector = causality_vector;
@@ -1465,6 +1484,9 @@ mod tests {
             environment: "dev".to_string(),
             tags: HashMap::new(),
             duration_ns: None,
+            instance_id: None,
+            distributed_span_id: None,
+            upstream_span_id: None,
         };
 
         let event = Event::new(
@@ -1953,6 +1975,9 @@ mod tests {
             environment: "test".into(),
             tags: HashMap::new(),
             duration_ns: Some(duration_ms * 1_000_000),
+            instance_id: None,
+            distributed_span_id: None,
+            upstream_span_id: None,
         }
     }
 
@@ -1973,5 +1998,494 @@ mod tests {
             causality_vector: Vec::new(),
             lock_set: Vec::new(),
         }
+    }
+
+    // ─── Vector Clock Tests ─────────────────────────────────────────────────
+
+    #[test]
+    fn vector_clock_merge_during_event_ingestion() {
+        let graph = CausalGraph::new();
+        let trace_id = Uuid::new_v4();
+        let base = Utc.with_ymd_and_hms(2024, 1, 1, 12, 0, 0).unwrap();
+
+        // Event 1: service-a#instance-1
+        let event1_id = Uuid::new_v4();
+        let mut metadata1 = metadata_with_service("thread-1", "service-a", 5);
+        metadata1.instance_id = Some("instance-1".into());
+
+        graph
+            .add_event(Event {
+                id: event1_id,
+                trace_id,
+                parent_id: None,
+                timestamp: base,
+                kind: EventKind::FunctionCall {
+                    function_name: "handler1".into(),
+                    module: "svc-a".into(),
+                    args: serde_json::json!({}),
+                    file: "svc_a.rs".into(),
+                    line: 10,
+                },
+                metadata: metadata1,
+                causality_vector: Vec::new(),
+                lock_set: Vec::new(),
+            })
+            .unwrap();
+
+        // Get event1's clock and pass it to event2 to simulate distributed propagation
+        let event1 = graph.nodes.get(&event1_id).unwrap().value().1.event.clone();
+        let inherited_clock = event1.causality_vector.clone();
+
+        // Event 2: service-b#instance-1, receives inherited clock from service-a
+        let event2_id = Uuid::new_v4();
+        let mut metadata2 = metadata_with_service("thread-2", "service-b", 7);
+        metadata2.instance_id = Some("instance-1".into());
+
+        graph
+            .add_event(Event {
+                id: event2_id,
+                trace_id,
+                parent_id: None,
+                timestamp: base + ChronoDuration::milliseconds(5),
+                kind: EventKind::FunctionCall {
+                    function_name: "handler2".into(),
+                    module: "svc-b".into(),
+                    args: serde_json::json!({}),
+                    file: "svc_b.rs".into(),
+                    line: 20,
+                },
+                metadata: metadata2,
+                causality_vector: inherited_clock,
+                lock_set: Vec::new(),
+            })
+            .unwrap();
+
+        let event2 = graph.nodes.get(&event2_id).unwrap().value().1.event.clone();
+
+        // Verify event2 has both service-a and service-b in its clock vector
+        // service-a component was inherited, service-b component was added by add_event
+        let has_service_a = event2
+            .causality_vector
+            .iter()
+            .any(|(component, _)| component.starts_with("service-a#"));
+        let has_service_b = event2
+            .causality_vector
+            .iter()
+            .any(|(component, _)| component.starts_with("service-b#"));
+
+        assert!(
+            has_service_a,
+            "event2 should inherit service-a component, clock: {:?}",
+            event2.causality_vector
+        );
+        assert!(
+            has_service_b,
+            "event2 should have service-b component, clock: {:?}",
+            event2.causality_vector
+        );
+        assert_eq!(
+            event2.causality_vector.len(),
+            2,
+            "event2 should have exactly 2 components (service-a + service-b)"
+        );
+    }
+
+    #[test]
+    fn vector_clock_concurrent_events_different_services() {
+        let graph = CausalGraph::new();
+        let trace_id = Uuid::new_v4();
+        let base = Utc.with_ymd_and_hms(2024, 1, 1, 12, 0, 0).unwrap();
+
+        // Create two events in different services with independent clocks
+        let event1_id = Uuid::new_v4();
+        let mut metadata1 = metadata_with_service("thread-1", "service-a", 5);
+        metadata1.instance_id = Some("instance-1".into());
+
+        graph
+            .add_event(Event {
+                id: event1_id,
+                trace_id,
+                parent_id: None,
+                timestamp: base,
+                kind: EventKind::StateChange {
+                    variable: "balance".into(),
+                    old_value: Some(serde_json::json!(100)),
+                    new_value: serde_json::json!(50),
+                    location: "account.rs:10".into(),
+                    access_type: AccessType::Write,
+                },
+                metadata: metadata1,
+                causality_vector: vec![("service-a#instance-1".into(), 5)],
+                lock_set: Vec::new(),
+            })
+            .unwrap();
+
+        let event2_id = Uuid::new_v4();
+        let mut metadata2 = metadata_with_service("thread-2", "service-b", 7);
+        metadata2.instance_id = Some("instance-1".into());
+
+        graph
+            .add_event(Event {
+                id: event2_id,
+                trace_id,
+                parent_id: None,
+                timestamp: base + ChronoDuration::milliseconds(1),
+                kind: EventKind::StateChange {
+                    variable: "balance".into(),
+                    old_value: Some(serde_json::json!(100)),
+                    new_value: serde_json::json!(75),
+                    location: "account.rs:20".into(),
+                    access_type: AccessType::Write,
+                },
+                metadata: metadata2,
+                causality_vector: vec![("service-b#instance-1".into(), 4)],
+                lock_set: Vec::new(),
+            })
+            .unwrap();
+
+        let event1 = graph.nodes.get(&event1_id).unwrap().value().1.event.clone();
+        let event2 = graph.nodes.get(&event2_id).unwrap().value().1.event.clone();
+
+        // Neither should happen-before the other (concurrent)
+        assert!(
+            !graph.happens_before_vc(&event1, &event2),
+            "event1 should not happen-before event2"
+        );
+        assert!(
+            !graph.happens_before_vc(&event2, &event1),
+            "event2 should not happen-before event1"
+        );
+    }
+
+    #[test]
+    fn vector_clock_merge_distributed_context() {
+        let graph = CausalGraph::new();
+        let trace_id = Uuid::new_v4();
+        let base = Utc.with_ymd_and_hms(2024, 1, 1, 12, 0, 0).unwrap();
+
+        // Event A: First event in service-a
+        let event_a_id = Uuid::new_v4();
+        let mut metadata_a = metadata_with_service("thread-1", "service-a", 5);
+        metadata_a.instance_id = Some("inst-1".into());
+
+        graph
+            .add_event(Event {
+                id: event_a_id,
+                trace_id,
+                parent_id: None,
+                timestamp: base,
+                kind: EventKind::FunctionCall {
+                    function_name: "handleRequest".into(),
+                    module: "api".into(),
+                    args: serde_json::json!({}),
+                    file: "api.rs".into(),
+                    line: 10,
+                },
+                metadata: metadata_a,
+                causality_vector: Vec::new(),
+                lock_set: Vec::new(),
+            })
+            .unwrap();
+
+        let event_a = graph.nodes.get(&event_a_id).unwrap().value().1.event.clone();
+        let clock_from_a = event_a.causality_vector.clone();
+
+        // Event B: In service-b, receives clock from service-a via distributed propagation
+        // This simulates what happens when an SDK sends a pre-populated causality_vector
+        let event_b_id = Uuid::new_v4();
+        let mut metadata_b = metadata_with_service("thread-2", "service-b", 7);
+        metadata_b.instance_id = Some("inst-1".into());
+
+        graph
+            .add_event(Event {
+                id: event_b_id,
+                trace_id,
+                parent_id: None,
+                timestamp: base + ChronoDuration::milliseconds(10),
+                kind: EventKind::FunctionCall {
+                    function_name: "processData".into(),
+                    module: "processor".into(),
+                    args: serde_json::json!({}),
+                    file: "processor.rs".into(),
+                    line: 20,
+                },
+                metadata: metadata_b,
+                causality_vector: clock_from_a, // Inherited from service-a
+                lock_set: Vec::new(),
+            })
+            .unwrap();
+
+        let event_b = graph.nodes.get(&event_b_id).unwrap().value().1.event.clone();
+
+        // Verify that event B's clock contains BOTH service-a and service-b components
+        // This validates the bug fix: incoming causality_vector is preserved AND merged
+        let service_a_component = event_b
+            .causality_vector
+            .iter()
+            .find(|(c, _)| c.starts_with("service-a#"));
+        let service_b_component = event_b
+            .causality_vector
+            .iter()
+            .find(|(c, _)| c.starts_with("service-b#"));
+
+        assert!(
+            service_a_component.is_some(),
+            "Event B should have service-a component (inherited): {:?}",
+            event_b.causality_vector
+        );
+        assert!(
+            service_b_component.is_some(),
+            "Event B should have service-b component (added): {:?}",
+            event_b.causality_vector
+        );
+
+        // Verify clock values make sense
+        let (_, a_clock) = service_a_component.unwrap();
+        let (_, b_clock) = service_b_component.unwrap();
+
+        assert!(
+            *a_clock > 0,
+            "service-a clock should be > 0 (inherited from A)"
+        );
+        assert!(
+            *b_clock > 0,
+            "service-b clock should be > 0 (incremented by add_event)"
+        );
+
+        // Verify that the merge preserved the original service-a clock value
+        let (_, original_a_clock) = event_a
+            .causality_vector
+            .iter()
+            .find(|(c, _)| c.starts_with("service-a#"))
+            .expect("Event A should have service-a component");
+
+        assert_eq!(
+            a_clock, original_a_clock,
+            "service-a clock should be preserved from A to B"
+        );
+    }
+
+    #[test]
+    fn vector_clock_increment_on_event_ingestion() {
+        let graph = CausalGraph::new();
+        let trace_id = Uuid::new_v4();
+        let base = Utc.with_ymd_and_hms(2024, 1, 1, 12, 0, 0).unwrap();
+
+        let mut metadata = metadata_with_service("thread-1", "service-a", 5);
+        metadata.instance_id = Some("inst-1".into());
+
+        // Add first event
+        let event1_id = Uuid::new_v4();
+        graph
+            .add_event(Event {
+                id: event1_id,
+                trace_id,
+                parent_id: None,
+                timestamp: base,
+                kind: EventKind::FunctionCall {
+                    function_name: "step1".into(),
+                    module: "app".into(),
+                    args: serde_json::json!({}),
+                    file: "app.rs".into(),
+                    line: 10,
+                },
+                metadata: metadata.clone(),
+                causality_vector: Vec::new(),
+                lock_set: Vec::new(),
+            })
+            .unwrap();
+
+        // Add second event
+        let event2_id = Uuid::new_v4();
+        graph
+            .add_event(Event {
+                id: event2_id,
+                trace_id,
+                parent_id: Some(event1_id),
+                timestamp: base + ChronoDuration::milliseconds(1),
+                kind: EventKind::FunctionCall {
+                    function_name: "step2".into(),
+                    module: "app".into(),
+                    args: serde_json::json!({}),
+                    file: "app.rs".into(),
+                    line: 20,
+                },
+                metadata: metadata.clone(),
+                causality_vector: Vec::new(),
+                lock_set: Vec::new(),
+            })
+            .unwrap();
+
+        // Add third event
+        let event3_id = Uuid::new_v4();
+        graph
+            .add_event(Event {
+                id: event3_id,
+                trace_id,
+                parent_id: Some(event2_id),
+                timestamp: base + ChronoDuration::milliseconds(2),
+                kind: EventKind::FunctionCall {
+                    function_name: "step3".into(),
+                    module: "app".into(),
+                    args: serde_json::json!({}),
+                    file: "app.rs".into(),
+                    line: 30,
+                },
+                metadata: metadata.clone(),
+                causality_vector: Vec::new(),
+                lock_set: Vec::new(),
+            })
+            .unwrap();
+
+        let event1 = graph.nodes.get(&event1_id).unwrap().value().1.event.clone();
+        let event2 = graph.nodes.get(&event2_id).unwrap().value().1.event.clone();
+        let event3 = graph.nodes.get(&event3_id).unwrap().value().1.event.clone();
+
+        // Verify clock values increment
+        let clock1 = event1
+            .causality_vector
+            .iter()
+            .find(|(c, _)| c.starts_with("service-a#"))
+            .map(|(_, v)| v)
+            .expect("event1 should have service-a clock");
+
+        let clock2 = event2
+            .causality_vector
+            .iter()
+            .find(|(c, _)| c.starts_with("service-a#"))
+            .map(|(_, v)| v)
+            .expect("event2 should have service-a clock");
+
+        let clock3 = event3
+            .causality_vector
+            .iter()
+            .find(|(c, _)| c.starts_with("service-a#"))
+            .map(|(_, v)| v)
+            .expect("event3 should have service-a clock");
+
+        assert!(
+            clock2 > clock1,
+            "event2 clock ({}) should be > event1 clock ({})",
+            clock2,
+            clock1
+        );
+        assert!(
+            clock3 > clock2,
+            "event3 clock ({}) should be > event2 clock ({})",
+            clock3,
+            clock2
+        );
+    }
+
+    #[test]
+    fn vector_clock_serialization_roundtrip() {
+        let trace_id = Uuid::new_v4();
+        let event_id = Uuid::new_v4();
+        let base = Utc.with_ymd_and_hms(2024, 1, 1, 12, 0, 0).unwrap();
+
+        let causality_vector = vec![
+            ("service-a#instance-1".into(), 5),
+            ("service-b#instance-2".into(), 3),
+            ("service-c#instance-1".into(), 7),
+        ];
+
+        let original_event = Event {
+            id: event_id,
+            trace_id,
+            parent_id: None,
+            timestamp: base,
+            kind: EventKind::FunctionCall {
+                function_name: "test".into(),
+                module: "tests".into(),
+                args: serde_json::json!({"key": "value"}),
+                file: "test.rs".into(),
+                line: 42,
+            },
+            metadata: metadata_with_service("thread-1", "service-a", 10),
+            causality_vector: causality_vector.clone(),
+            lock_set: Vec::new(),
+        };
+
+        // Serialize to JSON
+        let json = serde_json::to_string(&original_event).expect("serialization should succeed");
+
+        // Deserialize from JSON
+        let deserialized_event: Event =
+            serde_json::from_str(&json).expect("deserialization should succeed");
+
+        // Verify causality vector is preserved
+        assert_eq!(
+            deserialized_event.causality_vector.len(),
+            3,
+            "should have 3 components in vector clock"
+        );
+
+        for (component, clock_value) in &causality_vector {
+            let found = deserialized_event
+                .causality_vector
+                .iter()
+                .find(|(c, v)| c == component && v == clock_value);
+            assert!(
+                found.is_some(),
+                "component {} with value {} should be preserved",
+                component,
+                clock_value
+            );
+        }
+
+        // Verify other fields
+        assert_eq!(deserialized_event.id, event_id);
+        assert_eq!(deserialized_event.trace_id, trace_id);
+    }
+
+    #[test]
+    fn vector_clock_empty_vectors_are_concurrent() {
+        let graph = CausalGraph::new();
+        let trace_id = Uuid::new_v4();
+        let base = Utc.with_ymd_and_hms(2024, 1, 1, 12, 0, 0).unwrap();
+
+        let event1 = Event {
+            id: Uuid::new_v4(),
+            trace_id,
+            parent_id: None,
+            timestamp: base,
+            kind: EventKind::FunctionCall {
+                function_name: "f1".into(),
+                module: "test".into(),
+                args: serde_json::json!({}),
+                file: "test.rs".into(),
+                line: 1,
+            },
+            metadata: metadata("thread-1", 5),
+            causality_vector: Vec::new(),
+            lock_set: Vec::new(),
+        };
+
+        let event2 = Event {
+            id: Uuid::new_v4(),
+            trace_id,
+            parent_id: None,
+            timestamp: base + ChronoDuration::milliseconds(1),
+            kind: EventKind::FunctionCall {
+                function_name: "f2".into(),
+                module: "test".into(),
+                args: serde_json::json!({}),
+                file: "test.rs".into(),
+                line: 2,
+            },
+            metadata: metadata("thread-2", 5),
+            causality_vector: Vec::new(),
+            lock_set: Vec::new(),
+        };
+
+        // Empty vector clocks mean events are concurrent
+        assert!(
+            !graph.happens_before_vc(&event1, &event2),
+            "empty clocks should not establish happens-before"
+        );
+        assert!(
+            !graph.happens_before_vc(&event2, &event1),
+            "empty clocks should not establish happens-before"
+        );
     }
 }

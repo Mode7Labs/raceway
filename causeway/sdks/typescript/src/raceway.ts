@@ -441,14 +441,32 @@ export class Raceway {
   private buildMetadata(durationNs?: number): EventMetadata {
     const ctx = racewayContext.getStore();
 
-    return {
+    const metadata = {
       thread_id: ctx?.threadId || `node-${process.pid}`,
       process_id: process.pid,
       service_name: this.config.serviceName,
       environment: this.config.environment,
       tags: { ...this.config.tags },
       duration_ns: durationNs !== undefined ? durationNs : null,
+      // Phase 2: Distributed tracing fields
+      // Always set distributed metadata when we have a context (not gated by distributed flag)
+      // This ensures entry-point services also create distributed spans
+      instance_id: ctx ? this.config.instanceId : null,
+      distributed_span_id: ctx?.spanId || null,
+      upstream_span_id: ctx?.parentSpanId || null,
     };
+
+    // Debug logging for distributed tracing
+    if (this.config.debug && ctx) {
+      console.log('[Raceway] Distributed metadata:', {
+        distributed: ctx.distributed,
+        instance_id: metadata.instance_id,
+        distributed_span_id: metadata.distributed_span_id,
+        upstream_span_id: metadata.upstream_span_id,
+      });
+    }
+
+    return metadata;
   }
 
   /**

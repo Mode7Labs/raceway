@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"runtime"
@@ -178,6 +179,9 @@ func (c *Client) TrackFunctionReturn(ctx context.Context, functionName string, r
 
 // TrackHTTPRequest tracks an HTTP request.
 func (c *Client) TrackHTTPRequest(ctx context.Context, method, url string, headers map[string]string, body interface{}) {
+	if headers == nil {
+		headers = make(map[string]string)
+	}
 	c.captureEvent(ctx, EventKind{
 		HTTPRequest: &HTTPRequestData{
 			Method:  method,
@@ -190,6 +194,9 @@ func (c *Client) TrackHTTPRequest(ctx context.Context, method, url string, heade
 
 // TrackHTTPResponse tracks an HTTP response.
 func (c *Client) TrackHTTPResponse(ctx context.Context, status int, headers map[string]string, body interface{}, durationMs int64) {
+	if headers == nil {
+		headers = make(map[string]string)
+	}
 	c.captureEvent(ctx, EventKind{
 		HTTPResponse: &HTTPResponseData{
 			Status:     status,
@@ -336,6 +343,12 @@ func (c *Client) captureEvent(ctx context.Context, kind EventKind) {
 }
 
 func (c *Client) buildMetadata(rctx *RacewayContext) Metadata {
+	// Phase 2: Always populate distributed tracing fields when we have a context
+	// This ensures entry-point services also create distributed spans
+	instanceID := &rctx.InstanceID
+	spanID := &rctx.SpanID
+	upstreamSpanID := rctx.ParentSpanID
+
 	return Metadata{
 		ThreadID:    rctx.ThreadID, // Use virtual thread ID from context
 		ProcessID:   os.Getpid(),
@@ -343,6 +356,10 @@ func (c *Client) buildMetadata(rctx *RacewayContext) Metadata {
 		Environment: c.config.Environment,
 		Tags:        map[string]string{},
 		DurationNs:  nil,
+		// Phase 2: Distributed tracing fields
+		InstanceID:        instanceID,
+		DistributedSpanID: spanID,
+		UpstreamSpanID:    upstreamSpanID,
 	}
 }
 
@@ -381,7 +398,8 @@ func (c *Client) Flush() {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		fmt.Printf("[Raceway] Failed to send events: status %d\n", resp.StatusCode)
+		body, _ := io.ReadAll(resp.Body)
+		fmt.Printf("[Raceway] Failed to send events: status %d, body: %s\n", resp.StatusCode, string(body))
 	} else if c.config.Debug {
 		fmt.Printf("[Raceway] Sent %d events\n", len(events))
 	}

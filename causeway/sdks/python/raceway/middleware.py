@@ -38,11 +38,19 @@ def flask_middleware(client: RacewayClient):
             """Initialize Raceway context before request."""
             from flask import request
 
+            if self.client.config.debug:
+                print(f"[Raceway] Middleware before_request called for {request.method} {request.path}", flush=True)
+
             parsed = parse_incoming_headers(
                 request.headers,
                 service_name=self.client.config.service_name,
                 instance_id=self.client.instance_id,
             )
+
+            if self.client.config.debug:
+                print(f"[Raceway] Parsed headers: trace_id={parsed.trace_id[:8]}, "
+                      f"distributed={parsed.distributed}, span_id={parsed.span_id[:8]}, "
+                      f"parent_span_id={parsed.parent_span_id[:8] if parsed.parent_span_id else None}")
 
             # Create and set context
             ctx = create_context(
@@ -55,6 +63,9 @@ def flask_middleware(client: RacewayClient):
             )
             set_context(ctx)
             request.raceway_context = ctx
+
+            if self.client.config.debug:
+                print(f"[Raceway] Context set: trace_id={ctx.trace_id[:8]}, distributed={ctx.distributed}", flush=True)
 
             # Store start time for duration tracking
             request._raceway_start_time = time.time()

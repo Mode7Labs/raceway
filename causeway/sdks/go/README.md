@@ -1,15 +1,15 @@
 # raceway-go
 
-Official Go SDK for Raceway - Race condition detection for Go applications.
+Official Go SDK for [Raceway](https://github.com/mode-7/raceway) - Race condition detection and distributed tracing for Go applications.
 
 ## Features
 
-- **🔌 Zero-Config Middleware**: Automatic trace initialization and goroutine tracking
-- **🎯 Idiomatic Go**: Uses standard `context.Context` for seamless integration
-- **🐛 Race Detection**: Detect data races, atomicity violations, and concurrency bugs
-- **📊 Distributed Tracing**: Track causality across goroutines and services
-- **⚡ Production-Ready**: Low overhead with automatic batching and background flushing
-- **🔍 Automatic Goroutine Tracking**: No manual goroutine ID management required
+- Idiomatic Go API using `context.Context`
+- Automatic goroutine tracking
+- HTTP middleware for automatic trace initialization
+- Distributed tracing across service boundaries (W3C Trace Context)
+- Race condition and concurrency bug detection
+- Production-ready with automatic batching and background flushing
 
 ## Installation
 
@@ -19,39 +19,34 @@ go get github.com/mode-7/raceway-go
 
 ## Quick Start
 
-### 1. Initialize & Add Middleware
+### Basic HTTP Server
 
 ```go
 package main
 
 import (
     "net/http"
+    "time"
     raceway "github.com/mode-7/raceway-go"
 )
 
 func main() {
-    // Initialize Raceway client
     client := raceway.NewClient(raceway.Config{
         ServerURL:   "http://localhost:8080",
         ServiceName: "my-service",
-        Environment: "production",
+        InstanceID:  "instance-1",
     })
     defer client.Stop()
 
-    // Create router
     mux := http.NewServeMux()
     mux.HandleFunc("/api/transfer", transferHandler(client))
 
-    // Wrap with Raceway middleware (handles goroutine tracking automatically)
+    // Wrap with Raceway middleware
     handler := client.Middleware(mux)
 
     http.ListenAndServe(":3000", handler)
 }
-```
 
-### 2. Track Events in Handlers
-
-```go
 func transferHandler(client *raceway.Client) http.HandlerFunc {
     return func(w http.ResponseWriter, r *http.Request) {
         ctx := r.Context()
@@ -64,7 +59,7 @@ func transferHandler(client *raceway.Client) http.HandlerFunc {
             "amount": 100,
         })
 
-        // Read balance
+        // Track state changes
         balance := getBalance("alice")
         client.TrackStateChange(ctx, "alice.balance", nil, balance, "Read")
 
@@ -74,7 +69,6 @@ func transferHandler(client *raceway.Client) http.HandlerFunc {
             return
         }
 
-        // Update balance (RACE CONDITION WINDOW!)
         setBalance("alice", balance-100)
         client.TrackStateChange(ctx, "alice.balance", balance, balance-100, "Write")
 
@@ -84,96 +78,114 @@ func transferHandler(client *raceway.Client) http.HandlerFunc {
 }
 ```
 
-## Gin Framework Integration
+## Distributed Tracing
+
+The SDK implements W3C Trace Context and Raceway vector clocks for distributed tracing across services.
+
+### Propagating Trace Context
+
+Use `PropagationHeaders()` when calling downstream services:
 
 ```go
-package main
-
 import (
-    "github.com/gin-gonic/gin"
-    "github.com/google/uuid"
+    "net/http"
+    "bytes"
+    "encoding/json"
     raceway "github.com/mode-7/raceway-go"
 )
 
-func main() {
-    // Initialize Raceway
-    client := raceway.NewClient(raceway.Config{
-        ServerURL:   "http://localhost:8080",
-        ServiceName: "banking-api",
-        Environment: "development",
-        Debug:       true,
-    })
-    defer client.Stop()
+func checkoutHandler(client *raceway.Client) http.HandlerFunc {
+    return func(w http.ResponseWriter, r *http.Request) {
+        ctx := r.Context()
 
-    router := gin.Default()
+        var req CheckoutRequest
+        json.NewDecoder(r.Body).Decode(&req)
 
-    // Add Raceway middleware for Gin
-    router.Use(ginRacewayMiddleware(client))
-
-    router.POST("/api/transfer", transferHandler(client))
-    router.Run(":3000")
-}
-
-// Gin middleware wrapper
-func ginRacewayMiddleware(client *raceway.Client) gin.HandlerFunc {
-    return func(c *gin.Context) {
-        // Extract or generate trace ID
-        traceID := c.GetHeader("X-Trace-ID")
-        if traceID == "" {
-            traceID = uuid.New().String()
+        // Get propagation headers
+        headers, err := client.PropagationHeaders(ctx, nil)
+        if err != nil {
+            http.Error(w, err.Error(), http.StatusInternalServerError)
+            return
         }
 
-        // Create Raceway context (automatically generates unique goroutine ID)
-        raceCtx := raceway.NewRacewayContext(traceID)
-        ctx := raceway.WithRacewayContext(c.Request.Context(), raceCtx)
+        // Call inventory service
+        inventoryData, _ := json.Marshal(map[string]interface{}{"orderId": req.OrderID})
+        inventoryReq, _ := http.NewRequestWithContext(ctx, "POST",
+            "http://inventory-service/reserve",
+            bytes.NewReader(inventoryData))
 
-        // Track HTTP request
-        client.TrackFunctionCall(ctx, "http_request", map[string]interface{}{
-            "method": c.Request.Method,
-            "path":   c.Request.URL.Path,
-        })
+        for k, v := range headers {
+            inventoryReq.Header.Set(k, v)
+        }
+        http.DefaultClient.Do(inventoryReq)
 
-        // Update request context
-        c.Request = c.Request.WithContext(ctx)
+        // Call payment service
+        paymentData, _ := json.Marshal(map[string]interface{}{"orderId": req.OrderID})
+        paymentReq, _ := http.NewRequestWithContext(ctx, "POST",
+            "http://payment-service/charge",
+            bytes.NewReader(paymentData))
 
-        // Continue with request
-        c.Next()
+        for k, v := range headers {
+            paymentReq.Header.Set(k, v)
+        }
+        http.DefaultClient.Do(paymentReq)
 
-        // Track HTTP response
-        duration := uint64(time.Since(start).Milliseconds())
-        client.TrackHTTPResponse(ctx, c.Writer.Status(), duration)
+        w.WriteHeader(http.StatusOK)
     }
+}
+```
+
+### What Gets Propagated
+
+The middleware automatically:
+- Parses incoming `traceparent`, `tracestate`, and `raceway-clock` headers
+- Generates new span IDs for this service
+- Returns headers for downstream calls via `PropagationHeaders()`
+
+Headers propagated:
+- `traceparent`: W3C Trace Context (trace ID, span ID, trace flags)
+- `tracestate`: W3C vendor-specific state
+- `raceway-clock`: Raceway vector clock for causality tracking
+
+### Cross-Service Trace Merging
+
+Events from all services sharing the same trace ID are automatically merged by the Raceway backend. The backend recursively follows distributed edges to construct complete traces across arbitrary service chain lengths.
+
+## Configuration
+
+```go
+type Config struct {
+    ServerURL     string            // Raceway server URL (required)
+    ServiceName   string            // Service name (default: "unknown-service")
+    InstanceID    string            // Instance ID (default: hostname-PID)
+    Environment   string            // Environment (default: "development")
+    BatchSize     int               // Batch size (default: 100)
+    FlushInterval time.Duration     // Flush interval (default: 1 second)
+    Tags          map[string]string // Custom tags
+    Debug         bool              // Debug mode (default: false)
 }
 ```
 
 ## API Reference
 
-### `raceway.NewClient(config)`
+### Client Creation
 
-Creates a new Raceway client instance.
+#### `raceway.NewClient(config)`
 
-**Config Options:**
+Create a new Raceway client instance.
 
 ```go
-type Config struct {
-    ServerURL     string            // Raceway server URL (required)
-    ServiceName   string            // Service identifier (default: "unknown-service")
-    InstanceID    string            // Optional instance identifier for distributed tracing
-    Environment   string            // Environment (default: "development")
-    BatchSize     int               // Event batch size (default: 100)
-    FlushInterval time.Duration     // Flush interval (default: 1 second)
-    Tags          map[string]string // Custom tags for all events
-    Debug         bool              // Debug logging (default: false)
-}
+client := raceway.NewClient(raceway.Config{
+    ServerURL:   "http://localhost:8080",
+    ServiceName: "my-service",
+    InstanceID:  "instance-1",
+})
+defer client.Stop()
 ```
 
-### Core Methods
+### Core Tracking Methods
 
-All methods accept `context.Context` as the first parameter. The SDK automatically tracks goroutine IDs for race detection.
-
-#### `client.Middleware(next http.Handler) http.Handler`
-
-Returns HTTP middleware for automatic trace initialization. Each request gets a unique goroutine ID automatically.
+All methods accept `context.Context` as the first parameter for automatic goroutine tracking.
 
 #### `client.TrackStateChange(ctx, variable, oldValue, newValue, accessType)`
 
@@ -189,7 +201,7 @@ client.TrackStateChange(ctx, "counter", 5, 6, "Write")
 
 #### `client.TrackFunctionCall(ctx, functionName, args)`
 
-Track a function entry with arguments (no duration tracking).
+Track a function call (no duration tracking).
 
 ```go
 client.TrackFunctionCall(ctx, "processPayment", map[string]interface{}{
@@ -200,56 +212,72 @@ client.TrackFunctionCall(ctx, "processPayment", map[string]interface{}{
 
 #### `client.StartFunction(ctx, functionName, args) func()`
 
-**Recommended**: Track a function with automatic duration measurement. Returns a function to be called with `defer`.
+Track a function with automatic duration measurement. Returns a function to be called with `defer`.
 
 ```go
-func transferHandler(client *raceway.Client) http.HandlerFunc {
-    return func(w http.ResponseWriter, r *http.Request) {
-        ctx := r.Context()
+func transfer(ctx context.Context, client *raceway.Client) {
+    defer client.StartFunction(ctx, "transfer", map[string]interface{}{
+        "from":   "alice",
+        "to":     "bob",
+        "amount": 100,
+    })()
 
-        // Automatically measures duration from this line until function returns
-        defer client.StartFunction(ctx, "transfer", map[string]interface{}{
-            "from":   "alice",
-            "to":     "bob",
-            "amount": 100,
-        })()
-
-        // Your function logic here...
-    }
+    // Your function logic here
 }
 ```
 
 #### `client.TrackHTTPResponse(ctx, status, durationMs)`
 
-Track an HTTP response with status code and duration.
+Track an HTTP response.
 
 ```go
 duration := uint64(time.Since(startTime).Milliseconds())
 client.TrackHTTPResponse(ctx, 200, duration)
 ```
 
-#### `client.PropagationHeaders(ctx, extraHeaders)`
+### Distributed Tracing Methods
 
-Generate outbound headers (`traceparent`, `tracestate`, and `raceway-clock`) for propagating the current trace across service boundaries.
+#### `client.PropagationHeaders(ctx, extraHeaders) (map[string]string, error)`
+
+Generate headers for downstream service calls.
 
 ```go
-headers, err := client.PropagationHeaders(ctx, map[string]string{"X-Service": "payments"})
-if err == nil {
-    req, _ := http.NewRequestWithContext(ctx, http.MethodPost, ledgerURL, body)
-    for key, value := range headers {
-        req.Header.Set(key, value)
-    }
-    http.DefaultClient.Do(req)
+headers, err := client.PropagationHeaders(ctx, map[string]string{
+    "X-Custom": "value",
+})
+if err != nil {
+    return err
 }
+
+req, _ := http.NewRequestWithContext(ctx, "POST", downstreamURL, body)
+for key, value := range headers {
+    req.Header.Set(key, value)
+}
+http.DefaultClient.Do(req)
 ```
 
-Call this inside a request after the middleware has initialised the Raceway context; it returns an error if no context is active.
+**Returns:** Map with `traceparent`, `tracestate`, and `raceway-clock` headers.
+
+**Error:** Returns error if called outside request context.
+
+#### `client.Middleware(next http.Handler) http.Handler`
+
+HTTP middleware for automatic trace initialization.
+
+```go
+mux := http.NewServeMux()
+mux.HandleFunc("/api/endpoint", handler)
+
+// Apply Raceway middleware
+handler := client.Middleware(mux)
+http.ListenAndServe(":3000", handler)
+```
 
 ### Context Management
 
 #### `raceway.NewRacewayContext(traceID) *RacewayContext`
 
-Create a new Raceway context for a trace. Automatically generates a unique goroutine ID.
+Create a new Raceway context. Automatically generates a unique goroutine ID.
 
 ```go
 raceCtx := raceway.NewRacewayContext(traceID)
@@ -265,7 +293,7 @@ ctx := raceway.WithRacewayContext(r.Context(), raceCtx)
 
 #### `raceway.GetRacewayContext(ctx) *RacewayContext`
 
-Extract Raceway context from a standard Go context.
+Extract Raceway context from a Go context.
 
 ```go
 raceCtx := raceway.GetRacewayContext(ctx)
@@ -275,102 +303,156 @@ raceCtx := raceway.GetRacewayContext(ctx)
 
 #### `client.Stop()`
 
-Stop the client and flush remaining events. Always call this before exiting.
+Stop the client and flush remaining events.
 
 ```go
 defer client.Stop()
 ```
 
-## How Goroutine Tracking Works
+## Goroutine Tracking
 
-The SDK automatically assigns a unique identifier to each execution chain (goroutine):
+The SDK automatically assigns a unique identifier to each goroutine:
 
 1. When `NewRacewayContext()` is called, the SDK generates a unique goroutine ID: `go-<pid>-<counter>`
-2. This ID is stored in the `RacewayContext` and used for all events in that chain
+2. This ID is stored in the `RacewayContext` and propagated via `context.Context`
 3. Raceway uses these IDs to detect concurrent access from different goroutines
-4. **You don't need to manage goroutine IDs manually** - everything is automatic!
 
-Example: Two concurrent HTTP requests will get IDs like `go-12345-1` and `go-12345-2`, allowing Raceway to detect when they access the same data concurrently.
+No manual goroutine ID management required.
 
-## Concurrent Request Tracing
+## Context Propagation
 
-To analyze concurrent operations together, use the same trace ID:
+Always pass `context.Context` through your call chain:
 
-```bash
-# Send concurrent requests with the same trace ID
-TRACE_ID=$(uuidgen | tr '[:upper:]' '[:lower:]')
+```go
+func handler(w http.ResponseWriter, r *http.Request) {
+    ctx := r.Context()  // Get context from request
+    processOrder(ctx)   // Pass to downstream functions
+}
 
-curl -X POST http://localhost:3000/api/transfer \
-  -H "X-Trace-ID: $TRACE_ID" \
-  -d '{"from":"alice","to":"bob","amount":100}' &
-
-curl -X POST http://localhost:3000/api/transfer \
-  -H "X-Trace-ID: $TRACE_ID" \
-  -d '{"from":"alice","to":"charlie","amount":200}' &
-
-wait
-
-# View in Raceway UI
-echo "View trace: http://localhost:8080/traces/$TRACE_ID"
-```
-
-## Complete Example
-
-See [`../../examples/go-banking`](../../examples/go-banking) for a complete working banking API that demonstrates:
-- Gin framework integration
-- Concurrent transfer handling
-- Race condition detection
-- Audit trail visualization
-- Test script for triggering races
-
-Run the example:
-
-```bash
-cd examples/go-banking
-
-# Start Raceway server
-cd ../.. && cargo run --release -- serve &
-
-# Start the banking API
-cd examples/go-banking
-go run main.go
-
-# Trigger a race condition
-bash test.sh
-
-# View results at http://localhost:8080
+func processOrder(ctx context.Context) {
+    client.TrackFunctionCall(ctx, "processOrder", nil)
+    // Context automatically carries trace information
+}
 ```
 
 ## Best Practices
 
-1. **Always Pass Context**: Ensure `context.Context` flows through your entire call chain
-2. **Use Middleware**: Set up Raceway middleware on your router for automatic initialization
-3. **Track Shared State**: Focus tracking on shared mutable state that's accessed by multiple goroutines
-4. **Same Trace ID for Concurrent Ops**: Use the same trace ID when analyzing concurrent operations
-5. **Graceful Shutdown**: Always call `client.Stop()` before exiting to flush remaining events
+1. **Always pass context**: Ensure `context.Context` flows through your entire call chain
+2. **Use middleware**: Set up Raceway middleware for automatic initialization
+3. **Track shared state**: Focus on shared mutable state accessed by multiple goroutines
+4. **Propagate headers**: Always use `PropagationHeaders()` when calling downstream services
+5. **Graceful shutdown**: Always call `client.Stop()` before exiting:
+   ```go
+   defer client.Stop()
+   ```
+6. **Use unique instance IDs**: Set `InstanceID` to differentiate service instances
+
+## Distributed Example
+
+Complete example with distributed tracing:
+
+```go
+package main
+
+import (
+    "bytes"
+    "encoding/json"
+    "net/http"
+    raceway "github.com/mode-7/raceway-go"
+)
+
+func main() {
+    client := raceway.NewClient(raceway.Config{
+        ServerURL:   "http://localhost:8080",
+        ServiceName: "api-gateway",
+        InstanceID:  "gateway-1",
+    })
+    defer client.Stop()
+
+    mux := http.NewServeMux()
+    mux.HandleFunc("/api/order", createOrderHandler(client))
+
+    handler := client.Middleware(mux)
+    http.ListenAndServe(":3000", handler)
+}
+
+func createOrderHandler(client *raceway.Client) http.HandlerFunc {
+    return func(w http.ResponseWriter, r *http.Request) {
+        ctx := r.Context()
+
+        var req OrderRequest
+        json.NewDecoder(r.Body).Decode(&req)
+
+        client.TrackFunctionCall(ctx, "createOrder", map[string]interface{}{
+            "orderId": req.OrderID,
+        })
+
+        // Get propagation headers
+        headers, err := client.PropagationHeaders(ctx, nil)
+        if err != nil {
+            http.Error(w, err.Error(), http.StatusInternalServerError)
+            return
+        }
+
+        // Call inventory service
+        inventoryData, _ := json.Marshal(map[string]interface{}{"orderId": req.OrderID})
+        inventoryReq, _ := http.NewRequestWithContext(ctx, "POST",
+            "http://inventory-service:3001/reserve",
+            bytes.NewReader(inventoryData))
+        for k, v := range headers {
+            inventoryReq.Header.Set(k, v)
+        }
+        http.DefaultClient.Do(inventoryReq)
+
+        // Call payment service
+        paymentData, _ := json.Marshal(map[string]interface{}{"orderId": req.OrderID})
+        paymentReq, _ := http.NewRequestWithContext(ctx, "POST",
+            "http://payment-service:3002/charge",
+            bytes.NewReader(paymentData))
+        for k, v := range headers {
+            paymentReq.Header.Set(k, v)
+        }
+        http.DefaultClient.Do(paymentReq)
+
+        w.WriteHeader(http.StatusOK)
+        json.NewEncoder(w).Encode(map[string]interface{}{
+            "success": true,
+            "orderId": req.OrderID,
+        })
+    }
+}
+```
+
+All services in the chain will share the same trace ID, and Raceway will merge their events into a single distributed trace.
 
 ## Troubleshooting
 
-### No Races Detected
+### Events not appearing
 
-If races aren't being detected:
-- Ensure concurrent requests use the **same trace ID** (via `X-Trace-ID` header)
-- Verify that `TrackStateChange` is called for both reads and writes
-- Check that the Raceway server is running and accessible
-- Enable debug mode: `Debug: true` in config
+1. Check server is running: `curl http://localhost:8080/health`
+2. Enable debug mode: `Config{Debug: true}`
+3. Verify `client.Stop()` is called to flush events
+4. Check middleware is properly installed
 
-### Events Not Appearing
+### Distributed traces not merging
 
-- Check server connectivity: `curl http://localhost:8080/health`
-- Enable debug logging to see event transmission
-- Verify `client.Stop()` is called to flush events
-- Check for errors in the Raceway server logs
+1. Ensure all services use `PropagationHeaders()` when calling downstream
+2. Verify `traceparent` header is being sent (enable debug mode)
+3. Check that all services report to the same Raceway server
+4. Verify instance IDs are unique per service instance
+
+### Context not available errors
+
+- Ensure middleware is set up on your HTTP handler
+- Always pass `context.Context` through function calls
+- Verify `PropagationHeaders()` is called within a request context
 
 ## License
 
 MIT
 
-## Support
+## Links
 
-- **Example Code**: See `examples/go-banking` directory
-- **Issues**: Report bugs and request features via GitHub issues
+- [GitHub Repository](https://github.com/mode-7/raceway)
+- [Documentation](https://docs.raceway.dev)
+- [Issue Tracker](https://github.com/mode-7/raceway/issues)

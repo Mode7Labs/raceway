@@ -8,12 +8,44 @@ type Metadata struct {
 	Environment string            `json:"environment"`
 	Tags        map[string]string `json:"tags"`
 	DurationNs  *int64            `json:"duration_ns"`
+	// Phase 2: Distributed tracing fields
+	InstanceID         *string `json:"instance_id,omitempty"`
+	DistributedSpanID  *string `json:"distributed_span_id,omitempty"`
+	UpstreamSpanID     *string `json:"upstream_span_id,omitempty"`
 }
 
 // CausalityEntry represents a single entry in the causality vector.
-type CausalityEntry struct {
-	Component string `json:"component"`
-	Value     uint64 `json:"value"`
+// It serializes as a JSON array [component, value] to match the backend format.
+type CausalityEntry [2]interface{} // [component (string), value (uint64)]
+
+// NewCausalityEntry creates a new causality entry.
+func NewCausalityEntry(component string, value uint64) CausalityEntry {
+	return CausalityEntry{component, value}
+}
+
+// Component returns the component name.
+func (c CausalityEntry) Component() string {
+	if len(c) > 0 {
+		if s, ok := c[0].(string); ok {
+			return s
+		}
+	}
+	return ""
+}
+
+// Value returns the clock value.
+func (c CausalityEntry) Value() uint64 {
+	if len(c) > 1 {
+		switch v := c[1].(type) {
+		case uint64:
+			return v
+		case float64:
+			return uint64(v)
+		case int:
+			return uint64(v)
+		}
+	}
+	return 0
 }
 
 // Event represents a single instrumentation event.
@@ -22,7 +54,7 @@ type Event struct {
 	TraceID         string           `json:"trace_id"`
 	ParentID        *string          `json:"parent_id"`
 	Timestamp       string           `json:"timestamp"`
-	Kind            EventKind        `json:",inline"`
+	Kind            EventKind        `json:"kind"`
 	Metadata        Metadata         `json:"metadata"`
 	CausalityVector []CausalityEntry `json:"causality_vector"`
 	LockSet         []string         `json:"lock_set"`

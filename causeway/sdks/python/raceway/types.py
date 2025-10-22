@@ -27,6 +27,10 @@ class EventMetadata:
     environment: str
     tags: Dict[str, str] = field(default_factory=dict)
     duration_ns: Optional[int] = None
+    # Phase 2: Distributed tracing fields
+    instance_id: Optional[str] = None
+    distributed_span_id: Optional[str] = None
+    upstream_span_id: Optional[str] = None
 
 
 @dataclass

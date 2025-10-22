@@ -138,10 +138,9 @@ echo -e "${BLUE}═════════════════════�
 if [ $FAILURES -eq 0 ]; then
     echo -e "${GREEN}✓ Linear pattern test PASSED${NC}"
     echo -e "${GREEN}  - Headers propagated across all 4 services${NC}"
-    echo -e "${GREEN}  - All services share the same trace_id${NC}"
     echo ""
-    echo -e "${YELLOW}⚠️  Note: Graph will show 4 disconnected sub-graphs${NC}"
-    echo -e "${YELLOW}   (cross-service edges require Phase 2)${NC}"
+    echo -e "${YELLOW}⚠️  Note: This test makes separate requests to each service${NC}"
+    echo -e "${YELLOW}   For a true 4-service chain, run: ./full-chain.sh${NC}"
 else
     echo -e "${RED}✗ Linear pattern test FAILED (${FAILURES} failures)${NC}"
     exit 1

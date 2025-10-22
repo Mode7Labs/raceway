@@ -1,5 +1,7 @@
 import sys
 import os
+import signal
+import atexit
 
 # Add SDK to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../../../sdks/python'))
@@ -15,9 +17,18 @@ SERVICE_NAME = 'python-service'
 client = RacewayClient(Config(
     endpoint='http://localhost:8080',
     service_name=SERVICE_NAME,
-    instance_id='py-1',
-    debug=True
+    instance_id='py-1'
 ))
+
+# Register shutdown handlers to flush events
+def shutdown_handler(signum=None, frame=None):
+    print(f"[{SERVICE_NAME}] Shutting down, flushing events...", flush=True)
+    client.shutdown()
+    sys.exit(0)
+
+signal.signal(signal.SIGTERM, shutdown_handler)
+signal.signal(signal.SIGINT, shutdown_handler)
+atexit.register(client.shutdown)
 
 app = Flask(__name__)
 
@@ -39,11 +50,6 @@ def process():
     downstream = data.get('downstream')
     payload = data.get('payload', '')
 
-    print(f"\n[{SERVICE_NAME}] Received request")
-    print(f"  traceparent: {request.headers.get('traceparent')}")
-    print(f"  raceway-clock: {request.headers.get('raceway-clock')}")
-    print(f"  downstream: {downstream or 'none'}")
-
     # Track some work
     client.track_function_call('process_request', args={'payload': payload})
     client.track_state_change('request_count', None, 1, 'Write')
@@ -52,14 +58,8 @@ def process():
 
     # Call downstream service if specified
     if downstream:
-        print(f"  Calling downstream: {downstream}")
         try:
             headers = client.propagation_headers()
-            print(f"  Propagating headers:")
-            print(f"    traceparent: {headers.get('traceparent')}")
-            print(f"    raceway-clock: {headers.get('raceway-clock')}")
-
-            # Get nested downstream if provided (for chaining)
             next_downstream = data.get('next_downstream')
 
             response = requests.post(
@@ -72,7 +72,7 @@ def process():
             )
             downstream_response = response.json()
         except Exception as e:
-            print(f"  Error calling downstream: {e}")
+            print(f"Error calling downstream: {e}")
 
     return jsonify({
         'service': SERVICE_NAME,

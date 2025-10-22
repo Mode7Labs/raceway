@@ -3,6 +3,35 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use uuid::Uuid;
 
+/// Represents a span in a distributed trace (Phase 2)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DistributedSpan {
+    pub trace_id: Uuid,
+    pub span_id: String,           // From W3C traceparent header
+    pub service: String,
+    pub instance: String,
+    pub first_event: DateTime<Utc>,
+    pub last_event: Option<DateTime<Utc>>,
+}
+
+/// Represents an edge between spans in distributed trace (Phase 2)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DistributedEdge {
+    pub from_span: String,         // Upstream span ID
+    pub to_span: String,           // Downstream span ID
+    pub link_type: EdgeLinkType,
+    pub metadata: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum EdgeLinkType {
+    HttpCall,       // HTTP request/response
+    GrpcCall,       // gRPC call
+    MessageQueue,   // Async messaging (Kafka, SQS, etc.)
+    DatabaseQuery,  // Database operation
+    Custom,         // User-defined edge type
+}
+
 /// Type of memory access
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AccessType {
@@ -32,8 +61,12 @@ pub struct Event {
     pub timestamp: DateTime<Utc>,
     pub kind: EventKind,
     pub metadata: EventMetadata,
-    pub causality_vector: Vec<(Uuid, u64)>, // Vector clock for causal ordering
-    pub lock_set: Vec<String>,              // Locks held by the thread at the time of this event
+    // Vector clock for causal ordering
+    // Format: Vec<(component, clock_value)>
+    // - Single-service: component = trace_id.to_string()
+    // - Distributed: component = "service#instance"
+    pub causality_vector: Vec<(String, u64)>,
+    pub lock_set: Vec<String>, // Locks held by the thread at the time of this event
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -113,6 +146,14 @@ pub struct EventMetadata {
     pub environment: String,
     pub tags: HashMap<String, String>,
     pub duration_ns: Option<u64>,
+
+    // Distributed tracing fields (Phase 2)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub instance_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub distributed_span_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub upstream_span_id: Option<String>,
 }
 
 impl Event {
@@ -138,9 +179,13 @@ impl Event {
     /// Uses vector clock semantics, not timestamps (which can be skewed in distributed/async systems)
     ///
     /// self -> other if:
-    /// 1. For all trace IDs in self's vector: self.VC[trace] <= other.VC[trace]
-    /// 2. At least one trace has strictly less: self.VC[trace] < other.VC[trace]
-    /// 3. All traces from self are present in other (causally connected)
+    /// 1. For all components in self's vector: self.VC[component] <= other.VC[component]
+    /// 2. At least one component has strictly less: self.VC[component] < other.VC[component]
+    /// 3. All components from self are present in other (causally connected)
+    ///
+    /// Components can be:
+    /// - Single-service: trace_id.to_string()
+    /// - Distributed: "service#instance"
     pub fn happened_before(&self, other: &Event) -> bool {
         if self.causality_vector.is_empty() || other.causality_vector.is_empty() {
             // Without vector clocks, we can't determine causality - assume concurrent
@@ -150,31 +195,31 @@ impl Event {
         let mut found_strictly_less = false;
 
         // Check that self's clock is <= other's clock for all components in self
-        for (trace_id_self, clock_self) in &self.causality_vector {
+        for (component_self, clock_self) in &self.causality_vector {
             if let Some((_, clock_other)) = other
                 .causality_vector
                 .iter()
-                .find(|(id, _)| id == trace_id_self)
+                .find(|(c, _)| c == component_self)
             {
                 if clock_self > clock_other {
-                    // self has a later clock for this trace - definitely not happens-before
+                    // self has a later clock for this component - definitely not happens-before
                     return false;
                 }
                 if clock_self < clock_other {
                     found_strictly_less = true;
                 }
             } else {
-                // other doesn't have this trace in its vector clock
-                // This means they're independent on this trace dimension
-                // Can't establish happens-before if not all traces are present
+                // other doesn't have this component in its vector clock
+                // This means they're independent on this component dimension
+                // Can't establish happens-before if not all components are present
                 return false;
             }
         }
 
         // Happens-before requires:
-        // 1. All trace IDs in self's VC are <= in other's VC (checked above)
-        // 2. At least one trace is strictly less
-        // 3. All traces from self are present in other (checked above)
+        // 1. All components in self's VC are <= in other's VC (checked above)
+        // 2. At least one component is strictly less
+        // 3. All components from self are present in other (checked above)
         found_strictly_less
     }
 
@@ -198,6 +243,9 @@ mod tests {
             environment: "dev".to_string(),
             tags: HashMap::new(),
             duration_ns: None,
+            instance_id: None,
+            distributed_span_id: None,
+            upstream_span_id: None,
         };
 
         let event = Event::new(

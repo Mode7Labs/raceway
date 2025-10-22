@@ -1,14 +1,15 @@
 # raceway-rust
 
-Official Rust SDK for [Raceway](https://github.com/mode-7/raceway) - AI-powered race condition detection for distributed systems.
+Official Rust SDK for [Raceway](https://github.com/mode-7/raceway) - Race condition detection and distributed tracing for Rust applications.
 
 ## Features
 
-- **🔌 Plug-and-Play Architecture**: Automatic context propagation using `tokio::task_local!`
-- **🦀 Zero-Cost Abstractions**: Built on Rust's powerful type system and async runtime
-- **🐛 Race Detection**: Detect data races, atomicity violations, and concurrency bugs in production
-- **📊 Distributed Tracing**: Track causality across async tasks and service boundaries
-- **⚡ Production-Ready**: Minimal overhead with async event batching and non-blocking I/O
+- Automatic context propagation using `tokio::task_local!`
+- Axum middleware support
+- Manual instrumentation API
+- Distributed tracing across service boundaries (W3C Trace Context)
+- Race condition and concurrency bug detection
+- Automatic batching and background flushing
 
 ## Installation
 
@@ -22,307 +23,18 @@ tokio = { version = "1.35", features = ["full", "macros"] }
 
 ## Quick Start
 
-### 1. Initialize the SDK
-
-```rust
-use raceway_sdk::RacewayClient;
-use std::sync::Arc;
-
-#[tokio::main]
-async fn main() {
-    // Basic initialization
-    let raceway = Arc::new(RacewayClient::new(
-        "http://localhost:8080",
-        "my-service"
-    ));
-
-    // Or with custom module name
-    let raceway = Arc::new(RacewayClient::with_module(
-        "http://localhost:8080",
-        "my-service",
-        "my-module"
-    ));
-}
-```
-
-### 2. Use the Plug-and-Play API with Axum Middleware
-
-The Rust SDK uses `tokio::task_local!` for automatic context propagation (similar to AsyncLocalStorage in Node.js):
-
-```rust
-use raceway_sdk::RacewayClient;
-use axum::{Router, routing::post, extract::State, Json};
-use std::sync::Arc;
-
-#[tokio::main]
-async fn main() {
-    let raceway = Arc::new(RacewayClient::new(
-        "http://localhost:8080",
-        "my-service"
-    ));
-
-    let app = Router::new()
-        .route("/api/transfer", post(handle_transfer))
-        .layer(axum::middleware::from_fn({
-            let raceway = raceway.clone();
-            move |headers, request, next| {
-                RacewayClient::middleware(raceway.clone(), headers, request, next)
-            }
-        }))
-        .with_state(raceway);
-
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000")
-        .await
-        .unwrap();
-    axum::serve(listener, app).await.unwrap();
-}
-
-async fn handle_transfer(
-    State(raceway): State<Arc<RacewayClient>>,
-    Json(payload): Json<TransferRequest>
-) -> Json<Response> {
-    // Track function call (no .await needed!)
-    raceway.track_function_call("transfer", &payload);
-
-    // Your application logic
-    let balance = get_balance(&payload.from).await;
-    raceway.track_state_change(
-        &format!("{}.balance", payload.from),
-        None::<i64>,
-        balance,
-        "Read"
-    );
-
-    if balance < payload.amount {
-        return Json(Response { success: false });
-    }
-
-    // Write new balance (RACE CONDITION WINDOW!)
-    set_balance(&payload.from, balance - payload.amount).await;
-    raceway.track_state_change(
-        &format!("{}.balance", payload.from),
-        Some(balance),
-        balance - payload.amount,
-        "Write"
-    );
-
-    Json(Response { success: true })
-}
-```
-
-## API Reference
-
-### `RacewayClient::new(endpoint, service_name)`
-
-Creates a new Raceway client instance with default module name "app".
-
-**Parameters:**
-- `endpoint: &str` - Raceway server endpoint (e.g., "http://localhost:8080")
-- `service_name: &str` - Service name for event metadata
-
-**Example:**
-```rust
-let client = Arc::new(RacewayClient::new(
-    "http://localhost:8080",
-    "my-service"
-));
-```
-
-### `RacewayClient::with_module(endpoint, service_name, module_name)`
-
-Creates a new Raceway client instance with a custom module name.
-
-**Parameters:**
-- `endpoint: &str` - Raceway server endpoint
-- `service_name: &str` - Service name for event metadata
-- `module_name: &str` - Module name for function call tracking
-
-**Example:**
-```rust
-let client = Arc::new(RacewayClient::with_module(
-    "http://localhost:8080",
-    "my-service",
-    "payments"
-));
-```
-
-**Auto-Flush Behavior:**
-- Events are automatically flushed every 1 second
-- A background task is spawned on client creation to handle auto-flush
-
-### Core Tracking Methods
-
-All methods are called on the `RacewayClient` instance and automatically read context from `tokio::task_local!` storage. They do not require `.await`.
-
-#### `client.track_state_change<T: Serialize>(variable, old_value, new_value, access_type)`
-
-Track a variable read or write.
-
-**Parameters:**
-- `variable: &str` - Variable name
-- `old_value: Option<T>` - Previous value (None for reads)
-- `new_value: T` - New value
-- `access_type: &str` - "Read" or "Write"
-
-```rust
-// Track a Read
-client.track_state_change(
-    "counter",
-    None::<i64>,
-    5,
-    "Read"
-);
-
-// Track a Write
-client.track_state_change(
-    "counter",
-    Some(5),
-    6,
-    "Write"
-);
-```
-
-#### `client.track_function_call<T: Serialize>(function_name, args)`
-
-Track a function entry (no duration tracking). File and line information are captured automatically.
-
-**Parameters:**
-- `function_name: &str` - Name of the function
-- `args: T` - Function arguments (any serializable type)
-
-**Note:** The module name is set when creating the client (defaults to "app").
-
-```rust
-client.track_function_call(
-    "process_payment",
-    serde_json::json!({ "amount": 100 })
-);
-```
-
-#### `client.track_function<F, T>(function_name, args, f) -> T` (async)
-
-**Recommended**: Track an async function with automatic duration measurement.
-
-**Parameters:**
-- `function_name: &str` - Name of the function
-- `args: impl Serialize` - Function arguments (any serializable type)
-- `f: F` - Async function to execute
-
-**Returns:** The result of the async function
-
-```rust
-async fn process_payment(client: &RacewayClient, amount: i64) -> Result<(), Error> {
-    client.track_function(
-        "process_payment",
-        serde_json::json!({ "amount": amount }),
-        async {
-            // Your async logic here
-            let result = do_payment(amount).await?;
-            Ok(result)
-        }
-    ).await
-}
-```
-
-#### `client.track_function_sync<F, T>(function_name, args, f) -> T`
-
-**Recommended**: Track a synchronous function with automatic duration measurement.
-
-**Parameters:**
-- `function_name: &str` - Name of the function
-- `args: impl Serialize` - Function arguments (any serializable type)
-- `f: F` - Function to execute (closure)
-
-**Returns:** The result of the function
-
-```rust
-fn calculate_total(client: &RacewayClient, items: &[i64]) -> i64 {
-    client.track_function_sync(
-        "calculate_total",
-        serde_json::json!({ "item_count": items.len() }),
-        || {
-            // Your logic here
-            items.iter().sum()
-        }
-    )
-}
-```
-
-#### `client.track_http_response(status, duration_ms)`
-
-Track an HTTP response.
-
-**Parameters:**
-- `status: u16` - HTTP status code
-- `duration_ms: u64` - Request duration in milliseconds
-
-**Note:** HTTP requests are tracked automatically by the middleware.
-
-```rust
-client.track_http_response(200, 45);
-```
-
-### Middleware
-
-#### `RacewayClient::middleware(client, headers, request, next)`
-
-Axum middleware that automatically initializes trace context from request headers and tracks HTTP requests.
-
-**Parameters:**
-- `client: Arc<RacewayClient>` - The Raceway client instance
-- `headers: HeaderMap` - Request headers
-- `request: Request` - The Axum request
-- `next: Next` - Next middleware in chain
-
-**Behavior:**
-- Extracts trace ID from `x-trace-id` header or generates a new one
-- Initializes `RACEWAY_CONTEXT` for the request scope
-- Tracks HTTP request automatically
-
-**Example:**
-```rust
-let app = Router::new()
-    .route("/api/endpoint", post(handler))
-    .layer(axum::middleware::from_fn({
-        let raceway = raceway.clone();
-        move |headers, request, next| {
-            RacewayClient::middleware(raceway.clone(), headers, request, next)
-        }
-    }));
-```
-
-## Architecture
-
-### Task-Local Storage
-
-The Rust SDK uses **`tokio::task_local!`** via `RACEWAY_CONTEXT` for automatic context propagation across async operations. This is Rust's equivalent to:
-- AsyncLocalStorage (Node.js/TypeScript)
-- `context.Context` (Go)
-- `contextvars` (Python)
-
-This ensures traces are maintained across:
-- HTTP requests (via middleware)
-- `.await` points within the same task
-- Function calls within the request scope
-
-**Note:** Context does NOT automatically propagate to spawned tasks (`tokio::spawn`). For spawned tasks, you need to manually propagate the context.
-
-### Thread IDs
-
-Rust's SDK uses actual OS thread IDs for identifying concurrent operations, as Rust has true multi-threading. Each task gets tracked with its thread ID automatically.
-
-## Axum Integration Example
+### Axum Integration
 
 ```rust
 use axum::{
     extract::State,
-    routing::post,
+    routing::{get, post},
     Json,
     Router,
 };
 use raceway_sdk::RacewayClient;
-use std::sync::Arc;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 #[derive(Deserialize)]
 struct TransferRequest {
@@ -340,20 +52,18 @@ struct TransferResponse {
 async fn main() {
     let raceway = Arc::new(RacewayClient::new(
         "http://localhost:8080",
-        "banking-api"
+        "my-service"
     ));
 
     let app = Router::new()
+        .route("/health", get(health))
         .route("/api/transfer", post(transfer))
-        .layer(axum::middleware::from_fn({
-            let raceway = raceway.clone();
-            move |headers, request, next| {
-                RacewayClient::middleware(raceway.clone(), headers, request, next)
-            }
-        }))
+        .layer(axum::middleware::from_fn_with_state(
+            raceway.clone(),
+            RacewayClient::middleware,
+        ))
         .with_state(raceway);
 
-    // Graceful shutdown
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000")
         .await
         .unwrap();
@@ -365,20 +75,9 @@ async fn transfer(
     State(raceway): State<Arc<RacewayClient>>,
     Json(req): Json<TransferRequest>,
 ) -> Json<TransferResponse> {
-    // Track function call (context is automatic via middleware!)
-    raceway.track_function_call(
-        "transfer",
-        serde_json::json!({
-            "from": &req.from,
-            "to": &req.to,
-            "amount": req.amount
-        })
-    );
+    raceway.track_function_call("transfer", &req);
 
-    // Simulate async processing
-    tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
-
-    // Read balance
+    // Track state changes
     let balance = get_balance(&req.from).await;
     raceway.track_state_change(
         &format!("{}.balance", req.from),
@@ -388,13 +87,9 @@ async fn transfer(
     );
 
     if balance < req.amount {
-        raceway.track_http_response(400, 15);
         return Json(TransferResponse { success: false });
     }
 
-    tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
-
-    // Write new balance (RACE CONDITION WINDOW!)
     set_balance(&req.from, balance - req.amount).await;
     raceway.track_state_change(
         &format!("{}.balance", req.from),
@@ -403,160 +98,382 @@ async fn transfer(
         "Write"
     );
 
-    // Credit recipient
-    let to_balance = get_balance(&req.to).await;
-    set_balance(&req.to, to_balance + req.amount).await;
-    raceway.track_state_change(
-        &format!("{}.balance", req.to),
-        Some(to_balance),
-        to_balance + req.amount,
-        "Write"
-    );
-
-    // Track HTTP response
-    raceway.track_http_response(200, 50);
-
     Json(TransferResponse { success: true })
 }
+```
 
-// Helper functions
-async fn get_balance(account: &str) -> i64 {
-    // Implementation...
-    1000
-}
+## Distributed Tracing
 
-async fn set_balance(account: &str, balance: i64) {
-    // Implementation...
+The SDK implements W3C Trace Context and Raceway vector clocks for distributed tracing across services.
+
+### Propagating Trace Context
+
+Use `propagation_headers()` when calling downstream services:
+
+```rust
+use reqwest::Client;
+use serde_json::json;
+
+async fn process_handler(
+    State(raceway): State<Arc<RacewayClient>>,
+    Json(req): Json<ProcessRequest>,
+) -> Json<ProcessResponse> {
+    raceway.track_function_call("process_request", &req);
+
+    // Get propagation headers
+    let headers = match raceway.propagation_headers(None) {
+        Ok(h) => h,
+        Err(e) => {
+            eprintln!("Error getting propagation headers: {}", e);
+            return Json(ProcessResponse { error: Some(e.to_string()) });
+        }
+    };
+
+    // Call downstream service
+    let client = Client::new();
+    let result = client
+        .post("http://inventory-service/reserve")
+        .json(&json!({ "orderId": req.order_id }))
+        .header("traceparent", headers.get("traceparent").unwrap())
+        .header("raceway-clock", headers.get("raceway-clock").unwrap())
+        .send()
+        .await;
+
+    Json(ProcessResponse { success: true, error: None })
 }
 ```
 
-## Testing Race Conditions
+### What Gets Propagated
 
-Send concurrent requests with the same trace ID:
+The middleware automatically:
+- Parses incoming `traceparent`, `tracestate`, and `raceway-clock` headers
+- Generates new span IDs for this service
+- Returns headers for downstream calls via `propagation_headers()`
 
-```bash
-TRACE_ID=$(uuidgen | tr '[:upper:]' '[:lower:]')
+Headers propagated:
+- `traceparent`: W3C Trace Context (trace ID, span ID, trace flags)
+- `tracestate`: W3C vendor-specific state
+- `raceway-clock`: Raceway vector clock for causality tracking
 
-curl -X POST http://localhost:3000/api/transfer \
-  -H "Content-Type: application/json" \
-  -H "X-Trace-ID: $TRACE_ID" \
-  -d '{"from":"alice","to":"bob","amount":100}' &
+### Cross-Service Trace Merging
 
-curl -X POST http://localhost:3000/api/transfer \
-  -H "Content-Type: application/json" \
-  -H "X-Trace-ID: $TRACE_ID" \
-  -d '{"from":"alice","to":"charlie","amount":200}' &
+Events from all services sharing the same trace ID are automatically merged by the Raceway backend. The backend recursively follows distributed edges to construct complete traces across arbitrary service chain lengths.
 
-wait
+## Configuration
+
+The `RacewayClient` is created with minimal configuration:
+
+```rust
+// Basic initialization
+let client = Arc::new(RacewayClient::new(
+    "http://localhost:8080",  // Raceway server URL
+    "my-service"              // Service name
+));
+
+// With custom module name
+let client = Arc::new(RacewayClient::with_module(
+    "http://localhost:8080",
+    "my-service",
+    "payments"                // Module name for function tracking
+));
 ```
 
-Raceway will detect the race when both requests read the same balance before either writes!
+**Auto-Flush Behavior:**
+- Events are automatically flushed every 1 second
+- A background task is spawned on client creation to handle auto-flush
 
-## Event Types
+## API Reference
 
-The SDK supports tracking the following event types:
+### Client Creation
 
-- **StateChange**: Variable reads and writes
-- **FunctionCall**: Function entry points
-- **FunctionReturn**: Function exits with return values
-- **AsyncSpawn**: Spawning async tasks
-- **AsyncAwait**: Awaiting async operations
-- **HttpRequest**: HTTP requests
-- **HttpResponse**: HTTP responses
-- **LockAcquire**: Acquiring locks/mutexes
-- **LockRelease**: Releasing locks/mutexes
-- **Error**: Exceptions and errors
+#### `RacewayClient::new(endpoint, service_name)`
+
+Create a new Raceway client instance with default module name "app".
+
+```rust
+let client = Arc::new(RacewayClient::new(
+    "http://localhost:8080",
+    "my-service"
+));
+```
+
+#### `RacewayClient::with_module(endpoint, service_name, module_name)`
+
+Create a new Raceway client instance with a custom module name.
+
+```rust
+let client = Arc::new(RacewayClient::with_module(
+    "http://localhost:8080",
+    "my-service",
+    "payments"
+));
+```
+
+### Core Tracking Methods
+
+All methods are called on the `RacewayClient` instance and automatically read context from `tokio::task_local!` storage. They do not require `.await`.
+
+#### `client.track_state_change<T: Serialize>(variable, old_value, new_value, access_type)`
+
+Track a variable read or write.
+
+```rust
+// Track a read
+client.track_state_change(
+    "counter",
+    None::<i64>,
+    5,
+    "Read"
+);
+
+// Track a write
+client.track_state_change(
+    "counter",
+    Some(5),
+    6,
+    "Write"
+);
+```
+
+#### `client.track_function_call<T: Serialize>(function_name, args)`
+
+Track a function call (no duration tracking).
+
+```rust
+client.track_function_call(
+    "process_payment",
+    serde_json::json!({ "amount": 100 })
+);
+```
+
+#### `client.track_function<F, T>(function_name, args, f) -> T` (async)
+
+Track an async function with automatic duration measurement.
+
+```rust
+async fn process_payment(client: &RacewayClient, amount: i64) -> Result<(), Error> {
+    client.track_function(
+        "process_payment",
+        serde_json::json!({ "amount": amount }),
+        async {
+            let result = do_payment(amount).await?;
+            Ok(result)
+        }
+    ).await
+}
+```
+
+#### `client.track_function_sync<F, T>(function_name, args, f) -> T`
+
+Track a synchronous function with automatic duration measurement.
+
+```rust
+fn calculate_total(client: &RacewayClient, items: &[i64]) -> i64 {
+    client.track_function_sync(
+        "calculate_total",
+        serde_json::json!({ "item_count": items.len() }),
+        || items.iter().sum()
+    )
+}
+```
+
+#### `client.track_http_response(status, duration_ms)`
+
+Track an HTTP response.
+
+```rust
+client.track_http_response(200, 45);
+```
+
+### Distributed Tracing Methods
+
+#### `client.propagation_headers(extra_headers) -> Result<HashMap<String, String>, String>`
+
+Generate headers for downstream service calls.
+
+```rust
+let headers = match client.propagation_headers(None) {
+    Ok(h) => h,
+    Err(e) => return Err(format!("Failed to get headers: {}", e))
+};
+
+let http_client = reqwest::Client::new();
+http_client
+    .post(downstream_url)
+    .json(&payload)
+    .header("traceparent", headers.get("traceparent").unwrap())
+    .header("raceway-clock", headers.get("raceway-clock").unwrap())
+    .send()
+    .await?;
+```
+
+**Returns:** `HashMap` with `traceparent`, `tracestate`, and `raceway-clock` headers.
+
+**Error:** Returns error if called outside request context.
+
+#### `RacewayClient::middleware(client, headers, request, next)`
+
+Axum middleware for automatic trace initialization.
+
+```rust
+let app = Router::new()
+    .route("/api/endpoint", post(handler))
+    .layer(axum::middleware::from_fn_with_state(
+        raceway.clone(),
+        RacewayClient::middleware,
+    ))
+    .with_state(raceway);
+```
+
+### Lifecycle Methods
+
+#### `client.shutdown()`
+
+Flush remaining events and stop background tasks.
+
+```rust
+client.shutdown();
+```
+
+## Context Propagation
+
+The SDK uses `tokio::task_local!` via `RACEWAY_CONTEXT` for automatic context propagation across async operations. This is Rust's equivalent to:
+- AsyncLocalStorage (Node.js/TypeScript)
+- `context.Context` (Go)
+- `contextvars` (Python)
+
+Context is maintained across:
+- HTTP requests (via middleware)
+- `.await` points within the same task
+- Function calls within the request scope
+
+**Note:** Context does NOT automatically propagate to spawned tasks (`tokio::spawn`). For spawned tasks, you need to manually propagate the context.
 
 ## Best Practices
 
-1. **Use Middleware**: Always set up the Raceway middleware on your Axum router to enable automatic context propagation:
+1. **Always use middleware**: Set up Raceway middleware to enable automatic trace initialization
+2. **Use Arc for client**: Wrap the client in `Arc` for safe sharing across handlers
+3. **Track shared state**: Focus on shared mutable state accessed by concurrent requests
+4. **Propagate headers**: Always use `propagation_headers()` when calling downstream services
+5. **Graceful shutdown**: Call `client.shutdown()` before exiting:
    ```rust
-   .layer(axum::middleware::from_fn({
-       let raceway = raceway.clone();
-       move |headers, request, next| {
-           RacewayClient::middleware(raceway.clone(), headers, request, next)
-       }
-   }))
+   tokio::select! {
+       _ = ctrl_c => {
+           client.shutdown();
+       },
+   }
    ```
+6. **Pass client via State**: Use Axum's `State` extractor to access the client in handlers
 
-2. **Track Shared State**: Focus on tracking accesses to shared variables that multiple tasks might access concurrently.
+## Distributed Example
 
-3. **Pass Client via State**: Use Axum's `State` extractor to access the Raceway client in your handlers:
-   ```rust
-   async fn handler(State(raceway): State<Arc<RacewayClient>>) { ... }
-   ```
+Complete example with distributed tracing:
 
-4. **Automatic Flush**: The SDK automatically flushes events every 1 second. No manual shutdown is needed for most cases.
+```rust
+use axum::{
+    extract::State,
+    http::{HeaderMap, StatusCode},
+    middleware,
+    response::Json,
+    routing::post,
+    Router,
+};
+use raceway_sdk::RacewayClient;
+use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
-5. **Selective Tracking**: Not all state needs tracking. Focus on shared mutable state accessed by concurrent requests.
+#[derive(Deserialize)]
+struct OrderRequest {
+    order_id: String,
+}
 
-## Performance
+#[derive(Serialize)]
+struct OrderResponse {
+    success: bool,
+    order_id: String,
+}
 
-The SDK is designed for minimal overhead:
+#[tokio::main]
+async fn main() {
+    let raceway = Arc::new(RacewayClient::new(
+        "http://localhost:8080",
+        "api-gateway"
+    ));
 
-- **Zero-cost context propagation** using `tokio::task_local!`
-- **Event buffering** with batched transmission
-- **Non-blocking I/O** for event transmission
-- **Auto-flush** every 1 second
-- **Compile-time optimizations** via Rust's zero-cost abstractions
-- **Efficient serialization** using parking_lot for synchronization
+    let app = Router::new()
+        .route("/api/order", post(create_order))
+        .layer(middleware::from_fn_with_state(
+            raceway.clone(),
+            RacewayClient::middleware,
+        ))
+        .with_state(raceway);
 
-**Typical overhead**: <5% for most workloads
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000")
+        .await
+        .unwrap();
 
-## Examples
+    axum::serve(listener, app).await.unwrap();
+}
 
-See the [examples/rust-banking](../../examples/rust-banking) directory for a complete working example demonstrating:
+async fn create_order(
+    State(raceway): State<Arc<RacewayClient>>,
+    Json(req): Json<OrderRequest>,
+) -> (StatusCode, Json<OrderResponse>) {
+    raceway.track_function_call("createOrder", &req);
 
-- Axum middleware integration
-- Automatic context propagation with task-local storage
-- Race condition detection in a banking API
-- Concurrent transfer scenarios
+    // Get propagation headers
+    let headers = match raceway.propagation_headers(None) {
+        Ok(h) => h,
+        Err(_) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(OrderResponse {
+            success: false,
+            order_id: req.order_id.clone(),
+        })),
+    };
 
-## Viewing Results
+    let client = reqwest::Client::new();
 
-### Web UI
+    // Call inventory service
+    let _ = client
+        .post("http://inventory-service:3001/reserve")
+        .json(&serde_json::json!({ "orderId": &req.order_id }))
+        .header("traceparent", headers.get("traceparent").unwrap())
+        .header("raceway-clock", headers.get("raceway-clock").unwrap())
+        .send()
+        .await;
 
-```bash
-# Start Raceway server (if not already running)
-raceway serve
+    // Call payment service
+    let _ = client
+        .post("http://payment-service:3002/charge")
+        .json(&serde_json::json!({ "orderId": &req.order_id }))
+        .header("traceparent", headers.get("traceparent").unwrap())
+        .header("raceway-clock", headers.get("raceway-clock").unwrap())
+        .send()
+        .await;
 
-# Open http://localhost:8080 in your browser
+    (StatusCode::OK, Json(OrderResponse {
+        success: true,
+        order_id: req.order_id,
+    }))
+}
 ```
 
-### Terminal UI
-
-```bash
-raceway tui
-```
-
-**Keyboard shortcuts:**
-- `↑↓` or `j/k`: Navigate traces
-- `Enter`: View trace details
-- `r`: Refresh
-- `q`: Quit
-
-### API
-
-```bash
-# List all traces
-curl http://localhost:8080/api/traces
-
-# Get specific trace
-curl http://localhost:8080/api/traces/<trace-id>
-
-# Analyze for race conditions
-curl http://localhost:8080/api/analyze
-```
+All services in the chain will share the same trace ID, and Raceway will merge their events into a single distributed trace.
 
 ## Troubleshooting
 
 ### Events not appearing
 
 1. Check server is running: `curl http://localhost:8080/health`
-2. Check console output - the SDK prints flush messages with `eprintln!`
-3. Verify middleware is properly configured
-4. Ensure trace IDs are valid (check `x-trace-id` header)
-5. Wait up to 1 second for auto-flush
+2. Verify middleware is properly configured
+3. Ensure trace IDs are valid
+4. Wait up to 1 second for auto-flush
+
+### Distributed traces not merging
+
+1. Ensure all services use `propagation_headers()` when calling downstream
+2. Verify `traceparent` header is being sent
+3. Check that all services report to the same Raceway server
+4. Verify service names are unique
 
 ### Context not propagating
 
@@ -565,40 +482,12 @@ curl http://localhost:8080/api/analyze
 - Check that handlers receive the `State<Arc<RacewayClient>>`
 - For spawned tasks (`tokio::spawn`), context does NOT propagate automatically
 
-### High Memory Usage
-
-The SDK uses an event buffer that flushes every 1 second. If you're generating events faster than they can be flushed, memory usage may increase temporarily. This is normal behavior.
-
-## Current API Design
-
-The Raceway Rust SDK uses:
-
-- **`RacewayClient`** - The main client struct
-- **`RacewayClient::new(endpoint, service_name)`** - Simple constructor
-- **`RacewayClient::with_module(...)`** - Constructor with custom module name
-- **`RacewayClient::middleware(...)`** - Axum middleware for automatic context setup
-- **Instance methods** - All tracking methods are called on the client instance
-- **No .await needed** - Tracking methods are synchronous (events are buffered)
-- **Automatic flushing** - Events are sent to the server every 1 second
-
-**Example:**
-```rust
-let raceway = Arc::new(RacewayClient::new("http://localhost:8080", "my-service"));
-
-// In your handler (context is automatic via middleware):
-async fn handler(State(raceway): State<Arc<RacewayClient>>) {
-    raceway.track_state_change("balance", Some(100), 150, "Write");
-    // No .await needed! Context is automatic!
-}
-```
-
 ## License
 
 MIT
 
-## Support
+## Links
 
-- **Documentation**: https://docs.raceway.dev
-- **Examples**: https://github.com/mode-7/raceway/tree/main/examples
-- **Issues**: https://github.com/mode-7/raceway/issues
-- **Discord**: https://discord.gg/raceway
+- [GitHub Repository](https://github.com/mode-7/raceway)
+- [Documentation](https://docs.raceway.dev)
+- [Issue Tracker](https://github.com/mode-7/raceway/issues)

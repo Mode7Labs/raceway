@@ -20,8 +20,9 @@ GREEN="${ESC}[32m"
 YELLOW="${ESC}[33m"
 MAGENTA="${ESC}[35m"
 RED="${ESC}[31m"
+BLUE="${ESC}[34m"
 
-ICON_BUILD="🛠️ "
+ICON_BUILD="🛠️"
 ICON_SERVER="🚀"
 ICON_TUI="🎨"
 ICON_WEB="🌐"
@@ -30,9 +31,17 @@ ICON_DEMO="💰"
 ICON_DISTRIBUTED="🌍"
 ICON_EXIT="👋"
 ICON_TEST="✅"
+ICON_SDK="📦"
+ICON_DATABASE="🗄️"
+ICON_UTILITIES="🧰"
+ICON_BACK="⬅️"
+ICON_FORMAT="✨"
+ICON_CLEAN="🧹"
+ICON_LOGS="📋"
 
 # ─── Helpers ────────────────────────────────────────────────────────────────────
 print_header() {
+  clear
   printf "\n${BOLD}${MAGENTA}Raceway Dev Menu${RESET}\n"
   printf "${DIM}Workspace:${RESET} %s\n\n" "${SCRIPT_DIR}"
 }
@@ -59,26 +68,158 @@ run_step() {
   )
 }
 
-# ─── Actions ────────────────────────────────────────────────────────────────────
-action_build() {
-  require_tool cargo
-  run_step "${ICON_BUILD} Building (cargo build)" "cargo build"
+pause() {
+  printf "\n${DIM}Press Enter to continue...${RESET}"
+  read -r _
+  printf "\n"
 }
 
+# ─── Actions ────────────────────────────────────────────────────────────────────
+
+# Core Development
+action_start_dev_env() {
+  printf "${CYAN}${BOLD}${ICON_SERVER} Starting Development Environment${RESET}\n"
+  printf "${DIM}This will start the server and web UI${RESET}\n\n"
+
+  require_tool cargo
+
+  # Start server in background
+  printf "${GREEN}Starting Raceway server...${RESET}\n"
+  cargo run --release -- serve &
+  SERVER_PID=$!
+
+  sleep 2
+
+  # Start web UI in background
+  local pkg_manager
+  if command -v pnpm >/dev/null 2>&1; then
+    pkg_manager="pnpm"
+  else
+    require_tool npm
+    pkg_manager="npm"
+  fi
+
+  printf "${GREEN}Starting Web UI (${pkg_manager})...${RESET}\n"
+  (
+    cd "${SCRIPT_DIR}/web"
+    if [[ "${pkg_manager}" == "pnpm" ]]; then
+      pnpm run dev -- --port 3005 &
+    else
+      npm run dev -- -- --port 3005 &
+    fi
+  )
+  WEB_PID=$!
+
+  printf "\n${GREEN}${BOLD}✓ Development environment started!${RESET}\n"
+  printf "${DIM}Server PID: ${SERVER_PID}${RESET}\n"
+  printf "${DIM}Web UI PID: ${WEB_PID}${RESET}\n"
+  printf "${DIM}Access at: http://localhost:3005${RESET}\n"
+  printf "\n${YELLOW}Press Ctrl+C to stop both processes${RESET}\n"
+
+  # Wait for both processes
+  wait
+}
+
+action_build() {
+  require_tool cargo
+  run_step "${ICON_BUILD} Building core" "cargo build"
+}
+
+action_tests_all() {
+  printf "${CYAN}${BOLD}${ICON_TEST} Running All Tests${RESET}\n\n"
+
+  # Core tests
+  run_step "${ICON_TEST} Core graph tests" \
+    "cargo test -p raceway-core graph::tests"
+  run_step "${ICON_TEST} Integration tests" \
+    "cargo test -p raceway-test"
+
+  # SDK tests
+  action_tests_sdk_all
+}
+
+action_tests_core() {
+  require_tool cargo
+  run_step "${ICON_TEST} Core graph tests" \
+    "cargo test -p raceway-core graph::tests"
+  run_step "${ICON_TEST} Integration tests" \
+    "cargo test -p raceway-test"
+}
+
+action_tests_sdk_all() {
+  printf "${CYAN}${BOLD}${ICON_SDK} Running All SDK Tests${RESET}\n\n"
+
+  if command -v npm >/dev/null 2>&1; then
+    run_step "${ICON_TEST} TypeScript SDK tests" \
+      "npm test" \
+      "${SCRIPT_DIR}/sdks/typescript"
+  fi
+
+  if command -v go >/dev/null 2>&1; then
+    run_step "${ICON_TEST} Go SDK tests" \
+      "go test ./..." \
+      "${SCRIPT_DIR}/sdks/go"
+  fi
+
+  if command -v python3 >/dev/null 2>&1 && python3 -c "import pytest" 2>/dev/null; then
+    run_step "${ICON_TEST} Python SDK tests" \
+      "python3 -m pytest tests/test_trace_context.py -v" \
+      "${SCRIPT_DIR}/sdks/python"
+  fi
+
+  if command -v cargo >/dev/null 2>&1; then
+    run_step "${ICON_TEST} Rust SDK tests" \
+      "cargo test" \
+      "${SCRIPT_DIR}/sdks/rust"
+  fi
+}
+
+action_test_sdk_typescript() {
+  require_tool npm
+  run_step "${ICON_TEST} TypeScript SDK tests" \
+    "npm test" \
+    "${SCRIPT_DIR}/sdks/typescript"
+}
+
+action_test_sdk_python() {
+  require_tool python3
+  if ! python3 -c "import pytest" 2>/dev/null; then
+    printf "${RED}Error:${RESET} pytest not installed. Run: pip install pytest\n"
+    return 1
+  fi
+  run_step "${ICON_TEST} Python SDK tests" \
+    "python3 -m pytest tests/test_trace_context.py -v" \
+    "${SCRIPT_DIR}/sdks/python"
+}
+
+action_test_sdk_go() {
+  require_tool go
+  run_step "${ICON_TEST} Go SDK tests" \
+    "go test ./..." \
+    "${SCRIPT_DIR}/sdks/go"
+}
+
+action_test_sdk_rust() {
+  require_tool cargo
+  run_step "${ICON_TEST} Rust SDK tests" \
+    "cargo test" \
+    "${SCRIPT_DIR}/sdks/rust"
+}
+
+# Demo Apps
 action_server() {
   require_tool cargo
-  run_step "${ICON_SERVER} Starting server (cargo run --release -- serve)" \
+  run_step "${ICON_SERVER} Starting server" \
     "cargo run --release -- serve"
 }
 
 action_tui() {
   require_tool cargo
-  run_step "${ICON_TUI} Launching TUI (cargo run --release -- tui)" \
+  run_step "${ICON_TUI} Launching TUI" \
     "cargo run --release -- tui"
 }
 
 action_web() {
-  # Prefer pnpm, then npm
   local pkg_manager
   if command -v pnpm >/dev/null 2>&1; then
     pkg_manager="pnpm"
@@ -94,49 +235,141 @@ action_web() {
     command="npm run dev -- -- --port 3005"
   fi
 
-  run_step "${ICON_WEB} Starting Web UI (${pkg_manager} dev --port 3005)" \
+  run_step "${ICON_WEB} Starting Web UI (${pkg_manager} on port 3005)" \
     "${command}" \
     "${SCRIPT_DIR}/web"
 }
 
-action_tests() {
+action_demo_typescript() {
+  require_tool node
+  run_step "${ICON_DEMO} TypeScript Banking Demo (Express on port 3050)" \
+    "PORT=3050 node index.js" \
+    "${SCRIPT_DIR}/examples/express-banking"
+}
+
+action_demo_rust() {
   require_tool cargo
-  run_step "${ICON_TEST} Graph unit tests (cargo test -p raceway-core graph::tests)" \
-    "cargo test -p raceway-core graph::tests"
-  run_step "${ICON_TEST} Integration tests (cargo test -p raceway-test)" \
-    "cargo test -p raceway-test"
+  run_step "${ICON_DEMO} Rust Banking Demo (Axum on port 3051)" \
+    "cargo run --release" \
+    "${SCRIPT_DIR}/examples/rust-banking"
+}
 
-  # SDK tests
-  if command -v npm >/dev/null 2>&1; then
-    run_step "${ICON_TEST} TypeScript SDK tests (npm test)" \
-      "npm test" \
-      "${SCRIPT_DIR}/sdks/typescript"
-  fi
+action_demo_go() {
+  require_tool go
+  run_step "${ICON_DEMO} Go Banking Demo (Gin on port 3052)" \
+    "PORT=3052 go run main.go" \
+    "${SCRIPT_DIR}/examples/go-banking"
+}
 
-  if command -v go >/dev/null 2>&1; then
-    run_step "${ICON_TEST} Go SDK tests (go test ./...)" \
-      "go test ./..." \
-      "${SCRIPT_DIR}/sdks/go"
-  fi
+action_demo_python() {
+  require_tool python3
+  run_step "${ICON_DEMO} Python Banking Demo (Flask on port 3053)" \
+    "PORT=3053 python3 app.py" \
+    "${SCRIPT_DIR}/examples/python-banking"
+}
 
-  if command -v python3 >/dev/null 2>&1; then
-    # Check if pytest is available as a module
-    if python3 -c "import pytest" 2>/dev/null; then
-      run_step "${ICON_TEST} Python SDK tests (python3 -m pytest)" \
-        "python3 -m pytest tests/test_trace_context.py -v" \
-        "${SCRIPT_DIR}/sdks/python"
-    fi
-  fi
+# Distributed Tracing
+action_distributed_full_chain() {
+  printf "${CYAN}${BOLD}${ICON_DISTRIBUTED} Full Chain Test${RESET}\n"
+  printf "${DIM}Single trace through: TypeScript → Python → Go → Rust${RESET}\n\n"
 
-  if command -v cargo >/dev/null 2>&1; then
-    run_step "${ICON_TEST} Rust SDK tests (cargo test)" \
-      "cargo test" \
-      "${SCRIPT_DIR}/sdks/rust"
+  run_step "${ICON_DISTRIBUTED} Running full-chain.sh" \
+    "./patterns/full-chain.sh" \
+    "${SCRIPT_DIR}/examples/distributed"
+}
+
+action_distributed_linear() {
+  printf "${CYAN}${BOLD}${ICON_DISTRIBUTED} Linear Pattern Test${RESET}\n"
+  printf "${DIM}Separate requests to each service${RESET}\n\n"
+
+  run_step "${ICON_DISTRIBUTED} Running linear.sh" \
+    "./patterns/linear.sh" \
+    "${SCRIPT_DIR}/examples/distributed"
+}
+
+action_distributed_test_suite() {
+  printf "${CYAN}${BOLD}${ICON_DISTRIBUTED} Full Test Suite${RESET}\n"
+  printf "${DIM}Comprehensive distributed tracing tests${RESET}\n\n"
+
+  run_step "${ICON_DISTRIBUTED} Running test.sh" \
+    "./test.sh" \
+    "${SCRIPT_DIR}/examples/distributed"
+}
+
+action_distributed_start_services() {
+  printf "${CYAN}${BOLD}${ICON_DISTRIBUTED} Starting All Distributed Services${RESET}\n"
+  printf "${DIM}Ports: TypeScript(6001), Python(6002), Go(6003), Rust(6004)${RESET}\n\n"
+
+  cd "${SCRIPT_DIR}/examples/distributed"
+
+  # TypeScript service
+  printf "${GREEN}Starting TypeScript service (port 6001)...${RESET}\n"
+  (cd services/typescript-service && npm start) &
+  TS_PID=$!
+
+  # Python service
+  printf "${GREEN}Starting Python service (port 6002)...${RESET}\n"
+  (cd services/python-service && python3 server.py) &
+  PY_PID=$!
+
+  # Go service
+  printf "${GREEN}Starting Go service (port 6003)...${RESET}\n"
+  (cd services/go-service && go run main.go) &
+  GO_PID=$!
+
+  # Rust service
+  printf "${GREEN}Starting Rust service (port 6004)...${RESET}\n"
+  (cd services/rust-service && cargo run --release) &
+  RUST_PID=$!
+
+  printf "\n${GREEN}${BOLD}✓ All services started!${RESET}\n"
+  printf "${DIM}TypeScript PID: ${TS_PID}${RESET}\n"
+  printf "${DIM}Python PID: ${PY_PID}${RESET}\n"
+  printf "${DIM}Go PID: ${GO_PID}${RESET}\n"
+  printf "${DIM}Rust PID: ${RUST_PID}${RESET}\n"
+  printf "\n${YELLOW}Press Ctrl+C to stop all services${RESET}\n"
+
+  # Save PIDs to file for stop action
+  echo "${TS_PID} ${PY_PID} ${GO_PID} ${RUST_PID}" > /tmp/raceway-distributed-pids
+
+  wait
+}
+
+action_distributed_stop_services() {
+  if [[ -f /tmp/raceway-distributed-pids ]]; then
+    printf "${YELLOW}Stopping distributed services...${RESET}\n"
+    read -r TS_PID PY_PID GO_PID RUST_PID < /tmp/raceway-distributed-pids
+
+    kill "${TS_PID}" "${PY_PID}" "${GO_PID}" "${RUST_PID}" 2>/dev/null || true
+    rm /tmp/raceway-distributed-pids
+
+    printf "${GREEN}✓ All services stopped${RESET}\n"
+  else
+    printf "${YELLOW}No running services found${RESET}\n"
   fi
 }
 
+# SDK Tools
+action_sdk_build_all() {
+  printf "${CYAN}${BOLD}${ICON_SDK} Building All SDKs${RESET}\n\n"
+
+  if command -v npm >/dev/null 2>&1; then
+    run_step "${ICON_SDK} Building TypeScript SDK" \
+      "npm run build" \
+      "${SCRIPT_DIR}/sdks/typescript"
+  fi
+
+  if command -v cargo >/dev/null 2>&1; then
+    run_step "${ICON_SDK} Building Rust SDK" \
+      "cargo build" \
+      "${SCRIPT_DIR}/sdks/rust"
+  fi
+
+  printf "${GREEN}${BOLD}✓ SDK builds complete${RESET}\n"
+}
+
+# Database
 action_seed() {
-  # Prefer pnpm, then npx
   local pkg_manager
   if command -v pnpm >/dev/null 2>&1; then
     pkg_manager="pnpm exec ts-node"
@@ -145,99 +378,361 @@ action_seed() {
     pkg_manager="npx ts-node"
   fi
 
-  run_step "${ICON_SEED} Seeding database (${pkg_manager} scripts/seed-database.ts)" \
+  run_step "${ICON_SEED} Seeding database" \
     "${pkg_manager} scripts/seed-database.ts" \
     "${SCRIPT_DIR}"
 }
 
-action_demo_typescript() {
-  require_tool node
-  run_step "${ICON_DEMO} Starting TypeScript demo (node index.js on port 3050)" \
-    "PORT=3050 node index.js" \
-    "${SCRIPT_DIR}/examples/express-banking"
+action_clear_database() {
+  printf "${YELLOW}${BOLD}${ICON_DATABASE} Clearing Database${RESET}\n"
+  printf "${DIM}This will delete all traces and events${RESET}\n\n"
+
+  printf "Are you sure? (y/N): "
+  read -r confirm
+
+  if [[ "${confirm}" =~ ^[Yy]$ ]]; then
+    # Remove SQLite database
+    if [[ -f "${SCRIPT_DIR}/raceway.db" ]]; then
+      rm "${SCRIPT_DIR}/raceway.db"
+      printf "${GREEN}✓ Database cleared${RESET}\n"
+    else
+      printf "${YELLOW}No database file found${RESET}\n"
+    fi
+  else
+    printf "${DIM}Cancelled${RESET}\n"
+  fi
 }
 
-action_demo_rust() {
-  require_tool cargo
-  run_step "${ICON_DEMO} Starting Rust demo (cargo run on port 3051)" \
-    "cargo run --release" \
-    "${SCRIPT_DIR}/examples/rust-banking"
+action_database_stats() {
+  if [[ -f "${SCRIPT_DIR}/raceway.db" ]]; then
+    printf "${CYAN}${BOLD}${ICON_DATABASE} Database Statistics${RESET}\n\n"
+
+    require_tool sqlite3
+
+    printf "${GREEN}Events:${RESET} "
+    sqlite3 "${SCRIPT_DIR}/raceway.db" "SELECT COUNT(*) FROM events;"
+
+    printf "${GREEN}Traces:${RESET} "
+    sqlite3 "${SCRIPT_DIR}/raceway.db" "SELECT COUNT(DISTINCT trace_id) FROM events;"
+
+    printf "${GREEN}Services:${RESET} "
+    sqlite3 "${SCRIPT_DIR}/raceway.db" "SELECT COUNT(DISTINCT service) FROM events;"
+
+    printf "\n${GREEN}Database size:${RESET} "
+    du -h "${SCRIPT_DIR}/raceway.db" | cut -f1
+  else
+    printf "${YELLOW}No database file found${RESET}\n"
+  fi
 }
 
-action_demo_go() {
-  require_tool go
-  run_step "${ICON_DEMO} Starting Go demo (go run main.go on port 3052)" \
-    "PORT=3052 go run main.go" \
-    "${SCRIPT_DIR}/examples/go-banking"
+# Utilities
+action_format_code() {
+  printf "${CYAN}${BOLD}${ICON_FORMAT} Formatting Code${RESET}\n\n"
+
+  # Rust
+  if command -v cargo >/dev/null 2>&1; then
+    run_step "${ICON_FORMAT} Formatting Rust code" \
+      "cargo fmt --all"
+  fi
+
+  # TypeScript/JavaScript
+  if command -v npx >/dev/null 2>&1; then
+    run_step "${ICON_FORMAT} Formatting TypeScript/JavaScript" \
+      "npx prettier --write '**/*.{ts,js,json}' --ignore-path .gitignore" \
+      "${SCRIPT_DIR}"
+  fi
+
+  printf "${GREEN}${BOLD}✓ Code formatting complete${RESET}\n"
 }
 
-action_demo_python() {
-  require_tool python3
-  run_step "${ICON_DEMO} Starting Python demo (python app.py on port 3053)" \
-    "PORT=3053 python3 app.py" \
-    "${SCRIPT_DIR}/examples/python-banking"
+action_clean_artifacts() {
+  printf "${CYAN}${BOLD}${ICON_CLEAN} Cleaning Build Artifacts${RESET}\n\n"
+
+  printf "${YELLOW}This will remove:${RESET}\n"
+  printf "  - Rust target/ directory\n"
+  printf "  - Node node_modules/ in web/\n"
+  printf "  - Build artifacts from examples\n\n"
+
+  printf "Continue? (y/N): "
+  read -r confirm
+
+  if [[ "${confirm}" =~ ^[Yy]$ ]]; then
+    # Cargo clean
+    if command -v cargo >/dev/null 2>&1; then
+      run_step "${ICON_CLEAN} Cleaning Rust artifacts" \
+        "cargo clean"
+    fi
+
+    # Remove web node_modules
+    if [[ -d "${SCRIPT_DIR}/web/node_modules" ]]; then
+      printf "${DIM}Removing web/node_modules...${RESET}\n"
+      rm -rf "${SCRIPT_DIR}/web/node_modules"
+    fi
+
+    # Remove example build artifacts
+    if [[ -d "${SCRIPT_DIR}/examples/rust-banking/target" ]]; then
+      printf "${DIM}Removing examples/rust-banking/target...${RESET}\n"
+      rm -rf "${SCRIPT_DIR}/examples/rust-banking/target"
+    fi
+
+    printf "${GREEN}${BOLD}✓ Cleanup complete${RESET}\n"
+  else
+    printf "${DIM}Cancelled${RESET}\n"
+  fi
 }
 
-action_distributed_demo() {
-  printf "${CYAN}${BOLD}${ICON_DISTRIBUTED} Distributed Tracing Demo (Phase 1.5)${RESET}\n"
-  printf "${DIM}Testing header propagation: TypeScript → Python → Go → Rust${RESET}\n\n"
+action_view_logs() {
+  printf "${CYAN}${BOLD}${ICON_LOGS} View Logs${RESET}\n\n"
 
-  run_step "${ICON_DISTRIBUTED} Running distributed demo test suite" \
-    "./test.sh" \
-    "${SCRIPT_DIR}/examples/distributed"
+  printf "${GREEN}1)${RESET} Tail debug.log\n"
+  printf "${GREEN}2)${RESET} Tail raceway-dev.log\n"
+  printf "${GREEN}3)${RESET} View both (split screen)\n"
+  printf "${YELLOW}b)${RESET} Back\n\n"
+  printf "Select: "
+  read -r choice
+
+  case "${choice}" in
+    1)
+      if [[ -f "${SCRIPT_DIR}/debug.log" ]]; then
+        tail -f "${SCRIPT_DIR}/debug.log"
+      else
+        printf "${YELLOW}debug.log not found${RESET}\n"
+      fi
+      ;;
+    2)
+      if [[ -f "${SCRIPT_DIR}/raceway-dev.log" ]]; then
+        tail -f "${SCRIPT_DIR}/raceway-dev.log"
+      else
+        printf "${YELLOW}raceway-dev.log not found${RESET}\n"
+      fi
+      ;;
+    3)
+      if command -v tmux >/dev/null 2>&1; then
+        tmux new-session -d "tail -f ${SCRIPT_DIR}/debug.log" \; \
+          split-window -v "tail -f ${SCRIPT_DIR}/raceway-dev.log" \; \
+          attach
+      else
+        printf "${YELLOW}tmux not installed - showing debug.log only${RESET}\n"
+        tail -f "${SCRIPT_DIR}/debug.log"
+      fi
+      ;;
+    b|B) return ;;
+    *) printf "${RED}Invalid selection${RESET}\n" ;;
+  esac
 }
 
-# ─── Menu ───────────────────────────────────────────────────────────────────────
-print_menu() {
-  print_header
-  cat <<EOF
-${BOLD}${CYAN}Core${RESET}
-${GREEN}1)${RESET} ${ICON_BUILD} Rebuild core (cargo build)
-${GREEN}2)${RESET} ${ICON_SERVER} Start server (cargo run --release -- serve)
-${GREEN}3)${RESET} ${ICON_TUI} Launch TUI (cargo run --release -- tui)
-${GREEN}4)${RESET} ${ICON_WEB} Start Web UI (Vite on port 3005)
-${GREEN}5)${RESET} ${ICON_BUILD} Run tests (core + integration)
-${GREEN}6)${RESET} ${ICON_SEED} Seed database (clear & seed test data)
+# ─── Menus ──────────────────────────────────────────────────────────────────────
 
-${BOLD}${CYAN}Demo Apps${RESET}
-${GREEN}7)${RESET} ${ICON_DEMO} TypeScript Banking (Node.js/Express on port 3050)
-${GREEN}8)${RESET} ${ICON_DEMO} Rust Banking (Axum on port 3051)
-${GREEN}9)${RESET} ${ICON_DEMO} Go Banking (Gin on port 3052)
-${GREEN}10)${RESET} ${ICON_DEMO} Python Banking (Flask on port 3053)
-
-${BOLD}${CYAN}Distributed Tracing${RESET}
-${GREEN}11)${RESET} ${ICON_DISTRIBUTED} Phase 1.5 Demo (TS → Py → Go → Rust chain on ports 6001-6004)
-
-${YELLOW}q)${RESET} ${ICON_EXIT} Quit
-EOF
-  printf "\nSelect an option: "
-}
-
-main_loop() {
+menu_build_test() {
   while true; do
-    print_menu
+    print_header
+    cat <<EOF
+${BOLD}${CYAN}${ICON_BUILD}  Build & Test${RESET}
+
+${GREEN}1)${RESET} Build core (cargo build)
+${GREEN}2)${RESET} Run all tests (core + integration + SDKs)
+${GREEN}3)${RESET} Run core tests only
+${GREEN}4)${RESET} Run SDK tests only
+
+${YELLOW}b)${RESET} ${ICON_BACK}  Back to main menu
+EOF
+    printf "\nSelect: "
     read -r choice
     printf "\n"
 
     case "${choice}" in
-      1) action_build ;;
-      2) action_server ;;
-      3) action_tui ;;
-      4) action_web ;;
-      5) action_tests ;;
-      6) action_seed ;;
-      7) action_demo_typescript ;;
-      8) action_demo_rust ;;
-      9) action_demo_go ;;
-      10) action_demo_python ;;
-      11) action_distributed_demo ;;
-      q|Q) printf "${ICON_EXIT} Bye!\n"; exit 0 ;;
-      *) printf "${RED}Invalid selection.${RESET} Try again.\n\n" ;;
+      1) action_build; pause ;;
+      2) action_tests_all; pause ;;
+      3) action_tests_core; pause ;;
+      4) action_tests_sdk_all; pause ;;
+      b|B) return ;;
+      *) printf "${RED}Invalid selection${RESET}\n\n"; sleep 1 ;;
     esac
+  done
+}
 
-    printf "\n${DIM}Press Enter to return to the menu...${RESET}"
-    read -r _
+menu_demos() {
+  while true; do
+    print_header
+    cat <<EOF
+${BOLD}${CYAN}${ICON_DEMO}  Demo Applications${RESET}
+
+${GREEN}1)${RESET} TypeScript Banking (Express on port 3050)
+${GREEN}2)${RESET} Rust Banking (Axum on port 3051)
+${GREEN}3)${RESET} Go Banking (Gin on port 3052)
+${GREEN}4)${RESET} Python Banking (Flask on port 3053)
+${GREEN}5)${RESET} Launch TUI to view traces
+
+${YELLOW}b)${RESET} ${ICON_BACK}  Back to main menu
+EOF
+    printf "\nSelect: "
+    read -r choice
     printf "\n"
+
+    case "${choice}" in
+      1) action_demo_typescript; pause ;;
+      2) action_demo_rust; pause ;;
+      3) action_demo_go; pause ;;
+      4) action_demo_python; pause ;;
+      5) action_tui; pause ;;
+      b|B) return ;;
+      *) printf "${RED}Invalid selection${RESET}\n\n"; sleep 1 ;;
+    esac
+  done
+}
+
+menu_distributed() {
+  while true; do
+    print_header
+    cat <<EOF
+${BOLD}${CYAN}${ICON_DISTRIBUTED}  Distributed Tracing${RESET}
+
+${GREEN}1)${RESET} Full chain test (TS → Py → Go → Rust in single trace)
+${GREEN}2)${RESET} Linear pattern test (separate requests)
+${GREEN}3)${RESET} Run full test suite
+${GREEN}4)${RESET} Start all services (ports 6001-6004)
+${GREEN}5)${RESET} Stop all services
+
+${YELLOW}b)${RESET} ${ICON_BACK}  Back to main menu
+EOF
+    printf "\nSelect: "
+    read -r choice
+    printf "\n"
+
+    case "${choice}" in
+      1) action_distributed_full_chain; pause ;;
+      2) action_distributed_linear; pause ;;
+      3) action_distributed_test_suite; pause ;;
+      4) action_distributed_start_services; pause ;;
+      5) action_distributed_stop_services; pause ;;
+      b|B) return ;;
+      *) printf "${RED}Invalid selection${RESET}\n\n"; sleep 1 ;;
+    esac
+  done
+}
+
+menu_sdks() {
+  while true; do
+    print_header
+    cat <<EOF
+${BOLD}${CYAN}${ICON_SDK}  SDK Tools${RESET}
+
+${GREEN}1)${RESET} Build all SDKs
+${GREEN}2)${RESET} Test all SDKs
+${GREEN}3)${RESET} Test TypeScript SDK
+${GREEN}4)${RESET} Test Python SDK
+${GREEN}5)${RESET} Test Go SDK
+${GREEN}6)${RESET} Test Rust SDK
+
+${YELLOW}b)${RESET} ${ICON_BACK}  Back to main menu
+EOF
+    printf "\nSelect: "
+    read -r choice
+    printf "\n"
+
+    case "${choice}" in
+      1) action_sdk_build_all; pause ;;
+      2) action_tests_sdk_all; pause ;;
+      3) action_test_sdk_typescript; pause ;;
+      4) action_test_sdk_python; pause ;;
+      5) action_test_sdk_go; pause ;;
+      6) action_test_sdk_rust; pause ;;
+      b|B) return ;;
+      *) printf "${RED}Invalid selection${RESET}\n\n"; sleep 1 ;;
+    esac
+  done
+}
+
+menu_database() {
+  while true; do
+    print_header
+    cat <<EOF
+${BOLD}${CYAN}${ICON_DATABASE}  Database Tools${RESET}
+
+${GREEN}1)${RESET} Seed database (clear & seed test data)
+${GREEN}2)${RESET} Clear database (delete all traces/events)
+${GREEN}3)${RESET} View database statistics
+
+${YELLOW}b)${RESET} ${ICON_BACK}  Back to main menu
+EOF
+    printf "\nSelect: "
+    read -r choice
+    printf "\n"
+
+    case "${choice}" in
+      1) action_seed; pause ;;
+      2) action_clear_database; pause ;;
+      3) action_database_stats; pause ;;
+      b|B) return ;;
+      *) printf "${RED}Invalid selection${RESET}\n\n"; sleep 1 ;;
+    esac
+  done
+}
+
+menu_utilities() {
+  while true; do
+    print_header
+    cat <<EOF
+${BOLD}${CYAN}${ICON_UTILITIES}  Utilities${RESET}
+
+${GREEN}1)${RESET} Format code (cargo fmt, prettier)
+${GREEN}2)${RESET} Clean build artifacts
+${GREEN}3)${RESET} View logs
+
+${YELLOW}b)${RESET} ${ICON_BACK}  Back to main menu
+EOF
+    printf "\nSelect: "
+    read -r choice
+    printf "\n"
+
+    case "${choice}" in
+      1) action_format_code; pause ;;
+      2) action_clean_artifacts; pause ;;
+      3) action_view_logs ;;
+      b|B) return ;;
+      *) printf "${RED}Invalid selection${RESET}\n\n"; sleep 1 ;;
+    esac
+  done
+}
+
+# ─── Main Menu ──────────────────────────────────────────────────────────────────
+
+print_main_menu() {
+  print_header
+  cat <<EOF
+${BOLD}${CYAN}Quick Access${RESET}
+${GREEN}1)${RESET} ${ICON_SERVER}  Start Dev Environment (Server + Web UI)
+
+${BOLD}${CYAN}Menus${RESET}
+${GREEN}2)${RESET} ${ICON_BUILD}  Build & Test
+${GREEN}3)${RESET} ${ICON_DEMO}  Demo Applications
+${GREEN}4)${RESET} ${ICON_DISTRIBUTED}  Distributed Tracing
+${GREEN}5)${RESET} ${ICON_SDK}  SDK Tools
+${GREEN}6)${RESET} ${ICON_DATABASE}  Database
+${GREEN}7)${RESET} ${ICON_UTILITIES}  Utilities
+
+${YELLOW}q)${RESET} ${ICON_EXIT}  Quit
+EOF
+  printf "\nSelect: "
+}
+
+main_loop() {
+  while true; do
+    print_main_menu
+    read -r choice
+    printf "\n"
+
+    case "${choice}" in
+      1) action_start_dev_env ;;
+      2) menu_build_test ;;
+      3) menu_demos ;;
+      4) menu_distributed ;;
+      5) menu_sdks ;;
+      6) menu_database ;;
+      7) menu_utilities ;;
+      q|Q) printf "${ICON_EXIT} Bye!\n"; exit 0 ;;
+      *) printf "${RED}Invalid selection${RESET}\n\n"; sleep 1 ;;
+    esac
   done
 }
 

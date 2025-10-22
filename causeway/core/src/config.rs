@@ -21,6 +21,9 @@ pub struct Config {
     pub anomaly_detection: AnomalyDetectionConfig,
 
     #[serde(default)]
+    pub distributed_tracing: DistributedTracingConfig,
+
+    #[serde(default)]
     pub logging: LoggingConfig,
 
     #[serde(default)]
@@ -106,6 +109,7 @@ impl Default for Config {
             engine: EngineConfig::default(),
             race_detection: RaceDetectionConfig::default(),
             anomaly_detection: AnomalyDetectionConfig::default(),
+            distributed_tracing: DistributedTracingConfig::default(),
             logging: LoggingConfig::default(),
             development: DevelopmentConfig::default(),
         }
@@ -257,6 +261,20 @@ impl Default for AnomalyDetectionConfig {
     }
 }
 
+/// Controls whether distributed tracing is enabled (Phase 2).
+/// When enabled, events with distributed metadata will create distributed spans and edges.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct DistributedTracingConfig {
+    #[serde(default = "default_false")]
+    pub enabled: bool,
+}
+
+impl Default for DistributedTracingConfig {
+    fn default() -> Self {
+        Self { enabled: false }
+    }
+}
+
 /// Logging configuration.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct LoggingConfig {
@@ -295,6 +313,10 @@ fn default_port() -> u16 {
 
 fn default_true() -> bool {
     true
+}
+
+fn default_false() -> bool {
+    false
 }
 
 fn default_cors_origins() -> Vec<String> {

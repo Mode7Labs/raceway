@@ -155,7 +155,7 @@ func TestParseIncomingHeaders(t *testing.T) {
 		// Should not duplicate
 		count := 0
 		for _, entry := range result.ClockVector {
-			if entry.Component == "test-service#instance-1" {
+			if entry.Component() == "test-service#instance-1" {
 				count++
 			}
 		}
@@ -248,7 +248,7 @@ func TestBuildPropagationHeaders(t *testing.T) {
 			validTraceID,
 			"current-span-id",
 			nil,
-			[]CausalityEntry{{Component: "test-service#instance-1", Value: 5}},
+			[]CausalityEntry{NewCausalityEntry("test-service#instance-1", 5)},
 			"test-service",
 			"instance-1",
 		)
@@ -322,8 +322,8 @@ func TestBuildPropagationHeaders(t *testing.T) {
 			"current-span",
 			nil,
 			[]CausalityEntry{
-				{Component: "test-service#instance-1", Value: 10},
-				{Component: "other-service#other-1", Value: 5},
+				NewCausalityEntry("test-service#instance-1", 10),
+				NewCausalityEntry("other-service#other-1", 5),
 			},
 			"test-service",
 			"instance-1",
@@ -340,7 +340,7 @@ func TestBuildPropagationHeaders(t *testing.T) {
 
 func TestIncrementClockVector(t *testing.T) {
 	t.Run("increment existing component", func(t *testing.T) {
-		vector := []CausalityEntry{{Component: "my-service#inst-1", Value: 5}}
+		vector := []CausalityEntry{NewCausalityEntry("my-service#inst-1", 5)}
 
 		result := incrementClockVector(vector, "my-service", "inst-1")
 
@@ -350,7 +350,7 @@ func TestIncrementClockVector(t *testing.T) {
 	})
 
 	t.Run("add new component when not present", func(t *testing.T) {
-		vector := []CausalityEntry{{Component: "other-service#other", Value: 3}}
+		vector := []CausalityEntry{NewCausalityEntry("other-service#other", 3)}
 
 		result := incrementClockVector(vector, "my-service", "inst-1")
 
@@ -376,22 +376,22 @@ func TestIncrementClockVector(t *testing.T) {
 	})
 
 	t.Run("not mutate original vector", func(t *testing.T) {
-		vector := []CausalityEntry{{Component: "my-service#inst-1", Value: 5}}
+		vector := []CausalityEntry{NewCausalityEntry("my-service#inst-1", 5)}
 		original := make([]CausalityEntry, len(vector))
 		copy(original, vector)
 
 		incrementClockVector(vector, "my-service", "inst-1")
 
-		if len(vector) != len(original) || vector[0].Value != original[0].Value {
+		if len(vector) != len(original) || vector[0].Value() != original[0].Value() {
 			t.Error("original vector was mutated")
 		}
 	})
 
 	t.Run("preserve other components unchanged", func(t *testing.T) {
 		vector := []CausalityEntry{
-			{Component: "service-a#1", Value: 10},
-			{Component: "my-service#inst-1", Value: 5},
-			{Component: "service-b#2", Value: 7},
+			NewCausalityEntry("service-a#1", 10),
+			NewCausalityEntry("my-service#inst-1", 5),
+			NewCausalityEntry("service-b#2", 7),
 		}
 
 		result := incrementClockVector(vector, "my-service", "inst-1")
@@ -459,7 +459,7 @@ func TestEndToEndScenarios(t *testing.T) {
 			validTraceID,
 			"span-a",
 			nil,
-			[]CausalityEntry{{Component: "service-a#a1", Value: 0}},
+			[]CausalityEntry{NewCausalityEntry("service-a#a1", 0)},
 			"service-a",
 			"a1",
 		)
@@ -506,7 +506,7 @@ func TestEndToEndScenarios(t *testing.T) {
 // Helper function
 func hasClockComponent(vector []CausalityEntry, component string, value uint64) bool {
 	for _, entry := range vector {
-		if entry.Component == component && entry.Value == value {
+		if entry.Component() == component && entry.Value() == value {
 			return true
 		}
 	}

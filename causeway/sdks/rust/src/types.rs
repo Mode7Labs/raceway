@@ -9,6 +9,13 @@ pub struct Metadata {
     pub environment: String,
     pub tags: HashMap<String, String>,
     pub duration_ns: Option<u64>,
+    // Phase 2: Distributed tracing fields
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub instance_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub distributed_span_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub upstream_span_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -48,7 +48,7 @@ func NewContext(ctx context.Context, traceID, serviceName, instanceID string) co
 		SpanID:       generateSpanID(),
 		ParentSpanID: nil,
 		Distributed:  false,
-		ClockVector:  []CausalityEntry{{Component: component, Value: 0}},
+		ClockVector:  []CausalityEntry{NewCausalityEntry(component, 0)},
 		TraceState:   nil,
 		ServiceName:  serviceName,
 		InstanceID:   instanceID,

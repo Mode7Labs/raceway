@@ -125,6 +125,14 @@ impl RacewayClient {
                 let updated_vector =
                     increment_clock_vector(&ctx.clock_vector, &ctx.service_name, &ctx.instance_id);
 
+                // Phase 2: Always pass distributed metadata (not gated by distributed flag)
+                // This ensures entry-point services also create distributed spans
+                let distributed_metadata = Some((
+                    ctx.instance_id.clone(),
+                    ctx.span_id.clone(),
+                    ctx.parent_span_id.clone(),
+                ));
+
                 let event_id = self.capture_event(
                     &ctx.trace_id,
                     ctx.parent_id.clone(),
@@ -139,6 +147,7 @@ impl RacewayClient {
                         access_type: access_type.to_string(),
                     }),
                     None,
+                    distributed_metadata,
                 );
 
                 // Update context: new parent and increment clock
@@ -170,6 +179,14 @@ impl RacewayClient {
                 let updated_vector =
                     increment_clock_vector(&ctx.clock_vector, &ctx.service_name, &ctx.instance_id);
 
+                // Phase 2: Always pass distributed metadata (not gated by distributed flag)
+                // This ensures entry-point services also create distributed spans
+                let distributed_metadata = Some((
+                    ctx.instance_id.clone(),
+                    ctx.span_id.clone(),
+                    ctx.parent_span_id.clone(),
+                ));
+
                 let event_id = self.capture_event(
                     &ctx.trace_id,
                     ctx.parent_id.clone(),
@@ -182,6 +199,7 @@ impl RacewayClient {
                         line: line!(),
                     }),
                     duration_ns,
+                    distributed_metadata,
                 );
 
                 // Update context
@@ -230,6 +248,14 @@ impl RacewayClient {
                 let updated_vector =
                     increment_clock_vector(&ctx.clock_vector, &ctx.service_name, &ctx.instance_id);
 
+                // Phase 2: Always pass distributed metadata (not gated by distributed flag)
+                // This ensures entry-point services also create distributed spans
+                let distributed_metadata = Some((
+                    ctx.instance_id.clone(),
+                    ctx.span_id.clone(),
+                    ctx.parent_span_id.clone(),
+                ));
+
                 let event_id = self.capture_event(
                     &ctx.trace_id,
                     ctx.parent_id.clone(),
@@ -241,6 +267,7 @@ impl RacewayClient {
                         body: None,
                     }),
                     None,
+                    distributed_metadata,
                 );
 
                 // Update context
@@ -266,6 +293,14 @@ impl RacewayClient {
                 let updated_vector =
                     increment_clock_vector(&ctx.clock_vector, &ctx.service_name, &ctx.instance_id);
 
+                // Phase 2: Always pass distributed metadata (not gated by distributed flag)
+                // This ensures entry-point services also create distributed spans
+                let distributed_metadata = Some((
+                    ctx.instance_id.clone(),
+                    ctx.span_id.clone(),
+                    ctx.parent_span_id.clone(),
+                ));
+
                 let event_id = self.capture_event(
                     &ctx.trace_id,
                     ctx.parent_id.clone(),
@@ -277,6 +312,7 @@ impl RacewayClient {
                         duration_ms,
                     }),
                     Some(duration_ns),
+                    distributed_metadata,
                 );
 
                 // Update context
@@ -334,6 +370,7 @@ impl RacewayClient {
         clock_vector: Vec<(String, u64)>,
         kind: EventKind,
         duration_ns: Option<u64>,
+        distributed_metadata: Option<(String, String, Option<String>)>, // (instance_id, span_id, upstream_span_id)
     ) -> String {
         // Get or create trace
         let mut traces = self.traces.write();
@@ -351,6 +388,13 @@ impl RacewayClient {
 
         let trace = traces.get_mut(trace_id).unwrap();
 
+        let (instance_id, distributed_span_id, upstream_span_id) =
+            if let Some((inst, span, upstream)) = distributed_metadata {
+                (Some(inst), Some(span), upstream)
+            } else {
+                (None, None, None)
+            };
+
         let event = Event {
             id: uuid::Uuid::new_v4().to_string(),
             trace_id: trace.trace_id.clone(),
@@ -364,6 +408,10 @@ impl RacewayClient {
                 environment: "development".to_string(),
                 tags: HashMap::new(),
                 duration_ns,
+                // Phase 2: Distributed tracing fields
+                instance_id,
+                distributed_span_id,
+                upstream_span_id,
             },
             causality_vector: clock_vector,
             lock_set: vec![],
@@ -414,6 +462,18 @@ impl RacewayClient {
                 eprintln!("[Raceway] Error sending events: {}", e);
             }
         }
+    }
+
+    /// Shutdown the client and flush all buffered events synchronously.
+    /// This should be called before the application exits.
+    pub fn shutdown(&self) {
+        // Use tokio's block_in_place to allow blocking in async context
+        tokio::task::block_in_place(|| {
+            let rt = tokio::runtime::Handle::current();
+            rt.block_on(async {
+                self.flush().await;
+            });
+        });
     }
 }
 

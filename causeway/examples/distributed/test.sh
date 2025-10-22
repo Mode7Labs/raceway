@@ -17,16 +17,34 @@ PIDS=()
 # Cleanup function
 cleanup() {
     echo -e "\n${YELLOW}Cleaning up services...${NC}"
+
+    # First, send SIGTERM to all PIDs for graceful shutdown
     for pid in "${PIDS[@]}"; do
         if kill -0 "$pid" 2>/dev/null; then
-            kill "$pid" 2>/dev/null || true
+            kill -TERM "$pid" 2>/dev/null || true
         fi
     done
-    # Also kill any remaining node/python/go processes on our ports
+
+    # Also send SIGTERM to any processes on our ports
+    lsof -ti:6001 | xargs kill -TERM 2>/dev/null || true
+    lsof -ti:6002 | xargs kill -TERM 2>/dev/null || true
+    lsof -ti:6003 | xargs kill -TERM 2>/dev/null || true
+    lsof -ti:6004 | xargs kill -TERM 2>/dev/null || true
+
+    # Wait 3 seconds for graceful shutdown (to flush events)
+    sleep 3
+
+    # Force kill any remaining processes
+    for pid in "${PIDS[@]}"; do
+        if kill -0 "$pid" 2>/dev/null; then
+            kill -9 "$pid" 2>/dev/null || true
+        fi
+    done
     lsof -ti:6001 | xargs kill -9 2>/dev/null || true
     lsof -ti:6002 | xargs kill -9 2>/dev/null || true
     lsof -ti:6003 | xargs kill -9 2>/dev/null || true
     lsof -ti:6004 | xargs kill -9 2>/dev/null || true
+
     echo -e "${GREEN}Cleanup complete${NC}"
 }
 
