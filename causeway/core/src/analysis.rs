@@ -1,3 +1,4 @@
+use crate::config::Config;
 use crate::event::{DistributedEdge, DistributedSpan, EdgeLinkType, Event};
 use crate::graph::{Anomaly, AuditTrail, CausalGraph, CriticalPath, ServiceDependencies, TreeNode};
 use crate::storage::{CrossTraceRace, StorageBackend, TraceAnalysisData};
@@ -14,11 +15,12 @@ pub struct AnalysisService {
     storage: Arc<dyn StorageBackend>,
     graph: Arc<RwLock<CausalGraph>>,
     warmup: Arc<RwLock<WarmupStatus>>,
+    config: Config,
 }
 
 impl AnalysisService {
-    /// Create a new AnalysisService with the given storage backend
-    pub async fn new(storage: Arc<dyn StorageBackend>) -> Result<Self> {
+    /// Create a new AnalysisService with the given storage backend and config
+    pub async fn new(storage: Arc<dyn StorageBackend>, config: Config) -> Result<Self> {
         let graph = Arc::new(RwLock::new(CausalGraph::new()));
         let warmup = Arc::new(RwLock::new(WarmupStatus::new()));
 
@@ -41,6 +43,7 @@ impl AnalysisService {
             storage: Arc::clone(&storage),
             graph: Arc::clone(&graph),
             warmup: Arc::clone(&warmup),
+            config,
         };
 
         tokio::spawn(Self::warmup_existing_events(storage, graph, warmup));
@@ -129,50 +132,52 @@ impl AnalysisService {
         // Persist to storage first
         self.storage.add_event(event.clone()).await?;
 
-        // Handle distributed tracing metadata if present (Phase 2)
-        if let Some(span_id) = &event.metadata.distributed_span_id {
-            // Create or update distributed span
-            let existing_span = self.storage.get_distributed_span(span_id).await?;
+        // Handle distributed tracing metadata if enabled
+        if self.config.distributed_tracing.enabled {
+            if let Some(span_id) = &event.metadata.distributed_span_id {
+                // Create or update distributed span
+                let existing_span = self.storage.get_distributed_span(span_id).await?;
 
-            let span = if let Some(mut existing) = existing_span {
-                // Update existing span's last_event timestamp
-                existing.last_event = Some(event.timestamp);
-                existing
-            } else {
-                // Create new span
-                DistributedSpan {
-                    trace_id: event.trace_id,
-                    span_id: span_id.clone(),
-                    service: event.metadata.service_name.clone(),
-                    instance: event.metadata.instance_id.clone().unwrap_or_default(),
-                    first_event: event.timestamp,
-                    last_event: Some(event.timestamp),
+                let span = if let Some(mut existing) = existing_span {
+                    // Update existing span's last_event timestamp
+                    existing.last_event = Some(event.timestamp);
+                    existing
+                } else {
+                    // Create new span
+                    DistributedSpan {
+                        trace_id: event.trace_id,
+                        span_id: span_id.clone(),
+                        service: event.metadata.service_name.clone(),
+                        instance: event.metadata.instance_id.clone().unwrap_or_default(),
+                        first_event: event.timestamp,
+                        last_event: Some(event.timestamp),
+                    }
+                };
+
+                self.storage.save_distributed_span(span).await?;
+
+                // Create distributed edge if there's an upstream span
+                if let Some(upstream_span_id) = &event.metadata.upstream_span_id {
+                    // Determine edge type based on event kind
+                    let link_type = match &event.kind {
+                        crate::event::EventKind::HttpRequest { .. } => EdgeLinkType::HttpCall,
+                        crate::event::EventKind::HttpResponse { .. } => EdgeLinkType::HttpCall,
+                        crate::event::EventKind::DatabaseQuery { .. } => EdgeLinkType::DatabaseQuery,
+                        _ => EdgeLinkType::Custom,
+                    };
+
+                    let edge = DistributedEdge {
+                        from_span: upstream_span_id.clone(),
+                        to_span: span_id.clone(),
+                        link_type,
+                        metadata: serde_json::json!({
+                            "event_id": event.id,
+                            "timestamp": event.timestamp,
+                        }),
+                    };
+
+                    self.storage.add_distributed_edge(edge).await?;
                 }
-            };
-
-            self.storage.save_distributed_span(span).await?;
-
-            // Create distributed edge if there's an upstream span
-            if let Some(upstream_span_id) = &event.metadata.upstream_span_id {
-                // Determine edge type based on event kind
-                let link_type = match &event.kind {
-                    crate::event::EventKind::HttpRequest { .. } => EdgeLinkType::HttpCall,
-                    crate::event::EventKind::HttpResponse { .. } => EdgeLinkType::HttpCall,
-                    crate::event::EventKind::DatabaseQuery { .. } => EdgeLinkType::DatabaseQuery,
-                    _ => EdgeLinkType::Custom,
-                };
-
-                let edge = DistributedEdge {
-                    from_span: upstream_span_id.clone(),
-                    to_span: span_id.clone(),
-                    link_type,
-                    metadata: serde_json::json!({
-                        "event_id": event.id,
-                        "timestamp": event.timestamp,
-                    }),
-                };
-
-                self.storage.add_distributed_edge(edge).await?;
             }
         }
 
@@ -509,7 +514,7 @@ impl AnalysisService {
 
     async fn ensure_trace_loaded_from_events(
         &self,
-        _trace_id: Uuid,
+        trace_id: Uuid,
         events: &[Event],
     ) -> Result<()> {
         if events.is_empty() {
@@ -539,6 +544,19 @@ impl AnalysisService {
             }
 
             graph.ingest_events(pending)?;
+        }
+
+        // Load distributed edges if distributed tracing is enabled
+        if self.config.distributed_tracing.enabled {
+            let dist_edges = self.storage.get_distributed_edges(trace_id).await?;
+            if !dist_edges.is_empty() {
+                let graph = self.graph.read().await;
+                graph.add_distributed_edges(dist_edges);
+                tracing::debug!(
+                    "Loaded distributed edges for trace {}",
+                    trace_id
+                );
+            }
         }
 
         Ok(())

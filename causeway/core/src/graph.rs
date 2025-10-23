@@ -144,6 +144,9 @@ pub struct CausalGraph {
     baseline_durations: DashMap<String, Vec<f64>>, // event_kind -> all observed durations
     baselines_updated: DashMap<Uuid, bool>, // track which traces have been added to baselines
     variable_index: DashMap<String, Vec<Uuid>>, // variable_name -> event IDs accessing it (for fast race detection)
+    /// External edges connecting events across services via distributed tracing
+    /// Maps from downstream event_id to upstream event_ids
+    distributed_edges: DashMap<Uuid, Vec<Uuid>>, // downstream_event_id -> upstream_event_ids
 }
 
 impl CausalGraph {
@@ -166,6 +169,7 @@ impl CausalGraph {
             baseline_durations: DashMap::new(),
             baselines_updated: DashMap::new(),
             variable_index: DashMap::new(),
+            distributed_edges: DashMap::new(),
         }
     }
 
@@ -345,6 +349,51 @@ impl CausalGraph {
         let graph = Self::new();
         graph.ingest_events(events)?;
         Ok(graph)
+    }
+
+    /// Find an event ID by its distributed_span_id
+    fn find_event_by_span(&self, span_id: &str) -> Option<Uuid> {
+        for node_entry in self.nodes.iter() {
+            let (event_id, (_, node)) = node_entry.pair();
+            if let Some(ref event_span) = node.event.metadata.distributed_span_id {
+                if event_span == span_id {
+                    return Some(*event_id);
+                }
+            }
+        }
+        None
+    }
+
+    /// Add distributed edges from DistributedEdge records
+    /// This connects events across services based on span relationships
+    pub fn add_distributed_edges(&self, dist_edges: Vec<crate::event::DistributedEdge>) {
+        for edge in dist_edges {
+            // Find the upstream and downstream events by their span IDs
+            let upstream_event_id = self.find_event_by_span(&edge.from_span);
+            let downstream_event_id = self.find_event_by_span(&edge.to_span);
+
+            if let (Some(up_id), Some(down_id)) = (upstream_event_id, downstream_event_id) {
+                // Add to distributed_edges map
+                self.distributed_edges
+                    .entry(down_id)
+                    .or_insert_with(Vec::new)
+                    .push(up_id);
+
+                tracing::debug!(
+                    "Added distributed edge: {} (span {}) -> {} (span {})",
+                    up_id,
+                    edge.from_span,
+                    down_id,
+                    edge.to_span
+                );
+            } else {
+                tracing::warn!(
+                    "Could not find events for distributed edge: {} -> {} (events may not be loaded yet)",
+                    edge.from_span,
+                    edge.to_span
+                );
+            }
+        }
     }
 
     /// Infer the type of causal edge based on event kinds
@@ -573,26 +622,37 @@ impl CausalGraph {
             return false; // An event is not its own ancestor
         }
 
-        let mut current_id = descendant_id;
         let mut visited = HashSet::new();
 
-        // Trace back through parent chain
-        while let Some(entry) = self.nodes.get(&current_id) {
+        // Trace back through parent chain and distributed edges
+        let mut to_visit = vec![descendant_id];
+
+        while let Some(current_id) = to_visit.pop() {
             if visited.contains(&current_id) {
-                // Cycle detected (shouldn't happen in valid causal graph)
-                return false;
+                // Already checked this node
+                continue;
             }
             visited.insert(current_id);
 
-            let event = &entry.value().1.event;
-            if let Some(parent_id) = event.parent_id {
-                if parent_id == ancestor_id {
-                    return true; // Found the ancestor
+            // Check local parent
+            if let Some(entry) = self.nodes.get(&current_id) {
+                let event = &entry.value().1.event;
+                if let Some(parent_id) = event.parent_id {
+                    if parent_id == ancestor_id {
+                        return true; // Found the ancestor through local parent
+                    }
+                    to_visit.push(parent_id);
                 }
-                current_id = parent_id;
-            } else {
-                // Reached a root without finding the ancestor
-                return false;
+            }
+
+            // Check distributed edges (upstream events in other services)
+            if let Some(upstreams) = self.distributed_edges.get(&current_id) {
+                for &upstream_id in upstreams.value() {
+                    if upstream_id == ancestor_id {
+                        return true; // Found the ancestor through distributed edge
+                    }
+                    to_visit.push(upstream_id);
+                }
             }
         }
 
@@ -810,11 +870,23 @@ impl CausalGraph {
             if let Some(entry) = self.nodes.get(&event.id) {
                 let (node_idx, _) = entry.value();
                 let graph = self.graph.lock().unwrap();
-                let children_with_edges: Vec<(Uuid, CausalEdge)> = graph
+                let mut children_with_edges: Vec<(Uuid, CausalEdge)> = graph
                     .edges(*node_idx)
                     .map(|edge| (graph[edge.target()], edge.weight().clone()))
                     .collect();
                 drop(graph);
+
+                // Also add distributed edges as children
+                // Distributed edges point FROM this event TO downstream events in other services
+                for node_entry in self.nodes.iter() {
+                    let (child_id, _) = node_entry.pair();
+                    if let Some(upstreams) = self.distributed_edges.get(child_id) {
+                        if upstreams.value().contains(&event.id) {
+                            // This event is upstream of child_id
+                            children_with_edges.push((*child_id, CausalEdge::HttpRequestResponse));
+                        }
+                    }
+                }
 
                 if children_with_edges.is_empty() {
                     continue;
@@ -2486,6 +2558,403 @@ mod tests {
         assert!(
             !graph.happens_before_vc(&event2, &event1),
             "empty clocks should not establish happens-before"
+        );
+    }
+
+    #[test]
+    fn distributed_edges_connect_cross_service_events() {
+        let graph = CausalGraph::new();
+        let trace_id = Uuid::new_v4();
+        let base = Utc.with_ymd_and_hms(2024, 1, 1, 12, 0, 0).unwrap();
+
+        // Service A event
+        let mut metadata_a = metadata("service-a-thread", 5);
+        metadata_a.distributed_span_id = Some("span-a".into());
+        metadata_a.service_name = "service-a".into();
+
+        let event_a = Event {
+            id: Uuid::new_v4(),
+            trace_id,
+            parent_id: None,
+            timestamp: base,
+            kind: EventKind::FunctionCall {
+                function_name: "process_a".into(),
+                module: "service_a".into(),
+                args: serde_json::json!({}),
+                file: "a.rs".into(),
+                line: 1,
+            },
+            metadata: metadata_a,
+            causality_vector: Vec::new(),
+            lock_set: Vec::new(),
+        };
+
+        // Service B event (calls from service A)
+        let mut metadata_b = metadata("service-b-thread", 5);
+        metadata_b.distributed_span_id = Some("span-b".into());
+        metadata_b.upstream_span_id = Some("span-a".into());
+        metadata_b.service_name = "service-b".into();
+
+        let event_b = Event {
+            id: Uuid::new_v4(),
+            trace_id,
+            parent_id: None,
+            timestamp: base + ChronoDuration::milliseconds(10),
+            kind: EventKind::FunctionCall {
+                function_name: "process_b".into(),
+                module: "service_b".into(),
+                args: serde_json::json!({}),
+                file: "b.rs".into(),
+                line: 1,
+            },
+            metadata: metadata_b,
+            causality_vector: Vec::new(),
+            lock_set: Vec::new(),
+        };
+
+        graph.add_event(event_a.clone());
+        graph.add_event(event_b.clone());
+
+        // Create distributed edge
+        let dist_edge = crate::event::DistributedEdge {
+            from_span: "span-a".into(),
+            to_span: "span-b".into(),
+            link_type: crate::event::EdgeLinkType::HttpCall,
+            metadata: serde_json::json!({}),
+        };
+
+        graph.add_distributed_edges(vec![dist_edge]);
+
+        // Verify distributed edge was created
+        assert!(graph.distributed_edges.contains_key(&event_b.id));
+        let upstreams = graph.distributed_edges.get(&event_b.id).unwrap();
+        assert_eq!(upstreams.len(), 1);
+        assert_eq!(upstreams[0], event_a.id);
+    }
+
+    #[test]
+    fn find_event_by_span_locates_correct_event() {
+        let graph = CausalGraph::new();
+        let trace_id = Uuid::new_v4();
+        let base = Utc.with_ymd_and_hms(2024, 1, 1, 12, 0, 0).unwrap();
+
+        let mut metadata_a = metadata("thread-a", 5);
+        metadata_a.distributed_span_id = Some("unique-span-123".into());
+
+        let event_a = Event {
+            id: Uuid::new_v4(),
+            trace_id,
+            parent_id: None,
+            timestamp: base,
+            kind: EventKind::FunctionCall {
+                function_name: "test".into(),
+                module: "test".into(),
+                args: serde_json::json!({}),
+                file: "test.rs".into(),
+                line: 1,
+            },
+            metadata: metadata_a,
+            causality_vector: Vec::new(),
+            lock_set: Vec::new(),
+        };
+
+        let event_id = event_a.id;
+        graph.add_event(event_a);
+
+        // Should find event by span ID
+        let found = graph.find_event_by_span("unique-span-123");
+        assert_eq!(found, Some(event_id));
+
+        // Should not find non-existent span
+        let not_found = graph.find_event_by_span("non-existent");
+        assert_eq!(not_found, None);
+    }
+
+    #[test]
+    fn is_ancestor_traverses_distributed_edges() {
+        let graph = CausalGraph::new();
+        let trace_id = Uuid::new_v4();
+        let base = Utc.with_ymd_and_hms(2024, 1, 1, 12, 0, 0).unwrap();
+
+        // Service A event
+        let mut metadata_a = metadata("service-a-thread", 5);
+        metadata_a.distributed_span_id = Some("span-a".into());
+
+        let event_a = Event {
+            id: Uuid::new_v4(),
+            trace_id,
+            parent_id: None,
+            timestamp: base,
+            kind: EventKind::FunctionCall {
+                function_name: "a".into(),
+                module: "a".into(),
+                args: serde_json::json!({}),
+                file: "a.rs".into(),
+                line: 1,
+            },
+            metadata: metadata_a,
+            causality_vector: Vec::new(),
+            lock_set: Vec::new(),
+        };
+
+        // Service B event (downstream of A)
+        let mut metadata_b = metadata("service-b-thread", 5);
+        metadata_b.distributed_span_id = Some("span-b".into());
+
+        let event_b = Event {
+            id: Uuid::new_v4(),
+            trace_id,
+            parent_id: None,
+            timestamp: base + ChronoDuration::milliseconds(10),
+            kind: EventKind::FunctionCall {
+                function_name: "b".into(),
+                module: "b".into(),
+                args: serde_json::json!({}),
+                file: "b.rs".into(),
+                line: 1,
+            },
+            metadata: metadata_b,
+            causality_vector: Vec::new(),
+            lock_set: Vec::new(),
+        };
+
+        graph.add_event(event_a.clone());
+        graph.add_event(event_b.clone());
+
+        // Add distributed edge A -> B
+        let dist_edge = crate::event::DistributedEdge {
+            from_span: "span-a".into(),
+            to_span: "span-b".into(),
+            link_type: crate::event::EdgeLinkType::HttpCall,
+            metadata: serde_json::json!({}),
+        };
+
+        graph.add_distributed_edges(vec![dist_edge]);
+
+        // A should be ancestor of B via distributed edge
+        assert!(
+            graph.is_ancestor(event_a.id, event_b.id),
+            "event_a should be ancestor of event_b via distributed edge"
+        );
+
+        // B should not be ancestor of A
+        assert!(
+            !graph.is_ancestor(event_b.id, event_a.id),
+            "event_b should not be ancestor of event_a"
+        );
+    }
+
+    #[test]
+    fn is_ancestor_traverses_multi_hop_distributed_chain() {
+        let graph = CausalGraph::new();
+        let trace_id = Uuid::new_v4();
+        let base = Utc.with_ymd_and_hms(2024, 1, 1, 12, 0, 0).unwrap();
+
+        // Create 4-service chain: A -> B -> C -> D
+        let mut events = Vec::new();
+        let spans = vec!["span-a", "span-b", "span-c", "span-d"];
+
+        for (i, span) in spans.iter().enumerate() {
+            let mut md = metadata(&format!("service-{}-thread", i), 5);
+            md.distributed_span_id = Some((*span).into());
+
+            let event = Event {
+                id: Uuid::new_v4(),
+                trace_id,
+                parent_id: None,
+                timestamp: base + ChronoDuration::milliseconds(i as i64 * 10),
+                kind: EventKind::FunctionCall {
+                    function_name: format!("func_{}", i),
+                    module: format!("mod_{}", i),
+                    args: serde_json::json!({}),
+                    file: format!("{}.rs", i),
+                    line: 1,
+                },
+                metadata: md,
+                causality_vector: Vec::new(),
+                lock_set: Vec::new(),
+            };
+
+            graph.add_event(event.clone());
+            events.push(event);
+        }
+
+        // Create distributed edges A->B, B->C, C->D
+        let edges = vec![
+            crate::event::DistributedEdge {
+                from_span: "span-a".into(),
+                to_span: "span-b".into(),
+                link_type: crate::event::EdgeLinkType::HttpCall,
+                metadata: serde_json::json!({}),
+            },
+            crate::event::DistributedEdge {
+                from_span: "span-b".into(),
+                to_span: "span-c".into(),
+                link_type: crate::event::EdgeLinkType::HttpCall,
+                metadata: serde_json::json!({}),
+            },
+            crate::event::DistributedEdge {
+                from_span: "span-c".into(),
+                to_span: "span-d".into(),
+                link_type: crate::event::EdgeLinkType::HttpCall,
+                metadata: serde_json::json!({}),
+            },
+        ];
+
+        graph.add_distributed_edges(edges);
+
+        // A should be ancestor of D (3 hops)
+        assert!(
+            graph.is_ancestor(events[0].id, events[3].id),
+            "event A should be ancestor of event D via 3-hop distributed chain"
+        );
+
+        // B should be ancestor of D (2 hops)
+        assert!(
+            graph.is_ancestor(events[1].id, events[3].id),
+            "event B should be ancestor of event D via 2-hop distributed chain"
+        );
+
+        // C should be ancestor of D (1 hop)
+        assert!(
+            graph.is_ancestor(events[2].id, events[3].id),
+            "event C should be ancestor of event D via 1-hop distributed chain"
+        );
+
+        // D should not be ancestor of A
+        assert!(
+            !graph.is_ancestor(events[3].id, events[0].id),
+            "event D should not be ancestor of event A"
+        );
+    }
+
+    #[test]
+    fn critical_path_includes_distributed_edges() {
+        let graph = CausalGraph::new();
+        let trace_id = Uuid::new_v4();
+        let base = Utc.with_ymd_and_hms(2024, 1, 1, 12, 0, 0).unwrap();
+
+        // Service A event (10ms)
+        let mut metadata_a = metadata("service-a", 10);  // 10 milliseconds
+        metadata_a.distributed_span_id = Some("span-a".into());
+
+        let event_a = Event {
+            id: Uuid::new_v4(),
+            trace_id,
+            parent_id: None,
+            timestamp: base,
+            kind: EventKind::FunctionCall {
+                function_name: "process_a".into(),
+                module: "a".into(),
+                args: serde_json::json!({}),
+                file: "a.rs".into(),
+                line: 1,
+            },
+            metadata: metadata_a,
+            causality_vector: Vec::new(),
+            lock_set: Vec::new(),
+        };
+
+        // Service B event (20ms, downstream of A)
+        let mut metadata_b = metadata("service-b", 20);  // 20 milliseconds
+        metadata_b.distributed_span_id = Some("span-b".into());
+
+        let event_b = Event {
+            id: Uuid::new_v4(),
+            trace_id,
+            parent_id: None,
+            timestamp: base + ChronoDuration::milliseconds(10),
+            kind: EventKind::FunctionCall {
+                function_name: "process_b".into(),
+                module: "b".into(),
+                args: serde_json::json!({}),
+                file: "b.rs".into(),
+                line: 1,
+            },
+            metadata: metadata_b,
+            causality_vector: Vec::new(),
+            lock_set: Vec::new(),
+        };
+
+        graph.add_event(event_a.clone());
+        graph.add_event(event_b.clone());
+
+        // Add distributed edge
+        let dist_edge = crate::event::DistributedEdge {
+            from_span: "span-a".into(),
+            to_span: "span-b".into(),
+            link_type: crate::event::EdgeLinkType::HttpCall,
+            metadata: serde_json::json!({}),
+        };
+
+        graph.add_distributed_edges(vec![dist_edge]);
+
+        let critical_path = graph.get_critical_path(trace_id).unwrap();
+
+        // Critical path should include both A and B
+        assert!(
+            critical_path.path.len() >= 2,
+            "critical path should include events from both services"
+        );
+
+        // Total duration should be 30ms (A's 10ms + B's 20ms)
+        let total_duration: u64 = critical_path
+            .path
+            .iter()
+            .filter_map(|e| e.metadata.duration_ns)
+            .sum();
+
+        assert_eq!(
+            total_duration, 30_000_000,
+            "critical path should span across distributed services"
+        );
+    }
+
+    #[test]
+    fn distributed_edges_handle_missing_spans_gracefully() {
+        let graph = CausalGraph::new();
+        let trace_id = Uuid::new_v4();
+        let base = Utc.with_ymd_and_hms(2024, 1, 1, 12, 0, 0).unwrap();
+
+        // Add event with span-a
+        let mut metadata = metadata("thread", 5);
+        metadata.distributed_span_id = Some("span-a".into());
+
+        let event = Event {
+            id: Uuid::new_v4(),
+            trace_id,
+            parent_id: None,
+            timestamp: base,
+            kind: EventKind::FunctionCall {
+                function_name: "test".into(),
+                module: "test".into(),
+                args: serde_json::json!({}),
+                file: "test.rs".into(),
+                line: 1,
+            },
+            metadata,
+            causality_vector: Vec::new(),
+            lock_set: Vec::new(),
+        };
+
+        graph.add_event(event);
+
+        // Try to create edge with non-existent span-b
+        let dist_edge = crate::event::DistributedEdge {
+            from_span: "span-a".into(),
+            to_span: "span-b-nonexistent".into(),
+            link_type: crate::event::EdgeLinkType::HttpCall,
+            metadata: serde_json::json!({}),
+        };
+
+        // Should not crash
+        graph.add_distributed_edges(vec![dist_edge]);
+
+        // Should have no distributed edges since span-b doesn't exist
+        assert_eq!(
+            graph.distributed_edges.len(),
+            0,
+            "should not create edge for missing span"
         );
     }
 }

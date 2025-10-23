@@ -214,7 +214,7 @@ pub async fn init_engine(config: &Config) -> Result<Arc<RacewayEngine>> {
         enable_race_detection: config.race_detection.enabled,
     };
 
-    let engine = Arc::new(RacewayEngine::new(engine_config, storage).await?);
+    let engine = Arc::new(RacewayEngine::new(engine_config, storage, config.clone()).await?);
     engine.start().await?;
     Ok(engine)
 }

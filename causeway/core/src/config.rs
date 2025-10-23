@@ -262,7 +262,17 @@ impl Default for AnomalyDetectionConfig {
 }
 
 /// Controls whether distributed tracing is enabled (Phase 2).
-/// When enabled, events with distributed metadata will create distributed spans and edges.
+///
+/// When enabled:
+/// - Events with distributed_span_id create spans and edges in distributed tables
+/// - Traces are merged across services using recursive BFS
+/// - Critical path and race detection span services
+/// - Vector clocks track causality across service boundaries
+///
+/// When disabled:
+/// - Each service's events remain isolated
+/// - Distributed metadata ignored (backward compatible)
+/// - Single-service behavior unchanged
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct DistributedTracingConfig {
     #[serde(default = "default_false")]

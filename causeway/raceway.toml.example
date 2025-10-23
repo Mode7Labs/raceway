@@ -42,6 +42,11 @@ enabled = true
 [anomaly_detection]
 enabled = true
 
+# Distributed tracing
+# When enabled, traces are merged across services using recursive BFS
+[distributed_tracing]
+enabled = true
+
 [logging]
 level = "info"
 include_modules = false

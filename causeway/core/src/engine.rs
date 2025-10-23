@@ -1,5 +1,6 @@
 use crate::analysis::AnalysisService;
 use crate::capture::EventCapture;
+use crate::config::Config;
 use crate::storage::StorageBackend;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
@@ -38,11 +39,11 @@ impl Default for EngineConfig {
 }
 
 impl RacewayEngine {
-    pub async fn new(config: EngineConfig, storage: Arc<dyn StorageBackend>) -> Result<Self> {
+    pub async fn new(config: EngineConfig, storage: Arc<dyn StorageBackend>, full_config: Config) -> Result<Self> {
         let capture = Arc::new(EventCapture::new(config.buffer_size));
 
-        // Create AnalysisService with the storage backend
-        let analysis = Arc::new(AnalysisService::new(Arc::clone(&storage)).await?);
+        // Create AnalysisService with the storage backend and full config
+        let analysis = Arc::new(AnalysisService::new(Arc::clone(&storage), full_config).await?);
 
         Ok(Self {
             capture,
@@ -143,10 +144,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_engine_start_stop() {
-        let config = EngineConfig::default();
+        let engine_config = EngineConfig::default();
         let storage_config = StorageConfig::default();
         let storage = Arc::new(MemoryBackend::new(&storage_config).unwrap());
-        let engine = RacewayEngine::new(config, storage).await.unwrap();
+        let full_config = Config::default();
+        let engine = RacewayEngine::new(engine_config, storage, full_config).await.unwrap();
 
         assert!(engine.start().await.is_ok());
         engine.stop().await;
