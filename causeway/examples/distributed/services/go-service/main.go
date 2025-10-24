@@ -24,9 +24,10 @@ const (
 var client *raceway.Client
 
 type ProcessRequest struct {
-	Downstream     string `json:"downstream,omitempty"`
-	NextDownstream string `json:"next_downstream,omitempty"`
-	Payload        string `json:"payload"`
+	Downstream         string `json:"downstream,omitempty"`
+	NextDownstream     string `json:"next_downstream,omitempty"`
+	NextNextDownstream string `json:"next_next_downstream,omitempty"`
+	Payload            string `json:"payload"`
 }
 
 type ProcessResponse struct {
@@ -114,8 +115,9 @@ func processHandler(w http.ResponseWriter, r *http.Request) {
 		headers, err := client.PropagationHeaders(ctx, nil)
 		if err == nil {
 			payload := map[string]interface{}{
-				"payload":    fmt.Sprintf("%s → %s", SERVICE_NAME, req.Payload),
-				"downstream": req.NextDownstream,
+				"payload":         fmt.Sprintf("%s → %s", SERVICE_NAME, req.Payload),
+				"downstream":      req.NextDownstream,
+				"next_downstream": req.NextNextDownstream,
 			}
 			body, _ := json.Marshal(payload)
 

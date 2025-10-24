@@ -46,6 +46,7 @@ type racewayClockPayload struct {
 
 func ParseIncomingHeaders(headers http.Header, serviceName, instanceID string) ParsedTraceContext {
 	traceID := uuid.New().String()
+	var spanID *string
 	var parentSpanID *string
 	var traceState *string
 	distributed := false
@@ -53,7 +54,7 @@ func ParseIncomingHeaders(headers http.Header, serviceName, instanceID string) P
 	if raw := headers.Get(traceparentHeader); raw != "" {
 		if parsedTrace, ok := parseTraceparent(raw); ok {
 			traceID = parsedTrace.traceID
-			parentSpanID = parsedTrace.parentSpanID
+			spanID = parsedTrace.parentSpanID // This is the span ID for THIS service
 			distributed = true
 		}
 	}
@@ -63,6 +64,10 @@ func ParseIncomingHeaders(headers http.Header, serviceName, instanceID string) P
 		if parsedClock, ok := parseRacewayClock(raw); ok {
 			if parsedClock.traceID != "" {
 				traceID = parsedClock.traceID
+			}
+			// Raceway clock has more accurate span IDs
+			if parsedClock.spanID != nil {
+				spanID = parsedClock.spanID
 			}
 			if parsedClock.parentSpanID != nil {
 				parentSpanID = parsedClock.parentSpanID
@@ -88,9 +93,15 @@ func ParseIncomingHeaders(headers http.Header, serviceName, instanceID string) P
 		clockVector = append(clockVector, NewCausalityEntry(component, 0))
 	}
 
+	// Use received span ID, or generate if not provided
+	finalSpanID := generateSpanID()
+	if spanID != nil {
+		finalSpanID = *spanID
+	}
+
 	return ParsedTraceContext{
 		TraceID:      traceID,
-		SpanID:       generateSpanID(),
+		SpanID:       finalSpanID,
 		ParentSpanID: parentSpanID,
 		TraceState:   traceState,
 		ClockVector:  clockVector,
@@ -189,6 +200,7 @@ func parseTraceparent(value string) (parsedTraceparent, bool) {
 
 type parsedClock struct {
 	traceID      string
+	spanID       *string
 	parentSpanID *string
 	clock        []CausalityEntry
 }
@@ -234,14 +246,20 @@ func parseRacewayClock(value string) (parsedClock, bool) {
 		entries = append(entries, NewCausalityEntry(component, valueUint))
 	}
 
-	var parentSpanID *string
+	var spanID *string
 	if payload.SpanID != "" {
-		// span_id from sender becomes parent for receiver
-		parentSpanID = &payload.SpanID
+		spanID = &payload.SpanID
+	}
+
+	var parentSpanID *string
+	if payload.ParentSpanID != "" {
+		// Use actual upstream span ID
+		parentSpanID = &payload.ParentSpanID
 	}
 
 	return parsedClock{
 		traceID:      payload.TraceID,
+		spanID:       spanID,
 		parentSpanID: parentSpanID,
 		clock:        entries,
 	}, true

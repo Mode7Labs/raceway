@@ -257,6 +257,105 @@ impl StorageBackend for MemoryBackend {
         Ok(deleted_count)
     }
 
+    async fn get_all_services(&self) -> Result<Vec<(String, usize, usize)>> {
+        use std::collections::{HashMap, HashSet};
+
+        let mut service_data: HashMap<String, (usize, HashSet<Uuid>)> = HashMap::new();
+
+        // Iterate through distributed spans to collect service stats
+        for span_ref in self.distributed_spans.iter() {
+            let span = span_ref.value();
+            let service_name = span.service.clone();
+            let trace_id = span.trace_id;
+
+            // Count events for this service in this trace
+            if let Some(events_ref) = self.trace_events.get(&trace_id) {
+                let events_lock = events_ref.read().unwrap();
+                let event_count = events_lock
+                    .iter()
+                    .filter(|&event_id| {
+                        if let Some(event_ref) = self.events.get(event_id) {
+                            event_ref.metadata.service_name == service_name
+                        } else {
+                            false
+                        }
+                    })
+                    .count();
+
+                let entry = service_data.entry(service_name).or_insert((0, HashSet::new()));
+                entry.0 += event_count;
+                entry.1.insert(trace_id);
+            }
+        }
+
+        let mut services: Vec<(String, usize, usize)> = service_data
+            .into_iter()
+            .map(|(name, (event_count, traces))| (name, event_count, traces.len()))
+            .collect();
+
+        services.sort_by(|a, b| a.0.cmp(&b.0));
+        Ok(services)
+    }
+
+    async fn get_service_dependencies_global(
+        &self,
+        service_name: &str,
+    ) -> Result<(Vec<(String, usize, usize)>, Vec<(String, usize, usize)>)> {
+        use std::collections::{HashMap, HashSet};
+
+        let mut calls_to_map: HashMap<String, (usize, HashSet<Uuid>)> = HashMap::new();
+        let mut called_by_map: HashMap<String, (usize, HashSet<Uuid>)> = HashMap::new();
+
+        // Iterate through distributed edges to find cross-service calls
+        for edges_ref in self.distributed_edges.iter() {
+            let edges_lock = edges_ref.read().unwrap();
+            for edge in edges_lock.iter() {
+                if let (Some(from_span_ref), Some(to_span_ref)) = (
+                    self.distributed_spans.get(&edge.from_span),
+                    self.distributed_spans.get(&edge.to_span),
+                ) {
+                    let from_span = from_span_ref.value();
+                    let to_span = to_span_ref.value();
+
+                    // Only count cross-service edges
+                    if from_span.service != to_span.service {
+                        if from_span.service == service_name {
+                            // This service calls to_span.service
+                            let entry = calls_to_map
+                                .entry(to_span.service.clone())
+                                .or_insert((0, HashSet::new()));
+                            entry.0 += 1;
+                            entry.1.insert(from_span.trace_id);
+                        }
+
+                        if to_span.service == service_name {
+                            // This service is called by from_span.service
+                            let entry = called_by_map
+                                .entry(from_span.service.clone())
+                                .or_insert((0, HashSet::new()));
+                            entry.0 += 1;
+                            entry.1.insert(from_span.trace_id);
+                        }
+                    }
+                }
+            }
+        }
+
+        let mut calls_to: Vec<(String, usize, usize)> = calls_to_map
+            .into_iter()
+            .map(|(name, (total_calls, traces))| (name, total_calls, traces.len()))
+            .collect();
+        calls_to.sort_by(|a, b| b.1.cmp(&a.1));
+
+        let mut called_by: Vec<(String, usize, usize)> = called_by_map
+            .into_iter()
+            .map(|(name, (total_calls, traces))| (name, total_calls, traces.len()))
+            .collect();
+        called_by.sort_by(|a, b| b.1.cmp(&a.1));
+
+        Ok((calls_to, called_by))
+    }
+
     async fn clear(&self) -> Result<()> {
         self.events.clear();
         self.trace_events.clear();

@@ -34,6 +34,8 @@ pub struct TraceMetadata {
     pub event_count: usize,
     pub first_timestamp: String,
     pub last_timestamp: String,
+    pub service_count: usize,
+    pub services: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -169,6 +171,7 @@ pub struct CachedTraceData {
     pub anomalies_data: Option<AnomaliesData>,
     pub critical_path_data: Option<CriticalPathData>,
     pub dependencies_data: Option<DependenciesData>,
+    pub distributed_analysis_data: Option<DistributedTraceAnalysisData>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -181,13 +184,14 @@ pub enum Panel {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ViewMode {
-    Events,       // Default event timeline view
-    Tree,         // Tree view showing causal relationships
-    CriticalPath, // Show critical path analysis
-    Anomalies,    // Show detected anomalies with details
-    Dependencies, // Show service dependencies graph
-    AuditTrail,   // Show audit trail for a variable
-    CrossTrace,   // Show cross-trace race detection (lazy loaded)
+    Events,              // Default event timeline view
+    Tree,                // Tree view showing causal relationships
+    CriticalPath,        // Show critical path analysis
+    Anomalies,           // Show detected anomalies with details
+    Dependencies,        // Show service dependencies graph
+    AuditTrail,          // Show audit trail for a variable
+    CrossTrace,          // Show cross-trace race detection (lazy loaded)
+    DistributedAnalysis, // Show distributed trace analysis with service breakdown
 }
 
 // Dependencies response types
@@ -261,4 +265,49 @@ pub struct FullTraceAnalysisData {
     pub critical_path: Option<serde_json::Value>, // Will be parsed to CriticalPathData if present
     pub anomalies: Vec<serde_json::Value>,        // Will be parsed to Vec<DetectedAnomaly>
     pub dependencies: Option<DependenciesData>,
+}
+
+// Distributed trace analysis response types
+#[derive(Deserialize, Clone)]
+pub struct DistributedTraceAnalysisResponse {
+    pub success: bool,
+    pub data: Option<DistributedTraceAnalysisData>,
+}
+
+#[derive(Deserialize, Clone)]
+pub struct DistributedTraceAnalysisData {
+    pub trace_id: String,
+    pub service_breakdown: ServiceBreakdown,
+    pub critical_path: Option<CriticalPathSummary>,
+    pub race_conditions: RaceConditionSummary,
+    pub is_distributed: bool,
+}
+
+#[derive(Deserialize, Clone)]
+pub struct ServiceBreakdown {
+    pub services: Vec<ServiceStats>,
+    pub cross_service_calls: usize,
+    pub total_services: usize,
+}
+
+#[derive(Deserialize, Clone)]
+pub struct ServiceStats {
+    pub name: String,
+    pub event_count: usize,
+    pub total_duration_ms: f64,
+}
+
+#[derive(Deserialize, Clone)]
+pub struct CriticalPathSummary {
+    pub total_duration_ms: f64,
+    pub trace_total_duration_ms: f64,
+    pub percentage_of_total: f64,
+    pub path_events: usize,
+}
+
+#[derive(Deserialize, Clone)]
+pub struct RaceConditionSummary {
+    pub total_races: usize,
+    pub critical_races: usize,
+    pub warning_races: usize,
 }

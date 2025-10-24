@@ -35,6 +35,7 @@ pub fn parse_incoming_headers(
     instance_id: &str,
 ) -> ParsedTraceContext {
     let mut trace_id = Uuid::new_v4().to_string();
+    let mut span_id: Option<String> = None;
     let mut parent_span_id: Option<String> = None;
     let mut distributed = false;
 
@@ -44,7 +45,7 @@ pub fn parse_incoming_headers(
     {
         if let Some(parsed) = parse_traceparent(raw) {
             trace_id = parsed.trace_id;
-            parent_span_id = parsed.parent_span_id;
+            span_id = parsed.parent_span_id; // This is the span ID for THIS service
             distributed = true;
         }
     }
@@ -58,8 +59,12 @@ pub fn parse_incoming_headers(
             if let Some(id) = parsed.trace_id {
                 trace_id = id;
             }
-            if parent_span_id.is_none() {
-                parent_span_id = parsed.parent_span_id;
+            // Raceway clock has more accurate span IDs
+            if let Some(id) = parsed.span_id {
+                span_id = Some(id);
+            }
+            if let Some(id) = parsed.parent_span_id {
+                parent_span_id = Some(id);
             }
             clock_vector = parsed.clock;
             distributed = true;
@@ -78,7 +83,7 @@ pub fn parse_incoming_headers(
 
     ParsedTraceContext {
         trace_id,
-        span_id: generate_span_id(),
+        span_id: span_id.unwrap_or_else(generate_span_id), // Use received span ID, or generate if not provided
         parent_span_id,
         tracestate,
         clock_vector,
@@ -183,6 +188,7 @@ fn parse_traceparent(value: &str) -> Option<ParsedTraceparent> {
 
 struct ParsedClock {
     trace_id: Option<String>,
+    span_id: Option<String>,
     parent_span_id: Option<String>,
     clock: Vec<(String, u64)>,
 }
@@ -199,9 +205,13 @@ fn parse_raceway_clock(value: &str) -> Option<ParsedClock> {
         .get("trace_id")
         .and_then(|t| t.as_str())
         .map(|s| s.to_string());
-    // span_id from sender becomes parent for receiver
-    let parent_span_id = v
+    let span_id = v
         .get("span_id")
+        .and_then(|t| t.as_str())
+        .map(|s| s.to_string());
+    // Use actual upstream span ID
+    let parent_span_id = v
+        .get("parent_span_id")
         .and_then(|t| t.as_str())
         .map(|s| s.to_string());
 
@@ -220,6 +230,7 @@ fn parse_raceway_clock(value: &str) -> Option<ParsedClock> {
 
     Some(ParsedClock {
         trace_id,
+        span_id,
         parent_span_id,
         clock,
     })

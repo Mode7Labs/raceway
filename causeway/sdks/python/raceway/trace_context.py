@@ -50,6 +50,7 @@ def parse_incoming_headers(
     raceway_clock_raw = lower_headers.get(RACEWAY_CLOCK_HEADER)
 
     trace_id = str(uuid.uuid4())
+    span_id: Optional[str] = None
     parent_span_id: Optional[str] = None
     distributed = False
 
@@ -57,7 +58,7 @@ def parse_incoming_headers(
         parsed = _parse_traceparent(traceparent_raw)
         if parsed:
             trace_id = parsed["trace_id"]
-            parent_span_id = parsed["span_id"]
+            span_id = parsed["span_id"]  # This is the span ID for THIS service
             distributed = True
 
     clock_vector: List[Tuple[str, int]] = []
@@ -66,9 +67,12 @@ def parse_incoming_headers(
         if parsed_clock:
             clock_vector = parsed_clock["clock"]
             distributed = True
-            if parsed_clock["trace_id"]:
+            if parsed_clock.get("trace_id"):
                 trace_id = parsed_clock["trace_id"]
-            if not parent_span_id and parsed_clock["parent_span_id"]:
+            # Raceway clock has more accurate span IDs
+            if parsed_clock.get("span_id"):
+                span_id = parsed_clock["span_id"]
+            if parsed_clock.get("parent_span_id"):
                 parent_span_id = parsed_clock["parent_span_id"]
 
     component_id = _clock_component(service_name, instance_id)
@@ -77,7 +81,7 @@ def parse_incoming_headers(
 
     return ParsedTraceContext(
         trace_id=trace_id,
-        span_id=_generate_span_id(),
+        span_id=span_id or _generate_span_id(),  # Use received span ID, or generate if not provided
         parent_span_id=parent_span_id,
         tracestate=tracestate_raw,
         clock_vector=clock_vector,
@@ -186,7 +190,8 @@ def _parse_raceway_clock(value: str) -> Optional[Dict[str, Optional[str]]]:
 
     return {
         "trace_id": payload.get("trace_id"),
-        "parent_span_id": payload.get("span_id"),  # span_id from sender becomes parent for receiver
+        "span_id": payload.get("span_id"),  # Span ID for THIS service
+        "parent_span_id": payload.get("parent_span_id"),  # Use actual upstream span ID
         "clock": clock_entries,
     }
 

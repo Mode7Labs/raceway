@@ -61,12 +61,14 @@ def process():
         try:
             headers = client.propagation_headers()
             next_downstream = data.get('next_downstream')
+            next_next_downstream = data.get('next_next_downstream')
 
             response = requests.post(
                 downstream,
                 json={
                     'payload': f"{SERVICE_NAME} → {payload}",
-                    'downstream': next_downstream
+                    'downstream': next_downstream,
+                    'next_downstream': next_next_downstream
                 },
                 headers=headers
             )

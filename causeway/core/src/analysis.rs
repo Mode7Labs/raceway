@@ -139,11 +139,12 @@ impl AnalysisService {
                 let existing_span = self.storage.get_distributed_span(span_id).await?;
 
                 let span = if let Some(mut existing) = existing_span {
-                    // Update existing span's last_event timestamp
+                    // Update existing span's last_event timestamp only
+                    // DO NOT change service/instance - those belong to whoever created the span
                     existing.last_event = Some(event.timestamp);
                     existing
                 } else {
-                    // Create new span
+                    // Create new span - this service owns this span ID
                     DistributedSpan {
                         trace_id: event.trace_id,
                         span_id: span_id.clone(),

@@ -271,8 +271,8 @@ func (c *Client) PropagationHeaders(ctx context.Context, extra map[string]string
 
 	rctx.ClockVector = result.ClockVector
 	rctx.Distributed = true
-	rctx.ParentSpanID = &rctx.SpanID
-	rctx.SpanID = result.ChildSpanID
+	// Do NOT modify rctx.SpanID - this context should keep using its own span ID
+	// The child span ID is only for the downstream service in the headers
 
 	headers := make(map[string]string, len(result.Headers))
 	for k, v := range result.Headers {

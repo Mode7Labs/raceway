@@ -241,9 +241,9 @@ class RacewayClient:
         )
 
         ctx.clock_vector = result.clock_vector
-        ctx.parent_span_id = ctx.span_id
-        ctx.span_id = result.child_span_id
         ctx.distributed = True
+        # Do NOT modify ctx.span_id - this context should keep using its own span ID
+        # The child span ID is only for the downstream service in the headers
 
         headers = dict(result.headers)
         if extra_headers:

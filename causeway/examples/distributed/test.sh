@@ -117,11 +117,40 @@ cd "${PATTERNS_DIR}"
 echo -e "${YELLOW}Running test patterns...${NC}"
 echo ""
 
+# Phase 1: Linear pattern test
 if [ -f "./linear.sh" ]; then
-    ./linear.sh
+    echo -e "${YELLOW}=== Phase 1: Linear Pattern Test ===${NC}"
+    ./linear.sh || exit 1
+    echo ""
 else
-    echo -e "${RED}Pattern tests not found yet${NC}"
+    echo -e "${RED}linear.sh not found${NC}"
+    exit 1
+fi
+
+# Phase 2: Full chain test
+if [ -f "./full-chain.sh" ]; then
+    echo -e "${YELLOW}=== Phase 2: Full Chain Test ===${NC}"
+    ./full-chain.sh || exit 1
+    echo ""
+else
+    echo -e "${RED}full-chain.sh not found${NC}"
+    exit 1
+fi
+
+# Phase 3: Service-aware features test
+if [ -f "./phase3-test.sh" ]; then
+    echo -e "${YELLOW}=== Phase 3: Service-Aware Features Test ===${NC}"
+    ./phase3-test.sh || exit 1
+    echo ""
+else
+    echo -e "${RED}phase3-test.sh not found${NC}"
+    exit 1
 fi
 
 echo ""
-echo -e "${GREEN}✓ All tests completed!${NC}"
+echo -e "${GREEN}✓✓✓ ALL TESTS COMPLETED SUCCESSFULLY! ✓✓✓${NC}"
+echo ""
+echo -e "${CYAN}Test Summary:${NC}"
+echo -e "  ✓ Phase 1: Header propagation across 4 services"
+echo -e "  ✓ Phase 2: Distributed trace merging and analysis"
+echo -e "  ✓ Phase 3: Service-aware features and APIs"

@@ -35,6 +35,7 @@ export function parseIncomingTraceHeaders(
   const racewayClockRaw = getHeader(headers, RACEWAY_CLOCK_HEADER);
 
   let traceId = uuidv4();
+  let spanId: string | null = null;
   let parentSpanId: string | null = null;
   let distributed = false;
 
@@ -42,7 +43,7 @@ export function parseIncomingTraceHeaders(
     const parsed = parseTraceParent(traceparentRaw);
     if (parsed) {
       traceId = parsed.traceId;
-      parentSpanId = parsed.parentSpanId;
+      spanId = parsed.parentSpanId; // This is the span ID for THIS service
       distributed = true;
     }
   }
@@ -53,7 +54,11 @@ export function parseIncomingTraceHeaders(
     if (parsed) {
       clockVector = parsed.clockVector;
       distributed = true;
-      if (!parentSpanId && parsed.parentSpanId) {
+      // Raceway clock has more accurate span IDs
+      if (parsed.spanId) {
+        spanId = parsed.spanId;
+      }
+      if (parsed.parentSpanId) {
         parentSpanId = parsed.parentSpanId;
       }
       if (parsed.traceId) {
@@ -71,7 +76,7 @@ export function parseIncomingTraceHeaders(
 
   return {
     traceId,
-    spanId: generateSpanId(),
+    spanId: spanId || generateSpanId(), // Use received span ID, or generate if not provided
     parentSpanId,
     tracestate: tracestateRaw ?? null,
     clockVector,
@@ -155,7 +160,7 @@ function parseTraceParent(value: string): { traceId: UUID; parentSpanId: string 
 
 function parseRacewayClock(
   value: string
-): { traceId: UUID | null; parentSpanId: string | null; clockVector: Array<[string, number]> } | null {
+): { traceId: UUID | null; spanId: string | null; parentSpanId: string | null; clockVector: Array<[string, number]> } | null {
   if (!value.startsWith(CLOCK_VERSION_PREFIX)) {
     return null;
   }
@@ -178,7 +183,8 @@ function parseRacewayClock(
 
     return {
       traceId: typeof payload.trace_id === 'string' ? payload.trace_id : null,
-      parentSpanId: typeof payload.span_id === 'string' ? payload.span_id : null,
+      spanId: typeof payload.span_id === 'string' ? payload.span_id : null,
+      parentSpanId: typeof payload.parent_span_id === 'string' ? payload.parent_span_id : null,
       clockVector,
     };
   } catch (error) {

@@ -472,42 +472,132 @@ action_clear_database() {
   printf "${YELLOW}${BOLD}${ICON_DATABASE} Clearing Database${RESET}\n"
   printf "${DIM}This will delete all traces and events${RESET}\n\n"
 
+  # Detect storage backend from config
+  local backend="memory"
+  local conn_string=""
+
+  if [[ -f "${SCRIPT_DIR}/raceway.toml" ]]; then
+    backend=$(grep -A 5 '^\[storage\]' "${SCRIPT_DIR}/raceway.toml" | grep '^backend' | cut -d'"' -f2 | head -1)
+    if [[ "$backend" == "postgres" || "$backend" == "supabase" ]]; then
+      conn_string=$(grep 'connection_string' "${SCRIPT_DIR}/raceway.toml" | cut -d'"' -f2)
+    fi
+  fi
+
+  printf "${DIM}Storage backend: ${backend}${RESET}\n\n"
+
   printf "Are you sure? (y/N): "
   read -r confirm
 
   if [[ "${confirm}" =~ ^[Yy]$ ]]; then
-    # Remove SQLite database
-    if [[ -f "${SCRIPT_DIR}/raceway.db" ]]; then
-      rm "${SCRIPT_DIR}/raceway.db"
-      printf "${GREEN}✓ Database cleared${RESET}\n"
-    else
-      printf "${YELLOW}No database file found${RESET}\n"
-    fi
+    case "$backend" in
+      "memory")
+        printf "${YELLOW}Using in-memory storage - data will be cleared on server restart${RESET}\n"
+        printf "${GREEN}✓ No action needed for in-memory storage${RESET}\n"
+        ;;
+
+      "postgres"|"supabase")
+        if [[ -z "$conn_string" ]]; then
+          printf "${RED}✗ No connection string found in raceway.toml${RESET}\n"
+          return 1
+        fi
+
+        printf "${CYAN}Truncating all tables in PostgreSQL database...${RESET}\n"
+
+        # List of tables to truncate (in correct order due to foreign keys)
+        local tables=(
+          "cross_trace_index"
+          "anomalies"
+          "causal_edges"
+          "trace_roots"
+          "distributed_edges"
+          "distributed_spans"
+          "events"
+          "baseline_metrics"
+        )
+
+        # Build truncate command
+        local truncate_cmd="TRUNCATE TABLE ${tables[*]} CASCADE;"
+
+        # Execute via psql
+        if command -v psql >/dev/null 2>&1; then
+          echo "$truncate_cmd" | psql "$conn_string" -q 2>/dev/null
+          if [[ $? -eq 0 ]]; then
+            printf "${GREEN}✓ All tables cleared successfully${RESET}\n"
+          else
+            printf "${RED}✗ Failed to clear tables${RESET}\n"
+            return 1
+          fi
+        else
+          printf "${RED}✗ psql command not found. Install PostgreSQL client tools.${RESET}\n"
+          return 1
+        fi
+        ;;
+
+      *)
+        printf "${RED}✗ Unknown storage backend: ${backend}${RESET}\n"
+        return 1
+        ;;
+    esac
   else
     printf "${DIM}Cancelled${RESET}\n"
   fi
 }
 
 action_database_stats() {
-  if [[ -f "${SCRIPT_DIR}/raceway.db" ]]; then
-    printf "${CYAN}${BOLD}${ICON_DATABASE} Database Statistics${RESET}\n\n"
+  printf "${CYAN}${BOLD}${ICON_DATABASE} Database Statistics${RESET}\n\n"
 
-    require_tool sqlite3
+  # Detect storage backend from config
+  local backend="memory"
+  local conn_string=""
 
-    printf "${GREEN}Events:${RESET} "
-    sqlite3 "${SCRIPT_DIR}/raceway.db" "SELECT COUNT(*) FROM events;"
-
-    printf "${GREEN}Traces:${RESET} "
-    sqlite3 "${SCRIPT_DIR}/raceway.db" "SELECT COUNT(DISTINCT trace_id) FROM events;"
-
-    printf "${GREEN}Services:${RESET} "
-    sqlite3 "${SCRIPT_DIR}/raceway.db" "SELECT COUNT(DISTINCT service) FROM events;"
-
-    printf "\n${GREEN}Database size:${RESET} "
-    du -h "${SCRIPT_DIR}/raceway.db" | cut -f1
-  else
-    printf "${YELLOW}No database file found${RESET}\n"
+  if [[ -f "${SCRIPT_DIR}/raceway.toml" ]]; then
+    backend=$(grep -A 5 '^\[storage\]' "${SCRIPT_DIR}/raceway.toml" | grep '^backend' | cut -d'"' -f2 | head -1)
+    if [[ "$backend" == "postgres" || "$backend" == "supabase" ]]; then
+      conn_string=$(grep 'connection_string' "${SCRIPT_DIR}/raceway.toml" | cut -d'"' -f2)
+    fi
   fi
+
+  case "$backend" in
+    "memory")
+      printf "${YELLOW}Using in-memory storage - stats not available${RESET}\n"
+      printf "${DIM}Query the API /status endpoint for runtime stats${RESET}\n"
+      ;;
+
+    "postgres"|"supabase")
+      if [[ -z "$conn_string" ]]; then
+        printf "${RED}✗ No connection string found in raceway.toml${RESET}\n"
+        return 1
+      fi
+
+      if ! command -v psql >/dev/null 2>&1; then
+        printf "${RED}✗ psql command not found. Install PostgreSQL client tools.${RESET}\n"
+        return 1
+      fi
+
+      printf "${GREEN}Events:${RESET} "
+      echo "SELECT COUNT(*) FROM events;" | psql "$conn_string" -t -q 2>/dev/null | tr -d ' '
+
+      printf "${GREEN}Traces:${RESET} "
+      echo "SELECT COUNT(DISTINCT trace_id) FROM events;" | psql "$conn_string" -t -q 2>/dev/null | tr -d ' '
+
+      printf "${GREEN}Services:${RESET} "
+      echo "SELECT COUNT(DISTINCT metadata->>'service_name') FROM events WHERE metadata->>'service_name' IS NOT NULL;" | psql "$conn_string" -t -q 2>/dev/null | tr -d ' '
+
+      printf "${GREEN}Distributed Spans:${RESET} "
+      echo "SELECT COUNT(*) FROM distributed_spans;" | psql "$conn_string" -t -q 2>/dev/null | tr -d ' '
+
+      printf "${GREEN}Distributed Edges:${RESET} "
+      echo "SELECT COUNT(*) FROM distributed_edges;" | psql "$conn_string" -t -q 2>/dev/null | tr -d ' '
+
+      printf "\n${GREEN}Database size:${RESET} "
+      echo "SELECT pg_size_pretty(pg_database_size(current_database()));" | psql "$conn_string" -t -q 2>/dev/null | tr -d ' '
+      ;;
+
+    *)
+      printf "${RED}✗ Unknown storage backend: ${backend}${RESET}\n"
+      return 1
+      ;;
+  esac
 }
 
 # Utilities

@@ -81,6 +81,21 @@ pub trait StorageBackend: Send + Sync {
     async fn get_distributed_edges(&self, trace_id: Uuid) -> Result<Vec<DistributedEdge>>;
 
     // ========================================================================
+    // Service Catalog & Dependencies (Phase 3 - Optimized Queries)
+    // ========================================================================
+
+    /// Get aggregated service statistics across all traces
+    /// Returns (service_name, event_count, trace_count) tuples
+    async fn get_all_services(&self) -> Result<Vec<(String, usize, usize)>>;
+
+    /// Get service dependencies for a specific service across all traces
+    /// Returns (calls_to, called_by) where each is a Vec of (service_name, total_calls, trace_count)
+    async fn get_service_dependencies_global(
+        &self,
+        service_name: &str,
+    ) -> Result<(Vec<(String, usize, usize)>, Vec<(String, usize, usize)>)>;
+
+    // ========================================================================
     // Maintenance
     // ========================================================================
 

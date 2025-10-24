@@ -589,6 +589,99 @@ impl StorageBackend for PostgresBackend {
         Ok(count as usize)
     }
 
+    async fn get_all_services(&self) -> Result<Vec<(String, usize, usize)>> {
+        // Optimized query using distributed_spans table
+        // Counts total events and distinct traces per service
+        let rows = sqlx::query(
+            r#"
+            SELECT
+                ds.service,
+                COUNT(e.id)::bigint as event_count,
+                COUNT(DISTINCT ds.trace_id)::bigint as trace_count
+            FROM distributed_spans ds
+            LEFT JOIN events e ON e.trace_id = ds.trace_id
+                AND e.metadata->>'service_name' = ds.service
+            GROUP BY ds.service
+            ORDER BY ds.service
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut services = Vec::new();
+        for row in rows {
+            let service_name: String = row.try_get("service")?;
+            let event_count: i64 = row.try_get("event_count").unwrap_or(0);
+            let trace_count: i64 = row.try_get("trace_count").unwrap_or(0);
+            services.push((service_name, event_count as usize, trace_count as usize));
+        }
+
+        Ok(services)
+    }
+
+    async fn get_service_dependencies_global(
+        &self,
+        service_name: &str,
+    ) -> Result<(Vec<(String, usize, usize)>, Vec<(String, usize, usize)>)> {
+        // Optimized query for "calls_to" - services this service calls
+        let calls_to_rows = sqlx::query(
+            r#"
+            SELECT
+                ds_to.service as to_service,
+                COUNT(de.from_span)::bigint as total_calls,
+                COUNT(DISTINCT ds_from.trace_id)::bigint as trace_count
+            FROM distributed_edges de
+            JOIN distributed_spans ds_from ON de.from_span = ds_from.span_id
+            JOIN distributed_spans ds_to ON de.to_span = ds_to.span_id
+            WHERE ds_from.service = $1
+                AND ds_from.service != ds_to.service
+            GROUP BY ds_to.service
+            ORDER BY total_calls DESC
+            "#,
+        )
+        .bind(service_name)
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut calls_to = Vec::new();
+        for row in calls_to_rows {
+            let to_service: String = row.try_get("to_service")?;
+            let total_calls: i64 = row.try_get("total_calls").unwrap_or(0);
+            let trace_count: i64 = row.try_get("trace_count").unwrap_or(0);
+            calls_to.push((to_service, total_calls as usize, trace_count as usize));
+        }
+
+        // Optimized query for "called_by" - services that call this service
+        let called_by_rows = sqlx::query(
+            r#"
+            SELECT
+                ds_from.service as from_service,
+                COUNT(de.from_span)::bigint as total_calls,
+                COUNT(DISTINCT ds_from.trace_id)::bigint as trace_count
+            FROM distributed_edges de
+            JOIN distributed_spans ds_from ON de.from_span = ds_from.span_id
+            JOIN distributed_spans ds_to ON de.to_span = ds_to.span_id
+            WHERE ds_to.service = $1
+                AND ds_from.service != ds_to.service
+            GROUP BY ds_from.service
+            ORDER BY total_calls DESC
+            "#,
+        )
+        .bind(service_name)
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut called_by = Vec::new();
+        for row in called_by_rows {
+            let from_service: String = row.try_get("from_service")?;
+            let total_calls: i64 = row.try_get("total_calls").unwrap_or(0);
+            let trace_count: i64 = row.try_get("trace_count").unwrap_or(0);
+            called_by.push((from_service, total_calls as usize, trace_count as usize));
+        }
+
+        Ok((calls_to, called_by))
+    }
+
     async fn clear(&self) -> Result<()> {
         sqlx::query("TRUNCATE events, causal_edges, trace_roots, baseline_metrics, cross_trace_index, distributed_spans, distributed_edges CASCADE")
             .execute(&self.pool)

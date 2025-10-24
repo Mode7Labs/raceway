@@ -7,6 +7,7 @@ import { EventsTabWithSwitcher } from './components/EventsTabWithSwitcher';
 import { CriticalPathView } from './components/CriticalPathView';
 import { DependenciesView } from './components/DependenciesView';
 import { AuditTrailView } from './components/AuditTrailView';
+import { DistributedAnalysisView } from './components/DistributedAnalysisView';
 import { EventDetails } from './components/EventDetails';
 import { RaceConditions } from './components/RaceConditions';
 import { ThemeToggle } from './components/theme-toggle';
@@ -16,6 +17,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from './components/ui/tabs';
 import { Badge } from './components/ui/badge';
 import { OverviewTab } from './components/OverviewTab';
 import { AnomaliesTab } from './components/AnomaliesTab';
+import { Services } from './components/Services';
 import { Loader2 } from 'lucide-react';
 import logo from './static/icon.png';
 
@@ -328,6 +330,20 @@ export default function App() {
               <TabsTrigger value="dependencies" className="rounded-none border-b border-transparent px-4 py-2.5 text-xs">
                 Dependencies
               </TabsTrigger>
+              <TabsTrigger value="distributed-analysis" className="rounded-none border-b border-transparent px-4 py-2.5 text-xs flex items-center gap-1.5">
+                Distributed Analysis
+                {(() => {
+                  const serviceCount = new Set(events.map(e => e.metadata.service_name)).size;
+                  return serviceCount > 1 ? (
+                    <span className="text-[10px] px-1 py-0.5 rounded bg-cyan-500/20 text-cyan-300">
+                      {serviceCount}
+                    </span>
+                  ) : null;
+                })()}
+              </TabsTrigger>
+              <TabsTrigger value="services" className="rounded-none border-b border-transparent px-4 py-2.5 text-xs">
+                Services
+              </TabsTrigger>
             </TabsList>
 
             <div className="flex-1 overflow-hidden bg-background/50">
@@ -379,8 +395,23 @@ export default function App() {
                   <TabsContent value="dependencies" className="h-full m-0 p-0">
                     <DependenciesView data={dependenciesData} />
                   </TabsContent>
+                  <TabsContent value="distributed-analysis" className="h-full m-0 p-0 overflow-auto">
+                    <div className="p-6">
+                      <DistributedAnalysisView
+                        events={events}
+                        criticalPathData={criticalPathData}
+                        raceCount={raceCount}
+                        selectedEventId={selectedEventId}
+                        onEventSelect={handleEventSelect}
+                      />
+                    </div>
+                  </TabsContent>
                 </>
               )}
+              {/* Services tab - available without trace selection */}
+              <TabsContent value="services" className="h-full m-0 p-0">
+                <Services />
+              </TabsContent>
             </div>
           </Tabs>
         </main>

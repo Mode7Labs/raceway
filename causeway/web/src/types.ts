@@ -15,6 +15,8 @@ export interface TraceMetadata {
   event_count: number;
   first_timestamp: string;
   last_timestamp: string;
+  service_count: number;
+  services: string[];
 }
 
 export interface TraceResponse {
@@ -210,8 +212,79 @@ export interface GlobalRaceDetail {
   description: string;
 }
 
+// Distributed trace analysis response types
+export interface DistributedTraceAnalysisResponse {
+  success: boolean;
+  data?: DistributedTraceAnalysisData;
+}
+
+export interface DistributedTraceAnalysisData {
+  trace_id: string;
+  service_breakdown: ServiceBreakdown;
+  critical_path: CriticalPathSummary | null;
+  race_conditions: RaceConditionSummary;
+  is_distributed: boolean;
+}
+
+export interface ServiceBreakdown {
+  services: ServiceStats[];
+  cross_service_calls: number;
+  total_services: number;
+}
+
+export interface ServiceStats {
+  name: string;
+  event_count: number;
+  total_duration_ms: number;
+}
+
+export interface CriticalPathSummary {
+  total_duration_ms: number;
+  trace_total_duration_ms: number;
+  percentage_of_total: number;
+  path_events: number;
+}
+
+export interface RaceConditionSummary {
+  total_races: number;
+  critical_races: number;
+  warning_races: number;
+}
+
+// Services catalog response types
+export interface ServicesListResponse {
+  success: boolean;
+  data?: {
+    total_services: number;
+    services: ServiceListItem[];
+  };
+}
+
+export interface ServiceListItem {
+  name: string;
+  event_count: number;
+  trace_count: number;
+}
+
+export interface ServiceDependenciesResponse {
+  success: boolean;
+  data?: ServiceDependenciesData;
+}
+
+export interface ServiceDependenciesData {
+  service_name: string;
+  calls_to: ServiceDependencyInfo[];
+  called_by: ServiceDependencyInfo[];
+}
+
+export interface ServiceDependencyInfo {
+  to: string;
+  total_calls: number;
+  trace_count: number;
+}
+
 // UI State Types
-export type ViewMode = 'overview' | 'events' | 'critical-path' | 'dependencies' | 'audit-trail' | 'anomalies';
+export type ViewMode = 'overview' | 'events' | 'critical-path' | 'dependencies' | 'audit-trail' | 'anomalies' | 'distributed-analysis' | 'services';
 
 export interface AppState {
   traces: string[];

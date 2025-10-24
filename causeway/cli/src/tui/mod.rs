@@ -2,6 +2,7 @@ pub mod anomalies_view;
 pub mod audit_trail_view;
 pub mod critical_path;
 pub mod dependencies_view;
+pub mod distributed_analysis_view;
 pub mod tree_view;
 pub mod types;
 
@@ -28,8 +29,9 @@ use std::time::Instant;
 
 struct App {
     server_url: String,
-    traces: Vec<String>,
+    traces: Vec<String>, // Deprecated - kept for now for backward compat
     trace_ids: Vec<String>, // Actual trace IDs for API calls
+    trace_metadata: Vec<TraceMetadata>, // Full metadata including services
     selected_trace: usize,
     loaded_trace: usize, // The trace that's actually loaded (may lag behind selected_trace)
     last_selection_change: Option<Instant>, // When did the user last change selection
@@ -64,7 +66,9 @@ struct App {
     anomalies_data: Option<AnomaliesData>,
     dependencies_data: Option<DependenciesData>,
     audit_trail_data: Option<AuditTrailData>,
+    distributed_analysis_data: Option<DistributedTraceAnalysisData>,
     selected_variable: Option<String>,
+    audit_trails: HashMap<String, Vec<VariableAccess>>, // All audit trails from full response
 }
 
 impl App {
@@ -94,6 +98,7 @@ impl App {
                 "Loading trace list...".to_string(),
             ],
             trace_ids: vec![],
+            trace_metadata: vec![],
             selected_trace: 0,
             loaded_trace: 0,
             last_selection_change: None,
@@ -138,10 +143,12 @@ impl App {
 
             // View mode - default to Events view
             view_mode: ViewMode::Events,
+            audit_trails: HashMap::new(),
             critical_path_data: None,
             anomalies_data: None,
             dependencies_data: None,
             audit_trail_data: None,
+            distributed_analysis_data: None,
             selected_variable: None,
         }
     }
@@ -285,20 +292,29 @@ impl App {
                             // Check if trace count changed
                             let trace_count_changed = self.trace_ids.len() != trace_ids.len();
 
-                            // Store the actual trace IDs
+                            // Store the actual trace IDs and metadata
                             self.trace_ids = trace_ids.clone();
+                            self.trace_metadata = traces_data.traces.clone();
 
-                            // Display traces with their metadata
+                            // Display traces with their metadata including service info
                             self.traces = traces_data
                                 .traces
                                 .iter()
                                 .enumerate()
                                 .map(|(i, meta)| {
+                                    let service_badge = if meta.service_count > 1 {
+                                        format!(" [{}🌐]", meta.service_count)
+                                    } else if meta.service_count == 1 {
+                                        " [1📦]".to_string()
+                                    } else {
+                                        String::new()
+                                    };
                                     format!(
-                                        "🔍 Trace {}: {}... ({} events)",
+                                        "🔍 Trace {}: {}... ({} events){}",
                                         i + 1,
                                         &meta.trace_id[..8],
-                                        meta.event_count
+                                        meta.event_count,
+                                        service_badge
                                     )
                                 })
                                 .collect();
@@ -388,6 +404,7 @@ impl App {
             self.anomalies_data = cached.anomalies_data.clone();
             self.critical_path_data = cached.critical_path_data.clone();
             self.dependencies_data = cached.dependencies_data.clone();
+            self.distributed_analysis_data = cached.distributed_analysis_data.clone();
 
             // Update event detail for current selection
             if self.selected_event < self.event_data.len() {
@@ -516,13 +533,39 @@ impl App {
                     // 6. Store dependencies data
                     self.dependencies_data = full_data.dependencies.clone();
 
-                    // 7. Show details of selected event
+                    // 7. Compute distributed analysis from dependencies
+                    self.distributed_analysis_data = self.dependencies_data.as_ref().map(|deps| {
+                        DistributedTraceAnalysisData {
+                            trace_id: trace_id.clone(),
+                            service_breakdown: ServiceBreakdown {
+                                services: deps.services.iter().map(|s| ServiceStats {
+                                    name: s.name.clone(),
+                                    event_count: s.event_count,
+                                    total_duration_ms: 0.0, // Not computed in current implementation
+                                }).collect(),
+                                cross_service_calls: deps.dependencies.len(),
+                                total_services: deps.services.len(),
+                            },
+                            critical_path: None, // Not needed for TUI display
+                            race_conditions: RaceConditionSummary {
+                                total_races: full_data.analysis.potential_races,
+                                critical_races: full_data.analysis.potential_races,
+                                warning_races: 0,
+                            },
+                            is_distributed: deps.services.len() > 1,
+                        }
+                    });
+
+                    // 8. Store audit trails from full response
+                    self.audit_trails = full_data.audit_trails.clone();
+
+                    // 9. Show details of selected event
                     if self.selected_event < self.event_data.len() {
                         let event = &self.event_data[self.selected_event];
                         self.event_detail = format!("{:#}", event);
                     }
 
-                    // 8. Store in cache (removed global analysis - now lazy loaded on CrossTrace view)
+                    // 10. Store in cache (removed global analysis - now lazy loaded on CrossTrace view)
                     self.trace_cache.insert(
                         self.loaded_trace,
                         CachedTraceData {
@@ -533,6 +576,7 @@ impl App {
                             anomalies_data,
                             critical_path_data: self.critical_path_data.clone(),
                             dependencies_data: self.dependencies_data.clone(),
+                            distributed_analysis_data: self.distributed_analysis_data.clone(),
                         },
                     );
 
@@ -691,6 +735,8 @@ impl App {
         }
     }
 
+    // Removed: fetch_distributed_analysis() - now computed from dependencies in fetch_trace_details()
+
     fn select_next_trace(&mut self) {
         if self.selected_trace < self.traces.len().saturating_sub(1) {
             self.selected_trace += 1;
@@ -775,7 +821,8 @@ impl App {
             ViewMode::Tree => ViewMode::CriticalPath,
             ViewMode::CriticalPath => ViewMode::Anomalies,
             ViewMode::Anomalies => ViewMode::Dependencies,
-            ViewMode::Dependencies => ViewMode::AuditTrail,
+            ViewMode::Dependencies => ViewMode::DistributedAnalysis,
+            ViewMode::DistributedAnalysis => ViewMode::AuditTrail,
             ViewMode::AuditTrail => ViewMode::CrossTrace,
             ViewMode::CrossTrace => ViewMode::Events,
         };
@@ -790,7 +837,7 @@ impl App {
             if self.last_global_analysis_trace_count != self.trace_ids.len() {
                 self.fetch_global_analysis();
             }
-        }
+        } // Distributed analysis is now always loaded from dependencies in fetch_trace_details()
         // Other view modes (CriticalPath, Anomalies, Dependencies) already loaded via /full endpoint
     }
 
@@ -817,22 +864,19 @@ impl App {
     }
 
     fn fetch_audit_trail(&mut self, variable: &str) {
-        if self.selected_trace >= self.trace_ids.len() {
-            return;
-        }
+        // Use pre-fetched audit trails from full endpoint
+        if let Some(accesses) = self.audit_trails.get(variable) {
+            let trace_id = if self.selected_trace < self.trace_ids.len() {
+                self.trace_ids[self.selected_trace].clone()
+            } else {
+                "unknown".to_string()
+            };
 
-        let trace_id = &self.trace_ids[self.selected_trace];
-        let url = format!(
-            "{}/api/traces/{}/audit-trail/{}",
-            self.server_url,
-            trace_id,
-            urlencoding::encode(variable)
-        );
-
-        if let Ok(response) = self.client.get(&url).send() {
-            if let Ok(trail_resp) = response.json::<AuditTrailResponse>() {
-                self.audit_trail_data = trail_resp.data;
-            }
+            self.audit_trail_data = Some(AuditTrailData {
+                trace_id,
+                variable: variable.to_string(),
+                accesses: accesses.clone(),
+            });
         }
     }
 }
@@ -1149,7 +1193,7 @@ fn ui(f: &mut Frame, app: &App) {
 
     match app.view_mode {
         ViewMode::Events => {
-            // Original events list view
+            // Service-aware events list view
             let events: Vec<ListItem> = app
                 .events
                 .iter()
@@ -1169,6 +1213,26 @@ fn ui(f: &mut Frame, app: &App) {
                         false
                     };
 
+                    // Get service name for this event
+                    let service_badge = if i < app.event_data.len() {
+                        app.event_data[i]
+                            .get("metadata")
+                            .and_then(|m| m.get("service_name"))
+                            .and_then(|s| s.as_str())
+                            .map(|service| {
+                                // Create a short badge from service name
+                                let short = if service.len() > 12 {
+                                    &service[..12]
+                                } else {
+                                    service
+                                };
+                                format!("[{}] ", short)
+                            })
+                            .unwrap_or_default()
+                    } else {
+                        String::new()
+                    };
+
                     let is_selected = i == app.selected_event;
 
                     let style = match (is_selected, event_in_race) {
@@ -1182,7 +1246,9 @@ fn ui(f: &mut Frame, app: &App) {
                         (false, false) => Style::default(),
                     };
 
-                    ListItem::new(event.as_str()).style(style)
+                    // Prepend service badge to event display
+                    let display_text = format!("{}{}", service_badge, event);
+                    ListItem::new(display_text).style(style)
                 })
                 .collect();
 
@@ -1300,6 +1366,32 @@ fn ui(f: &mut Frame, app: &App) {
             let list = List::new(items).block(block);
             f.render_widget(list, main_chunks[1]);
         }
+        ViewMode::DistributedAnalysis => {
+            // Render distributed trace analysis
+            if let Some(ref data) = app.distributed_analysis_data {
+                distributed_analysis_view::render_distributed_analysis(
+                    f,
+                    main_chunks[1],
+                    data,
+                );
+            } else {
+                // Show loading message
+                let title = "🌐 Distributed Trace Analysis";
+                let block = Block::default()
+                    .borders(Borders::ALL)
+                    .title(title.to_string())
+                    .border_style(Style::default());
+
+                let items = vec![
+                    ListItem::new("⏳ Loading distributed trace analysis..."),
+                    ListItem::new(""),
+                    ListItem::new("Analyzing service breakdown and critical path..."),
+                ];
+
+                let list = List::new(items).block(block);
+                f.render_widget(list, main_chunks[1]);
+            }
+        }
     }
 
     // Right panel: Event details and anomalies
@@ -1359,6 +1451,7 @@ fn ui(f: &mut Frame, app: &App) {
         ViewMode::CriticalPath => "Critical Path",
         ViewMode::Anomalies => "Anomalies",
         ViewMode::Dependencies => "Dependencies",
+        ViewMode::DistributedAnalysis => "Distributed Analysis",
         ViewMode::AuditTrail => "Audit Trail",
         ViewMode::CrossTrace => "Cross-Trace Races",
     };

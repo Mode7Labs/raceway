@@ -61,6 +61,11 @@ export function EventsView({ events, selectedEventId, onEventSelect }: EventsVie
               <span className="font-mono text-muted-foreground text-[11px]">
                 {timestamp}
               </span>
+              {event.metadata.service_name && (
+                <Badge variant="outline" className="text-[10px] font-mono bg-cyan-500/10 text-cyan-400 border-cyan-500/30">
+                  {event.metadata.service_name}
+                </Badge>
+              )}
               <Badge className={cn("font-mono text-[10px] border", getEventKindBadgeColor(eventKind))}>
                 {eventKind}
               </Badge>
@@ -70,8 +75,7 @@ export function EventsView({ events, selectedEventId, onEventSelect }: EventsVie
                   {event.metadata.thread_id}
                 </span>
               </span>
-            </div>
-            {isSelected && (
+            </div>            {isSelected && (
               <svg className="w-3 h-3 flex-shrink-0 text-primary" viewBox="0 0 12 12" fill="none" xmlns="http://www.w3.org/2000/svg">
                 <path d="M4 2L8 6L4 10" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
               </svg>

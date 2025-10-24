@@ -234,28 +234,10 @@ pub fn build_router(config: &Config, engine: Arc<RacewayEngine>) -> Router {
         .route("/status", get(status_handler))
         .route("/events", post(ingest_events_handler))
         .route("/api/traces", get(list_traces_handler))
-        .route(
-            "/api/traces/:trace_id",
-            get(get_full_trace_analysis_handler),
-        )
-        .route("/api/traces/:trace_id/analyze", get(analyze_trace_handler))
-        .route(
-            "/api/traces/:trace_id/critical-path",
-            get(get_critical_path_handler),
-        )
-        .route(
-            "/api/traces/:trace_id/anomalies",
-            get(get_anomalies_handler),
-        )
-        .route(
-            "/api/traces/:trace_id/dependencies",
-            get(get_dependencies_handler),
-        )
-        .route(
-            "/api/traces/:trace_id/audit-trail/:variable",
-            get(get_audit_trail_handler),
-        )
+        .route("/api/traces/:trace_id", get(get_full_trace_analysis_handler))
         .route("/api/analyze/global", get(analyze_global_handler))
+        .route("/api/services", get(list_services_handler))
+        .route("/api/services/:service_name/dependencies", get(get_service_dependencies_handler))
         .layer(middleware::from_fn_with_state(auth_state, auth_middleware))
         .layer(build_cors(config))
         .with_state(state)
@@ -529,6 +511,8 @@ async fn list_traces_handler(
         event_count: usize,
         first_timestamp: String,
         last_timestamp: String,
+        service_count: usize,
+        services: Vec<String>,
     }
 
     #[derive(Serialize)]
@@ -550,6 +534,7 @@ async fn list_traces_handler(
         Ok((summaries, total_traces)) => {
             let total_pages = (total_traces + page_size - 1) / page_size;
 
+            // Build trace metadata - service info is optional for performance
             let traces: Vec<TraceMetadata> = summaries
                 .into_iter()
                 .map(|summary| TraceMetadata {
@@ -557,6 +542,8 @@ async fn list_traces_handler(
                     event_count: summary.event_count as usize,
                     first_timestamp: summary.first_timestamp.to_rfc3339(),
                     last_timestamp: summary.last_timestamp.to_rfc3339(),
+                    service_count: 0, // Computed on-demand to avoid performance hit
+                    services: vec![], // Computed on-demand to avoid performance hit
                 })
                 .collect();
 
@@ -1310,4 +1297,290 @@ async fn get_dependencies_handler(
             ))),
         )),
     }
+}
+
+async fn list_services_handler(
+    State(state): State<AppState>,
+) -> Result<impl IntoResponse, (StatusCode, Json<ApiResponse<String>>)> {
+    #[derive(Serialize)]
+    struct ServiceInfo {
+        name: String,
+        event_count: usize,
+        trace_count: usize,
+    }
+
+    #[derive(Serialize)]
+    struct ServicesResponse {
+        total_services: usize,
+        services: Vec<ServiceInfo>,
+    }
+
+    // Use optimized storage method to get all services directly
+    let services_data = state
+        .engine
+        .storage()
+        .get_all_services()
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiResponse::error(format!("Failed to fetch services: {}", e))),
+            )
+        })?;
+
+    let services: Vec<ServiceInfo> = services_data
+        .into_iter()
+        .map(|(name, event_count, trace_count)| ServiceInfo {
+            name,
+            event_count,
+            trace_count,
+        })
+        .collect();
+
+    let response = ServicesResponse {
+        total_services: services.len(),
+        services,
+    };
+
+    Ok((StatusCode::OK, Json(ApiResponse::success(response))))
+}
+
+async fn get_service_dependencies_handler(
+    State(state): State<AppState>,
+    Path(service_name): Path<String>,
+) -> Result<impl IntoResponse, (StatusCode, Json<ApiResponse<String>>)> {
+    #[derive(Serialize)]
+    struct ServiceDependencyInfo {
+        to: String,
+        total_calls: usize,
+        trace_count: usize,
+    }
+
+    #[derive(Serialize)]
+    struct ServiceDependenciesResponse {
+        service_name: String,
+        calls_to: Vec<ServiceDependencyInfo>,
+        called_by: Vec<ServiceDependencyInfo>,
+    }
+
+    // Use optimized storage method to get dependencies directly
+    let (calls_to_data, called_by_data) = state
+        .engine
+        .storage()
+        .get_service_dependencies_global(&service_name)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiResponse::error(format!(
+                    "Failed to fetch dependencies: {}",
+                    e
+                ))),
+            )
+        })?;
+
+    let calls_to: Vec<ServiceDependencyInfo> = calls_to_data
+        .into_iter()
+        .map(|(to, total_calls, trace_count)| ServiceDependencyInfo {
+            to,
+            total_calls,
+            trace_count,
+        })
+        .collect();
+
+    let called_by: Vec<ServiceDependencyInfo> = called_by_data
+        .into_iter()
+        .map(|(to, total_calls, trace_count)| ServiceDependencyInfo {
+            to,
+            total_calls,
+            trace_count,
+        })
+        .collect();
+
+    let response = ServiceDependenciesResponse {
+        service_name,
+        calls_to,
+        called_by,
+    };
+
+    Ok((StatusCode::OK, Json(ApiResponse::success(response))))
+}
+
+async fn get_distributed_trace_analysis_handler(
+    State(state): State<AppState>,
+    Path(trace_id): Path<String>,
+) -> Result<impl IntoResponse, (StatusCode, Json<ApiResponse<String>>)> {
+    let trace_uuid = Uuid::parse_str(&trace_id).map_err(|_| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(ApiResponse::error("Invalid trace ID format".to_string())),
+        )
+    })?;
+
+    #[derive(Serialize)]
+    struct ServiceStats {
+        name: String,
+        event_count: usize,
+        total_duration_ms: f64,
+    }
+
+    #[derive(Serialize)]
+    struct ServiceBreakdown {
+        services: Vec<ServiceStats>,
+        cross_service_calls: usize,
+        total_services: usize,
+    }
+
+    #[derive(Serialize)]
+    struct CriticalPathSummary {
+        total_duration_ms: f64,
+        trace_total_duration_ms: f64,
+        percentage_of_total: f64,
+        path_events: usize,
+    }
+
+    #[derive(Serialize)]
+    struct RaceConditionSummary {
+        total_races: usize,
+        critical_races: usize,
+        warning_races: usize,
+    }
+
+    #[derive(Serialize)]
+    struct DistributedTraceAnalysis {
+        trace_id: String,
+        service_breakdown: ServiceBreakdown,
+        critical_path: Option<CriticalPathSummary>,
+        race_conditions: RaceConditionSummary,
+        is_distributed: bool,
+    }
+
+    // Get service dependencies
+    let dependencies = state
+        .engine
+        .analysis()
+        .get_service_dependencies(trace_uuid)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::NOT_FOUND,
+                Json(ApiResponse::error(format!(
+                    "Failed to analyze trace: {}",
+                    e
+                ))),
+            )
+        })?;
+
+    // Get all events for the trace to calculate durations
+    let events = state
+        .engine
+        .storage()
+        .get_trace_events(trace_uuid)
+        .await
+        .unwrap_or_default();
+
+    // Calculate total duration per service
+    let mut service_durations: HashMap<String, f64> = HashMap::new();
+    for event in &events {
+        let service_name = &event.metadata.service_name;
+        if !service_name.is_empty() {
+            let duration_ms = event.metadata.duration_ns.unwrap_or(0) as f64 / 1_000_000.0;
+            *service_durations.entry(service_name.clone()).or_insert(0.0) += duration_ms;
+        }
+    }
+
+    // Build service stats
+    let mut service_stats: Vec<ServiceStats> = dependencies
+        .services
+        .iter()
+        .map(|s| ServiceStats {
+            name: s.name.clone(),
+            event_count: s.event_count,
+            total_duration_ms: *service_durations.get(&s.name).unwrap_or(&0.0),
+        })
+        .collect();
+
+    // Sort by duration for useful ordering
+    service_stats.sort_by(|a, b| {
+        b.total_duration_ms
+            .partial_cmp(&a.total_duration_ms)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    let service_breakdown = ServiceBreakdown {
+        total_services: dependencies.services.len(),
+        cross_service_calls: dependencies.dependencies.len(),
+        services: service_stats,
+    };
+
+    // Get critical path
+    let critical_path = if let Ok(cp) = state.engine.analysis().get_critical_path(trace_uuid).await
+    {
+        Some(CriticalPathSummary {
+            total_duration_ms: cp.total_duration_ms,
+            trace_total_duration_ms: cp.trace_total_duration_ms,
+            percentage_of_total: cp.percentage_of_total,
+            path_events: cp.path.len(),
+        })
+    } else {
+        None
+    };
+
+    // Analyze race conditions
+    let concurrent = state
+        .engine
+        .analysis()
+        .find_concurrent_events(trace_uuid)
+        .await
+        .unwrap_or_default();
+
+    let mut critical_races = 0;
+    let mut warning_races = 0;
+
+    for (event1, event2) in &concurrent {
+        use raceway_core::event::{AccessType, EventKind};
+
+        if let (
+            EventKind::StateChange {
+                variable: var1,
+                access_type: access1,
+                ..
+            },
+            EventKind::StateChange {
+                variable: var2,
+                access_type: access2,
+                ..
+            },
+        ) = (&event1.kind, &event2.kind)
+        {
+            if var1 == var2 {
+                let is_write1 = *access1 == AccessType::Write;
+                let is_write2 = *access2 == AccessType::Write;
+
+                if is_write1 && is_write2 {
+                    critical_races += 1;
+                } else if is_write1 || is_write2 {
+                    warning_races += 1;
+                }
+            }
+        }
+    }
+
+    let race_conditions = RaceConditionSummary {
+        total_races: concurrent.len(),
+        critical_races,
+        warning_races,
+    };
+
+    let is_distributed = dependencies.services.len() > 1;
+
+    let response = DistributedTraceAnalysis {
+        trace_id,
+        service_breakdown,
+        critical_path,
+        race_conditions,
+        is_distributed,
+    };
+
+    Ok((StatusCode::OK, Json(ApiResponse::success(response))))
 }
