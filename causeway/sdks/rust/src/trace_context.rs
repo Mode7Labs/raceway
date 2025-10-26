@@ -280,9 +280,9 @@ mod tests {
         let result = parse_incoming_headers(&headers, "test-service", "instance-1");
 
         assert_eq!(result.trace_id, VALID_TRACE_ID);
-        assert_eq!(result.parent_span_id.as_deref(), Some(VALID_SPAN_ID));
+        assert_eq!(result.span_id, VALID_SPAN_ID);
+        assert!(result.parent_span_id.is_none());
         assert!(result.distributed);
-        assert_eq!(result.span_id.len(), 16);
     }
 
     #[test]
@@ -290,7 +290,7 @@ mod tests {
         let clock_payload = serde_json::json!({
             "trace_id": VALID_TRACE_ID,
             "span_id": VALID_SPAN_ID,
-            "parent_span_id": null,
+            "parent_span_id": "parent-span-1111",
             "service": "upstream-service",
             "instance": "upstream-1",
             "clock": [
@@ -309,7 +309,8 @@ mod tests {
         let result = parse_incoming_headers(&headers, "test-service", "instance-1");
 
         assert_eq!(result.trace_id, VALID_TRACE_ID);
-        assert_eq!(result.parent_span_id.as_deref(), Some(VALID_SPAN_ID));
+        assert_eq!(result.span_id, VALID_SPAN_ID);
+        assert_eq!(result.parent_span_id.as_deref(), Some("parent-span-1111"));
         assert!(result.distributed);
         assert!(result
             .clock_vector
@@ -324,7 +325,7 @@ mod tests {
         let clock_payload = serde_json::json!({
             "trace_id": VALID_TRACE_ID,
             "span_id": VALID_SPAN_ID,
-            "parent_span_id": null,
+            "parent_span_id": "upstream-parent",
             "service": "upstream",
             "instance": "up-1",
             "clock": [["upstream#up-1", 10]],
@@ -341,7 +342,8 @@ mod tests {
         let result = parse_incoming_headers(&headers, "test-service", "instance-1");
 
         assert_eq!(result.trace_id, VALID_TRACE_ID);
-        assert_eq!(result.parent_span_id.as_deref(), Some(VALID_SPAN_ID));
+        assert_eq!(result.span_id, VALID_SPAN_ID);
+        assert_eq!(result.parent_span_id.as_deref(), Some("upstream-parent"));
         assert!(result.distributed);
         assert!(result
             .clock_vector
@@ -641,10 +643,8 @@ mod tests {
 
         // Verify trace continuity
         assert_eq!(parsed_b.trace_id, parsed.trace_id);
-        assert_eq!(
-            parsed_b.parent_span_id.as_deref(),
-            Some(outgoing.child_span_id.as_str())
-        );
+        assert_eq!(parsed_b.span_id, outgoing.child_span_id);
+        assert_eq!(parsed_b.parent_span_id.as_deref(), Some(parsed.span_id.as_str()));
         assert!(parsed_b.distributed);
 
         // Verify clock propagation

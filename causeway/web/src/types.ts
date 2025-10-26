@@ -284,14 +284,192 @@ export interface ServiceDependencyInfo {
 }
 
 // UI State Types
-export type ViewMode = 'overview' | 'events' | 'critical-path' | 'dependencies' | 'audit-trail' | 'anomalies' | 'distributed-analysis' | 'services';
+export type SidebarMode = 'system' | 'traces';
+export type SystemViewMode = 'insights' | 'services';
+export type InsightsViewMode = 'dashboard' | 'dependency-graph' | 'performance' | 'health' | 'hotspots' | 'races';
+export type ViewMode = 'overview' | 'events' | 'performance' | 'variables' | 'anomalies';
+export type ServiceViewMode = 'overview' | 'traces' | 'dependencies' | 'performance';
 
 export interface AppState {
   traces: string[];
   selectedTraceId: string | null;
   selectedEventId: string | null;
+  selectedServiceName: string | null;
   viewMode: ViewMode;
+  serviceViewMode: ServiceViewMode;
+  sidebarMode: SidebarMode;
   autoRefresh: boolean;
   loading: boolean;
   error: string | null;
+}
+
+// Distributed system analysis types
+export interface DistributedEdgesResponse {
+  success: boolean;
+  data?: {
+    total_edges: number;
+    edges: DistributedEdge[];
+  };
+}
+
+export interface DistributedEdge {
+  from_service: string;
+  to_service: string;
+  link_type: string;
+  call_count: number;
+}
+
+export interface GlobalRacesResponse {
+  success: boolean;
+  data?: {
+    total_races: number;
+    races: GlobalRace[];
+  };
+}
+
+export interface GlobalRace {
+  variable: string;
+  trace_count: number;
+  access_count: number;
+  access_types: string[];
+  thread_count: number;
+  severity: string;
+  trace_ids: string[];
+}
+
+export interface SystemHotspotsResponse {
+  success: boolean;
+  data?: {
+    top_variables: VariableHotspot[];
+    top_service_calls: ServiceCallHotspot[];
+  };
+}
+
+export interface VariableHotspot {
+  variable: string;
+  access_count: number;
+  trace_count: number;
+  services: string[];
+}
+
+export interface ServiceCallHotspot {
+  from_service: string;
+  to_service: string;
+  call_count: number;
+}
+
+// Service Health Response
+export interface ServiceHealthResponse {
+  success: boolean;
+  data?: ServiceHealth[];
+}
+
+export interface ServiceHealth {
+  name: string;
+  status: 'healthy' | 'warning' | 'critical';
+  trace_count: number;
+  last_activity: string;
+  avg_events_per_trace: number;
+  minutes_since_last_activity: number;
+}
+
+// Service Traces Response
+export interface ServiceTracesResponse {
+  success: boolean;
+  data?: {
+    service_name: string;
+    total_traces: number;
+    page: number;
+    page_size: number;
+    total_pages: number;
+    traces: TraceMetadata[];
+  };
+}
+
+// Performance Metrics Response
+export interface PerformanceMetricsResponse {
+  success: boolean;
+  data?: PerformanceMetrics;
+}
+
+export interface PerformanceMetrics {
+  trace_latency: {
+    avg_ms: number;
+    p50_ms: number;
+    p95_ms: number;
+    p99_ms: number;
+    slowest_traces: SlowTrace[];
+  };
+  event_performance: {
+    by_type: EventTypePerformance[];
+  };
+  service_latency: ServiceLatency[];
+  throughput: {
+    events_per_second: number;
+    traces_per_second: number;
+    time_range_seconds: number;
+  };
+}
+
+export interface SlowTrace {
+  trace_id: string;
+  duration_ms: number;
+  services: string[];
+}
+
+export interface EventTypePerformance {
+  type: string;
+  count: number;
+  avg_duration_ms: number;
+}
+
+export interface ServiceLatency {
+  service: string;
+  event_count: number;
+  avg_duration_ms: number;
+}
+
+// Lock contention analysis types
+export interface LockEvent {
+  lock_id: string;
+  lock_type: string;
+  thread_id: string;
+  service_name: string;
+  event_id: string;
+  timestamp: number;
+  location: string;
+  is_acquire: boolean; // true = acquire, false = release
+  event: Event;
+}
+
+export interface LockHold {
+  lock_id: string;
+  thread_id: string;
+  acquire_time: number;
+  release_time: number | null; // null if still held
+  duration: number;
+  acquire_event: Event;
+  release_event: Event | null;
+}
+
+export interface LockContention {
+  lock_id: string;
+  blocked_thread: string;
+  blocking_thread: string;
+  wait_start: number;
+  wait_end: number;
+  wait_duration: number;
+  blocked_event: Event;
+}
+
+export interface LockMetrics {
+  lock_id: string;
+  total_acquisitions: number;
+  total_hold_time: number;
+  avg_hold_time: number;
+  max_hold_time: number;
+  contention_count: number;
+  avg_wait_time: number;
+  max_wait_time: number;
+  threads: string[];
 }

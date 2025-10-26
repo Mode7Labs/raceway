@@ -39,7 +39,11 @@ impl Default for EngineConfig {
 }
 
 impl RacewayEngine {
-    pub async fn new(config: EngineConfig, storage: Arc<dyn StorageBackend>, full_config: Config) -> Result<Self> {
+    pub async fn new(
+        config: EngineConfig,
+        storage: Arc<dyn StorageBackend>,
+        full_config: Config,
+    ) -> Result<Self> {
         let capture = Arc::new(EventCapture::new(config.buffer_size));
 
         // Create AnalysisService with the storage backend and full config
@@ -148,7 +152,9 @@ mod tests {
         let storage_config = StorageConfig::default();
         let storage = Arc::new(MemoryBackend::new(&storage_config).unwrap());
         let full_config = Config::default();
-        let engine = RacewayEngine::new(engine_config, storage, full_config).await.unwrap();
+        let engine = RacewayEngine::new(engine_config, storage, full_config)
+            .await
+            .unwrap();
 
         assert!(engine.start().await.is_ok());
         engine.stop().await;

@@ -298,13 +298,19 @@ impl StorageBackend for PostgresBackend {
         let rows = sqlx::query(
             r#"
             SELECT
-                trace_id,
-                COUNT(*) as event_count,
-                MIN(timestamp) as first_timestamp,
-                MAX(timestamp) as last_timestamp
-            FROM events
-            GROUP BY trace_id
-            ORDER BY MAX(timestamp) DESC
+                e.trace_id,
+                COUNT(DISTINCT e.id) as event_count,
+                MIN(e.timestamp) as first_timestamp,
+                MAX(e.timestamp) as last_timestamp,
+                COALESCE(
+                    ARRAY_AGG(DISTINCT s.service ORDER BY s.service)
+                    FILTER (WHERE s.service IS NOT NULL),
+                    ARRAY[]::TEXT[]
+                ) as services
+            FROM events e
+            LEFT JOIN distributed_spans s ON e.trace_id = s.trace_id
+            GROUP BY e.trace_id
+            ORDER BY MAX(e.timestamp) DESC
             LIMIT $1 OFFSET $2
             "#,
         )
@@ -315,11 +321,87 @@ impl StorageBackend for PostgresBackend {
 
         let summaries = rows
             .into_iter()
-            .map(|row| TraceSummary {
-                trace_id: row.get("trace_id"),
-                event_count: row.get("event_count"),
-                first_timestamp: row.get("first_timestamp"),
-                last_timestamp: row.get("last_timestamp"),
+            .map(|row| {
+                let services: Vec<String> = row.get("services");
+                let service_count = services.len();
+                TraceSummary {
+                    trace_id: row.get("trace_id"),
+                    event_count: row.get("event_count"),
+                    first_timestamp: row.get("first_timestamp"),
+                    last_timestamp: row.get("last_timestamp"),
+                    services,
+                    service_count,
+                }
+            })
+            .collect();
+
+        Ok((summaries, total_count as usize))
+    }
+
+    async fn get_trace_summaries_by_service(
+        &self,
+        service_name: &str,
+        page: usize,
+        page_size: usize,
+    ) -> Result<(Vec<TraceSummary>, usize)> {
+        // Get total count of traces containing this service
+        let count_row = sqlx::query(
+            r#"
+            SELECT COUNT(DISTINCT e.trace_id) as total
+            FROM events e
+            JOIN distributed_spans s ON e.trace_id = s.trace_id
+            WHERE s.service = $1
+            "#,
+        )
+        .bind(service_name)
+        .fetch_one(&self.pool)
+        .await?;
+
+        let total_count: i64 = count_row.get("total");
+
+        // Get paginated summaries filtered by service
+        let offset = (page.saturating_sub(1)) * page_size;
+
+        let rows = sqlx::query(
+            r#"
+            SELECT
+                e.trace_id,
+                COUNT(DISTINCT e.id) as event_count,
+                MIN(e.timestamp) as first_timestamp,
+                MAX(e.timestamp) as last_timestamp,
+                COALESCE(
+                    ARRAY_AGG(DISTINCT s2.service ORDER BY s2.service)
+                    FILTER (WHERE s2.service IS NOT NULL),
+                    ARRAY[]::TEXT[]
+                ) as services
+            FROM events e
+            JOIN distributed_spans s ON e.trace_id = s.trace_id
+            LEFT JOIN distributed_spans s2 ON e.trace_id = s2.trace_id
+            WHERE s.service = $1
+            GROUP BY e.trace_id
+            ORDER BY MAX(e.timestamp) DESC
+            LIMIT $2 OFFSET $3
+            "#,
+        )
+        .bind(service_name)
+        .bind(page_size as i64)
+        .bind(offset as i64)
+        .fetch_all(&self.pool)
+        .await?;
+
+        let summaries = rows
+            .into_iter()
+            .map(|row| {
+                let services: Vec<String> = row.get("services");
+                let service_count = services.len();
+                TraceSummary {
+                    trace_id: row.get("trace_id"),
+                    event_count: row.get("event_count"),
+                    first_timestamp: row.get("first_timestamp"),
+                    last_timestamp: row.get("last_timestamp"),
+                    services,
+                    service_count,
+                }
             })
             .collect();
 
@@ -682,11 +764,527 @@ impl StorageBackend for PostgresBackend {
         Ok((calls_to, called_by))
     }
 
+    async fn get_all_distributed_edges(&self) -> Result<Vec<serde_json::Value>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT
+              ds_from.service as from_service,
+              ds_to.service as to_service,
+              de.link_type,
+              COUNT(*) as call_count
+            FROM distributed_edges de
+            JOIN distributed_spans ds_from ON de.from_span = ds_from.span_id
+            JOIN distributed_spans ds_to ON de.to_span = ds_to.span_id
+            GROUP BY ds_from.service, ds_to.service, de.link_type
+            ORDER BY call_count DESC
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut edges = Vec::new();
+        for row in rows {
+            edges.push(serde_json::json!({
+                "from_service": row.try_get::<String, _>("from_service")?,
+                "to_service": row.try_get::<String, _>("to_service")?,
+                "link_type": row.try_get::<String, _>("link_type")?,
+                "call_count": row.try_get::<i64, _>("call_count")? as usize,
+            }));
+        }
+
+        Ok(edges)
+    }
+
+    async fn get_global_race_candidates(&self) -> Result<Vec<serde_json::Value>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT
+              variable,
+              COUNT(DISTINCT trace_id) as trace_count,
+              COUNT(*) as access_count,
+              array_agg(DISTINCT access_type) as access_types,
+              COUNT(DISTINCT thread_id) as thread_count,
+              array_agg(DISTINCT trace_id::text) as trace_ids
+            FROM cross_trace_index
+            GROUP BY variable
+            HAVING COUNT(DISTINCT trace_id) > 1 OR COUNT(DISTINCT thread_id) > 1
+            ORDER BY trace_count DESC, access_count DESC
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut races = Vec::new();
+        for row in rows {
+            let access_types: Vec<String> = row.try_get("access_types")?;
+            let trace_ids: Vec<String> = row.try_get("trace_ids")?;
+            let thread_count: i64 = row.try_get("thread_count")?;
+
+            // Check for any write-type operations (Write, AtomicWrite, AtomicRMW)
+            let has_write = access_types
+                .iter()
+                .any(|t| t == "Write" || t == "AtomicWrite" || t == "AtomicRMW");
+            let has_read = access_types
+                .iter()
+                .any(|t| t == "Read" || t == "AtomicRead");
+
+            // Determine severity based on access patterns
+            let severity = if has_write && has_read {
+                // Mix of reads and writes = read-write race
+                "WARNING"
+            } else if has_write && thread_count > 1 {
+                // Multiple threads writing (no reads) = write-write race
+                "CRITICAL"
+            } else if has_write {
+                // Single thread writing
+                "WARNING"
+            } else {
+                // Only reads
+                "INFO"
+            };
+
+            races.push(serde_json::json!({
+                "variable": row.try_get::<String, _>("variable")?,
+                "trace_count": row.try_get::<i64, _>("trace_count")? as usize,
+                "access_count": row.try_get::<i64, _>("access_count")? as usize,
+                "access_types": access_types,
+                "thread_count": row.try_get::<i64, _>("thread_count")? as usize,
+                "severity": severity,
+                "trace_ids": trace_ids,
+            }));
+        }
+
+        Ok(races)
+    }
+
+    async fn get_system_hotspots(
+        &self,
+    ) -> Result<(Vec<serde_json::Value>, Vec<serde_json::Value>)> {
+        // Top variables by access count
+        let variable_rows = sqlx::query(
+            r#"
+            SELECT
+              cti.variable,
+              COUNT(*) as access_count,
+              COUNT(DISTINCT cti.trace_id) as trace_count,
+              array_agg(DISTINCT e.metadata->>'service_name') as services
+            FROM cross_trace_index cti
+            JOIN events e ON cti.event_id = e.id
+            WHERE e.metadata->>'service_name' IS NOT NULL
+            GROUP BY cti.variable
+            ORDER BY access_count DESC
+            LIMIT 10
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut top_variables = Vec::new();
+        for row in variable_rows {
+            let services: Vec<String> = row.try_get("services")?;
+            top_variables.push(serde_json::json!({
+                "variable": row.try_get::<String, _>("variable")?,
+                "access_count": row.try_get::<i64, _>("access_count")? as usize,
+                "trace_count": row.try_get::<i64, _>("trace_count")? as usize,
+                "services": services,
+            }));
+        }
+
+        // Top service calls by frequency
+        let service_rows = sqlx::query(
+            r#"
+            SELECT
+              ds_from.service as from_service,
+              ds_to.service as to_service,
+              COUNT(*) as call_count
+            FROM distributed_edges de
+            JOIN distributed_spans ds_from ON de.from_span = ds_from.span_id
+            JOIN distributed_spans ds_to ON de.to_span = ds_to.span_id
+            GROUP BY ds_from.service, ds_to.service
+            ORDER BY call_count DESC
+            LIMIT 10
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut top_service_calls = Vec::new();
+        for row in service_rows {
+            top_service_calls.push(serde_json::json!({
+                "from_service": row.try_get::<String, _>("from_service")?,
+                "to_service": row.try_get::<String, _>("to_service")?,
+                "call_count": row.try_get::<i64, _>("call_count")? as usize,
+            }));
+        }
+
+        Ok((top_variables, top_service_calls))
+    }
+
+    async fn get_service_health(&self, time_window_minutes: u64) -> Result<Vec<serde_json::Value>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT
+                s.service as service_name,
+                COUNT(DISTINCT CASE WHEN e.timestamp > NOW() - INTERVAL '1 minute' * $1 THEN e.trace_id END) as trace_count,
+                MAX(e.timestamp) as last_activity,
+                CAST(COALESCE(AVG(trace_events.event_count), 0) AS DOUBLE PRECISION) as avg_events_per_trace,
+                CAST(EXTRACT(EPOCH FROM (NOW() - COALESCE(MAX(e.timestamp), NOW()))) / 60.0 AS DOUBLE PRECISION) as minutes_since_last_activity
+            FROM distributed_spans s
+            LEFT JOIN events e ON s.trace_id = e.trace_id
+            LEFT JOIN (
+                SELECT trace_id, COUNT(*) as event_count
+                FROM events
+                WHERE timestamp > NOW() - INTERVAL '1 minute' * $1
+                GROUP BY trace_id
+            ) trace_events ON e.trace_id = trace_events.trace_id AND e.timestamp > NOW() - INTERVAL '1 minute' * $1
+            GROUP BY s.service
+            ORDER BY s.service
+            "#,
+        )
+        .bind(time_window_minutes as i64)
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut services = Vec::new();
+        for row in rows {
+            let minutes_since: f64 = row.try_get("minutes_since_last_activity")?;
+            let status = if minutes_since < 5.0 {
+                "healthy"
+            } else if minutes_since < 30.0 {
+                "warning"
+            } else {
+                "critical"
+            };
+
+            // Get last_activity, handling NULL case
+            let last_activity =
+                row.try_get::<Option<chrono::DateTime<chrono::Utc>>, _>("last_activity")?;
+
+            services.push(serde_json::json!({
+                "name": row.try_get::<String, _>("service_name")?,
+                "status": status,
+                "trace_count": row.try_get::<i64, _>("trace_count")? as usize,
+                "last_activity": last_activity.unwrap_or_else(chrono::Utc::now),
+                "avg_events_per_trace": row.try_get::<f64, _>("avg_events_per_trace")?,
+                "minutes_since_last_activity": minutes_since,
+            }));
+        }
+
+        Ok(services)
+    }
+
+    async fn get_performance_metrics(&self, limit: usize) -> Result<serde_json::Value> {
+        // Get trace durations and calculate percentiles
+        let trace_rows = sqlx::query(
+            r#"
+            SELECT
+                e.trace_id,
+                CAST(EXTRACT(EPOCH FROM (MAX(e.timestamp) - MIN(e.timestamp))) * 1000.0 AS DOUBLE PRECISION) as duration_ms,
+                array_agg(DISTINCT s.service) FILTER (WHERE s.service IS NOT NULL) as services
+            FROM events e
+            LEFT JOIN distributed_spans s ON e.trace_id = s.trace_id
+            GROUP BY e.trace_id
+            ORDER BY duration_ms DESC
+            LIMIT $1
+            "#,
+        )
+        .bind(limit as i64)
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut trace_durations: Vec<f64> = Vec::new();
+        let mut slowest_traces = Vec::new();
+
+        for row in trace_rows {
+            let duration: f64 = row.try_get("duration_ms")?;
+            let trace_id: Uuid = row.try_get("trace_id")?;
+            let services: Vec<String> = row.try_get("services").unwrap_or_default();
+
+            trace_durations.push(duration);
+            slowest_traces.push(serde_json::json!({
+                "trace_id": trace_id.to_string(),
+                "duration_ms": duration,
+                "services": services,
+            }));
+        }
+
+        // Calculate percentiles using PostgreSQL
+        let percentile_row = sqlx::query(
+            r#"
+            SELECT
+                CAST(AVG(duration_ms) AS DOUBLE PRECISION) as avg_duration,
+                CAST(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY duration_ms) AS DOUBLE PRECISION) as p50,
+                CAST(PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY duration_ms) AS DOUBLE PRECISION) as p95,
+                CAST(PERCENTILE_CONT(0.99) WITHIN GROUP (ORDER BY duration_ms) AS DOUBLE PRECISION) as p99
+            FROM (
+                SELECT
+                    CAST(EXTRACT(EPOCH FROM (MAX(timestamp) - MIN(timestamp))) * 1000.0 AS DOUBLE PRECISION) as duration_ms
+                FROM events
+                GROUP BY trace_id
+            ) durations
+            "#,
+        )
+        .fetch_one(&self.pool)
+        .await?;
+
+        let avg_duration: f64 = percentile_row.try_get("avg_duration").unwrap_or(0.0);
+        let p50: f64 = percentile_row.try_get("p50").unwrap_or(0.0);
+        let p95: f64 = percentile_row.try_get("p95").unwrap_or(0.0);
+        let p99: f64 = percentile_row.try_get("p99").unwrap_or(0.0);
+
+        // Event type performance
+        let event_type_rows = sqlx::query(
+            r#"
+            WITH event_types AS (
+                SELECT
+                    jsonb_object_keys(kind) as event_type,
+                    CAST(metadata->>'duration_ns' AS BIGINT) as duration_ns
+                FROM events
+                WHERE metadata->>'duration_ns' IS NOT NULL
+                  AND CAST(metadata->>'duration_ns' AS BIGINT) > 0
+            )
+            SELECT
+                event_type,
+                COUNT(*) as count,
+                CAST(AVG(duration_ns / 1000000.0) AS DOUBLE PRECISION) as avg_duration_ms
+            FROM event_types
+            GROUP BY event_type
+            ORDER BY avg_duration_ms DESC
+            LIMIT 20
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut event_types = Vec::new();
+        for row in event_type_rows {
+            event_types.push(serde_json::json!({
+                "type": row.try_get::<String, _>("event_type")?,
+                "count": row.try_get::<i64, _>("count")? as usize,
+                "avg_duration_ms": row.try_get::<f64, _>("avg_duration_ms").unwrap_or(0.0),
+            }));
+        }
+
+        // Service latency
+        let service_rows = sqlx::query(
+            r#"
+            SELECT
+                s.service,
+                COUNT(DISTINCT e.id) as event_count,
+                CAST(AVG(CAST(e.metadata->>'duration_ns' AS BIGINT) / 1000000.0) AS DOUBLE PRECISION) as avg_duration_ms
+            FROM distributed_spans s
+            JOIN events e ON s.trace_id = e.trace_id
+            WHERE e.metadata->>'duration_ns' IS NOT NULL
+            GROUP BY s.service
+            ORDER BY avg_duration_ms DESC
+            "#,
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut service_latency = Vec::new();
+        for row in service_rows {
+            service_latency.push(serde_json::json!({
+                "service": row.try_get::<String, _>("service")?,
+                "event_count": row.try_get::<i64, _>("event_count")? as usize,
+                "avg_duration_ms": row.try_get::<f64, _>("avg_duration_ms").unwrap_or(0.0),
+            }));
+        }
+
+        // Throughput metrics
+        let throughput_row = sqlx::query(
+            r#"
+            SELECT
+                COUNT(DISTINCT id) as total_events,
+                COUNT(DISTINCT trace_id) as total_traces,
+                CAST(EXTRACT(EPOCH FROM (MAX(timestamp) - MIN(timestamp))) AS DOUBLE PRECISION) as time_range_seconds
+            FROM events
+            "#,
+        )
+        .fetch_one(&self.pool)
+        .await?;
+
+        let total_events: i64 = throughput_row.try_get("total_events").unwrap_or(0);
+        let total_traces: i64 = throughput_row.try_get("total_traces").unwrap_or(0);
+        let time_range: f64 = throughput_row.try_get("time_range_seconds").unwrap_or(1.0);
+
+        let events_per_second = if time_range > 0.0 {
+            total_events as f64 / time_range
+        } else {
+            0.0
+        };
+
+        let traces_per_second = if time_range > 0.0 {
+            total_traces as f64 / time_range
+        } else {
+            0.0
+        };
+
+        Ok(serde_json::json!({
+            "trace_latency": {
+                "avg_ms": avg_duration,
+                "p50_ms": p50,
+                "p95_ms": p95,
+                "p99_ms": p99,
+                "slowest_traces": slowest_traces,
+            },
+            "event_performance": {
+                "by_type": event_types,
+            },
+            "service_latency": service_latency,
+            "throughput": {
+                "events_per_second": events_per_second,
+                "traces_per_second": traces_per_second,
+                "time_range_seconds": time_range,
+            },
+        }))
+    }
+
     async fn clear(&self) -> Result<()> {
         sqlx::query("TRUNCATE events, causal_edges, trace_roots, baseline_metrics, cross_trace_index, distributed_spans, distributed_edges CASCADE")
             .execute(&self.pool)
             .await?;
 
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::StorageConfig;
+    use crate::event::{AccessType, EventKind, EventMetadata};
+    use chrono::{TimeZone, Utc};
+    use serde_json::json;
+    use std::collections::HashMap;
+
+    fn make_state_change_event(
+        trace_id: Uuid,
+        thread_id: &str,
+        service: &str,
+        access_type: AccessType,
+        variable: &str,
+        timestamp: chrono::DateTime<Utc>,
+    ) -> Event {
+        Event {
+            id: Uuid::new_v4(),
+            trace_id,
+            parent_id: None,
+            timestamp,
+            kind: EventKind::StateChange {
+                variable: variable.to_string(),
+                old_value: Some(json!(123)),
+                new_value: json!(456),
+                location: "test.rs:1".to_string(),
+                access_type,
+            },
+            metadata: EventMetadata {
+                thread_id: thread_id.to_string(),
+                process_id: 1,
+                service_name: service.to_string(),
+                environment: "test".to_string(),
+                tags: HashMap::new(),
+                duration_ns: Some(1),
+                instance_id: None,
+                distributed_span_id: None,
+                upstream_span_id: None,
+            },
+            causality_vector: Vec::new(),
+            lock_set: Vec::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn postgres_backend_distributed_insights() -> Result<()> {
+        let url = match std::env::var("RACEWAY_TEST_PG_URL") {
+            Ok(url) => url,
+            Err(_) => {
+                eprintln!("Skipping postgres_backend_distributed_insights (set RACEWAY_TEST_PG_URL to run)");
+                return Ok(());
+            }
+        };
+
+        let mut storage_config = StorageConfig::default();
+        storage_config.backend = "postgres".to_string();
+        storage_config.postgres.connection_string = Some(url);
+        storage_config.postgres.auto_migrate = true;
+
+        let backend = PostgresBackend::new(&storage_config).await?;
+        backend.clear().await?;
+
+        let now = Utc.with_ymd_and_hms(2024, 1, 1, 0, 0, 0).unwrap();
+
+        let trace_a = Uuid::new_v4();
+        let trace_b = Uuid::new_v4();
+
+        let span_a = DistributedSpan {
+            trace_id: trace_a,
+            span_id: "span-a".to_string(),
+            service: "service-a".to_string(),
+            instance: "inst-a".to_string(),
+            first_event: now,
+            last_event: Some(now),
+        };
+        let span_b = DistributedSpan {
+            trace_id: trace_a,
+            span_id: "span-b".to_string(),
+            service: "service-b".to_string(),
+            instance: "inst-b".to_string(),
+            first_event: now,
+            last_event: Some(now),
+        };
+
+        backend.save_distributed_span(span_a.clone()).await?;
+        backend.save_distributed_span(span_b.clone()).await?;
+
+        backend
+            .add_distributed_edge(DistributedEdge {
+                from_span: span_a.span_id.clone(),
+                to_span: span_b.span_id.clone(),
+                link_type: crate::event::EdgeLinkType::HttpCall,
+                metadata: json!({}),
+            })
+            .await?;
+
+        backend
+            .add_event(make_state_change_event(
+                trace_a,
+                "thread-1",
+                "service-a",
+                AccessType::Write,
+                "account.balance",
+                now,
+            ))
+            .await?;
+
+        backend
+            .add_event(make_state_change_event(
+                trace_b,
+                "thread-2",
+                "service-b",
+                AccessType::Read,
+                "account.balance",
+                now + chrono::Duration::milliseconds(1),
+            ))
+            .await?;
+
+        let edges = backend.get_all_distributed_edges().await?;
+        assert!(!edges.is_empty());
+        assert_eq!(edges[0]["from_service"], json!("service-a"));
+        assert_eq!(edges[0]["to_service"], json!("service-b"));
+        assert_eq!(edges[0]["call_count"].as_u64().unwrap(), 1);
+
+        let races = backend.get_global_race_candidates().await?;
+        assert!(!races.is_empty());
+        let race = &races[0];
+        assert_eq!(race["variable"], json!("account.balance"));
+        assert_eq!(race["severity"], json!("WARNING"));
+
+        let (top_variables, top_service_calls) = backend.get_system_hotspots().await?;
+        assert!(!top_variables.is_empty());
+        assert!(!top_service_calls.is_empty());
+
+        backend.clear().await?;
         Ok(())
     }
 }

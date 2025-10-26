@@ -8,17 +8,21 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { cn } from '@/lib/utils';
 import { getEventKindColor } from '@/lib/event-colors';
 import { EventTypeChart } from './EventTypeChart';
-import { Search, X, Filter } from 'lucide-react';
+import { TraceDAGView } from './TraceDAGView';
+import { Search, X, Filter, List, Network } from 'lucide-react';
 
 interface CriticalPathViewProps {
   data: CriticalPathData | null;
   events?: Event[];
 }
 
+type CriticalPathViewMode = 'list' | 'graph';
+
 export function CriticalPathView({ data, events = [] }: CriticalPathViewProps) {
   const [searchQuery, setSearchQuery] = useState('');
   const [eventKindFilter, setEventKindFilter] = useState('all');
   const [showFilters, setShowFilters] = useState(false);
+  const [viewMode, setViewMode] = useState<CriticalPathViewMode>('list');
   if (!data) {
     return (
       <div className="flex flex-col items-center justify-center h-64 text-center space-y-2">
@@ -185,6 +189,26 @@ export function CriticalPathView({ data, events = [] }: CriticalPathViewProps) {
               Clear All
             </Button>
           )}
+          <div className="flex items-center gap-1 border border-border rounded-md p-1">
+            <Button
+              variant={viewMode === 'list' ? 'default' : 'ghost'}
+              size="sm"
+              className="h-7 px-2 gap-1"
+              onClick={() => setViewMode('list')}
+            >
+              <List className="h-3.5 w-3.5" />
+              <span className="text-xs">List</span>
+            </Button>
+            <Button
+              variant={viewMode === 'graph' ? 'default' : 'ghost'}
+              size="sm"
+              className="h-7 px-2 gap-1"
+              onClick={() => setViewMode('graph')}
+            >
+              <Network className="h-3.5 w-3.5" />
+              <span className="text-xs">Graph</span>
+            </Button>
+          </div>
         </div>
 
         {/* Filter Dropdown */}
@@ -225,41 +249,61 @@ export function CriticalPathView({ data, events = [] }: CriticalPathViewProps) {
         </div>
       </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-sm font-medium">Critical Path Events</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="space-y-1.5">
-            {filteredPathEvents.map((pathEvent, idx) => (
-              <div
-                key={pathEvent.id}
-                className="flex items-start gap-3 p-3 rounded-md bg-muted/30 hover:bg-muted/50 transition-colors"
-              >
-                <Badge variant="outline" className="mt-0.5 text-[10px]">
-                  {idx + 1}
-                </Badge>
-                <div className="flex-1 space-y-1 min-w-0">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className="font-mono text-[10px] text-muted-foreground">
-                      {formatTimestamp(pathEvent.timestamp)}
-                    </span>
-                    <span className={cn("font-mono text-xs", getEventKindColor(pathEvent.kind))}>
-                      {pathEvent.kind}
-                    </span>
-                    <Badge className="font-mono text-[10px] bg-rose-500/20 text-rose-300 border-rose-500/30">
-                      {pathEvent.duration_ms.toFixed(2)} ms
-                    </Badge>
-                  </div>
-                  <div className="text-[11px] text-muted-foreground truncate">
-                    {pathEvent.location}
+      {viewMode === 'list' ? (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-sm font-medium">Critical Path Events</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-1.5">
+              {filteredPathEvents.map((pathEvent, idx) => (
+                <div
+                  key={pathEvent.id}
+                  className="flex items-start gap-3 p-3 rounded-md bg-muted/30 hover:bg-muted/50 transition-colors"
+                >
+                  <Badge variant="outline" className="mt-0.5 text-[10px]">
+                    {idx + 1}
+                  </Badge>
+                  <div className="flex-1 space-y-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="font-mono text-[10px] text-muted-foreground">
+                        {formatTimestamp(pathEvent.timestamp)}
+                      </span>
+                      <span className={cn("font-mono text-xs", getEventKindColor(pathEvent.kind))}>
+                        {pathEvent.kind}
+                      </span>
+                      <Badge className="font-mono text-[10px] bg-rose-500/20 text-rose-300 border-rose-500/30">
+                        {pathEvent.duration_ms.toFixed(2)} ms
+                      </Badge>
+                    </div>
+                    <div className="text-[11px] text-muted-foreground truncate">
+                      {pathEvent.location}
+                    </div>
                   </div>
                 </div>
-              </div>
-            ))}
-          </div>
-        </CardContent>
-      </Card>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      ) : (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-sm font-medium">Critical Path Graph</CardTitle>
+          </CardHeader>
+          <CardContent className="p-0">
+            <div className="h-[600px]">
+              {events.length > 0 && (
+                <TraceDAGView
+                  events={events}
+                  selectedEventId={null}
+                  onEventSelect={() => {}}
+                  highlightEventIds={filteredPathEvents.map(e => e.id)}
+                />
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {events.length > 0 && (
         <Card>

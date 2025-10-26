@@ -1,9 +1,21 @@
 {
   "name": "@mode-7/raceway-node",
   "version": "0.1.0",
-  "description": "Official Node.js/TypeScript SDK for Raceway - AI-powered race condition detection for distributed systems",
+  "description": "Official Node.js/TypeScript SDK for Raceway - causal race condition detection for distributed systems",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "require": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    },
+    "./runtime": {
+      "import": "./dist/runtime.js",
+      "require": "./dist/runtime.js",
+      "types": "./dist/runtime.d.ts"
+    }
+  },
   "scripts": {
     "build": "tsc",
     "test": "jest",
@@ -36,6 +48,11 @@
     "url": "https://github.com/mode-7/raceway"
   },
   "files": [
-    "dist/**/*"
+    "dist/**/*",
+    "LICENSE",
+    "README.md",
+    "INSTRUMENTATION-GUIDE.md",
+    "CONTRIBUTING.md",
+    "RELEASE-NOTES.md"
   ]
 }

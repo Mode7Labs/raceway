@@ -47,19 +47,15 @@ export function useKeyboardShortcuts({
             break;
           case '3':
             event.preventDefault();
-            onNavigate('audit-trail');
+            onNavigate('performance');
             break;
           case '4':
             event.preventDefault();
-            onNavigate('anomalies');
+            onNavigate('variables');
             break;
           case '5':
             event.preventDefault();
-            onNavigate('critical-path');
-            break;
-          case '6':
-            event.preventDefault();
-            onNavigate('dependencies');
+            onNavigate('anomalies');
             break;
           case 'r':
             event.preventDefault();
@@ -95,7 +91,7 @@ export function useKeyboardShortcuts({
 
 function showKeyboardShortcutsHelp() {
   const shortcuts = [
-    { key: '1-6', description: 'Navigate to tabs (Overview, Events, Debugger, Anomalies, Critical Path, Dependencies)' },
+    { key: '1-5', description: 'Navigate to tabs (Overview, Events, Performance, Variables, Anomalies)' },
     { key: 'r', description: 'Refresh trace list' },
     { key: '↑/↓', description: 'Navigate between traces' },
     { key: '?', description: 'Show keyboard shortcuts' },

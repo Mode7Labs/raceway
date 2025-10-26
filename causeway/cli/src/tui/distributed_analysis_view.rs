@@ -8,11 +8,7 @@ use ratatui::{
 
 use super::types::DistributedTraceAnalysisData;
 
-pub fn render_distributed_analysis(
-    f: &mut Frame,
-    area: Rect,
-    data: &DistributedTraceAnalysisData,
-) {
+pub fn render_distributed_analysis(f: &mut Frame, area: Rect, data: &DistributedTraceAnalysisData) {
     // Split the area into sections
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -41,7 +37,11 @@ pub fn render_distributed_analysis(
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(Color::Cyan)),
         )
-        .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD));
+        .style(
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        );
 
     f.render_widget(header, chunks[0]);
 
@@ -55,11 +55,7 @@ pub fn render_distributed_analysis(
     render_race_conditions_summary(f, chunks[3], data);
 }
 
-fn render_service_breakdown(
-    f: &mut Frame,
-    area: Rect,
-    data: &DistributedTraceAnalysisData,
-) {
+fn render_service_breakdown(f: &mut Frame, area: Rect, data: &DistributedTraceAnalysisData) {
     let mut items = vec![];
 
     // Header
@@ -124,11 +120,7 @@ fn render_service_breakdown(
     f.render_widget(list, area);
 }
 
-fn render_critical_path_summary(
-    f: &mut Frame,
-    area: Rect,
-    data: &DistributedTraceAnalysisData,
-) {
+fn render_critical_path_summary(f: &mut Frame, area: Rect, data: &DistributedTraceAnalysisData) {
     let content = if let Some(ref cp) = data.critical_path {
         vec![
             Line::from(vec![
@@ -172,11 +164,7 @@ fn render_critical_path_summary(
     f.render_widget(paragraph, area);
 }
 
-fn render_race_conditions_summary(
-    f: &mut Frame,
-    area: Rect,
-    data: &DistributedTraceAnalysisData,
-) {
+fn render_race_conditions_summary(f: &mut Frame, area: Rect, data: &DistributedTraceAnalysisData) {
     let rc = &data.race_conditions;
 
     let content = vec![

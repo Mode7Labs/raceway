@@ -1,15 +1,15 @@
 import { useState, useEffect, useCallback } from 'react';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { RacewayAPI } from './api';
-import {type ViewMode, type Event, type AnomaliesData, type CriticalPathData, type DependenciesData, type VariableAccess, type TraceMetadata } from './types';
+import {type SidebarMode, type SystemViewMode, type InsightsViewMode, type ViewMode, type ServiceViewMode, type Event, type AnomaliesData, type CriticalPathData, type DependenciesData, type VariableAccess, type TraceMetadata, type ServiceListItem } from './types';
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import { TraceList } from './components/TraceList';
+import { ServiceList } from './components/ServiceList';
 import { EventsTabWithSwitcher } from './components/EventsTabWithSwitcher';
 import { CriticalPathView } from './components/CriticalPathView';
 import { DependenciesView } from './components/DependenciesView';
 import { AuditTrailView } from './components/AuditTrailView';
-import { DistributedAnalysisView } from './components/DistributedAnalysisView';
 import { EventDetails } from './components/EventDetails';
-import { RaceConditions } from './components/RaceConditions';
 import { ThemeToggle } from './components/theme-toggle';
 import { ExportMenu } from './components/ExportMenu';
 import { Button } from './components/ui/button';
@@ -18,14 +18,33 @@ import { Badge } from './components/ui/badge';
 import { OverviewTab } from './components/OverviewTab';
 import { AnomaliesTab } from './components/AnomaliesTab';
 import { Services } from './components/Services';
+import { ServiceOverview } from './components/ServiceOverview';
+import { ServiceDependencies } from './components/ServiceDependencies';
+import { ServiceTraces } from './components/ServiceTraces';
+import { ServiceDependencyGraph } from './components/ServiceDependencyGraph';
+import { SystemPerformance } from './components/SystemPerformance';
+import { SystemHealth } from './components/SystemHealth';
+import { GlobalRaces } from './components/GlobalRaces';
+import { SystemHotspots } from './components/SystemHotspots';
+import { Dashboard } from './components/Dashboard';
 import { Loader2 } from 'lucide-react';
 import logo from './static/icon.png';
 
 export default function App() {
+  const navigate = useNavigate();
+  const location = useLocation();
+
   const [traces, setTraces] = useState<TraceMetadata[]>([]);
   const [selectedTraceId, setSelectedTraceId] = useState<string | null>(null);
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
+  const [sidebarMode, setSidebarMode] = useState<SidebarMode>('system');
+  const [systemViewMode, setSystemViewMode] = useState<SystemViewMode>('insights');
+  const [insightsViewMode, setInsightsViewMode] = useState<InsightsViewMode>('dashboard');
   const [viewMode, setViewMode] = useState<ViewMode>('overview');
+  const [selectedServiceName, setSelectedServiceName] = useState<string | null>(null);
+  const [serviceViewMode, setServiceViewMode] = useState<ServiceViewMode>('overview');
+  const [services, setServices] = useState<ServiceListItem[]>([]);
+  const [servicesLoading, setServicesLoading] = useState(false);
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -44,13 +63,22 @@ export default function App() {
   const [raceCount, setRaceCount] = useState<number>(0);
   const [raceInfo, setRaceInfo] = useState<string[]>([]);
 
-  // Fetch global analysis (cross-trace races)
-  const fetchGlobalAnalysis = useCallback(async () => {
+  // Global analysis (cross-trace races) is available at /api/analyze/global
+  // but is not currently displayed in UI, so we don't fetch it
+  // TODO: Add UI for global cross-trace race detection
+
+  // Fetch services list
+  const fetchServices = useCallback(async () => {
+    setServicesLoading(true);
     try {
-      await RacewayAPI.analyzeGlobal();
-      // Global analysis is available via API but not currently displayed in UI
+      const response = await RacewayAPI.getServices();
+      if (response.data) {
+        setServices(response.data.services);
+      }
     } catch (error) {
-      console.error('Error fetching global analysis:', error);
+      console.error('Error fetching services:', error);
+    } finally {
+      setServicesLoading(false);
     }
   }, []);
 
@@ -69,14 +97,12 @@ export default function App() {
         const totalEvents = response.data.traces.reduce((sum, t) => sum + t.event_count, 0);
         setStatus(`Connected | Events: ${totalEvents} | Traces: ${response.data.total_traces}`);
       }
-      // Fetch global analysis when traces are loaded
-      fetchGlobalAnalysis();
     } catch (error) {
       setStatus(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`);
     } finally {
       setRefreshing(false);
     }
-  }, [fetchGlobalAnalysis]);
+  }, []);
 
   // Load more traces (append next page)
   const loadMoreTraces = useCallback(async () => {
@@ -151,11 +177,15 @@ export default function App() {
   // Auto-refresh effect
   useEffect(() => {
     fetchTraces();
-    const interval = autoRefresh ? setInterval(fetchTraces, 20000) : null;
+    fetchServices();
+    const interval = autoRefresh ? setInterval(() => {
+      fetchTraces();
+      fetchServices();
+    }, 20000) : null;
     return () => {
       if (interval) clearInterval(interval);
     };
-  }, [autoRefresh, fetchTraces]);
+  }, [autoRefresh, fetchTraces, fetchServices]);
 
   // Handle trace selection
   useEffect(() => {
@@ -179,6 +209,57 @@ export default function App() {
     setSelectedEventId(eventId);
   };
 
+  const handleServiceSelect = (serviceName: string | null) => {
+    setSelectedServiceName(serviceName);
+    setServiceViewMode('overview'); // Reset to overview when service changes
+  };
+
+  // Navigation helper functions for contextual linking
+  const navigateToTrace = useCallback((traceId: string) => {
+    navigate(`/traces/${traceId}`);
+  }, [navigate]);
+
+  const navigateToService = useCallback((serviceName: string) => {
+    navigate(`/services/${encodeURIComponent(serviceName)}`);
+  }, [navigate]);
+
+  const navigateToServiceTraces = useCallback((serviceName: string) => {
+    navigate(`/services/${encodeURIComponent(serviceName)}/traces`);
+  }, [navigate]);
+
+  const navigateToServiceDependencies = useCallback((serviceName: string) => {
+    navigate(`/services/${encodeURIComponent(serviceName)}/dependencies`);
+  }, [navigate]);
+
+  const navigateToVariable = useCallback((variableName: string, traceId?: string) => {
+    if (traceId) {
+      navigate(`/traces/${traceId}/variables`);
+    } else {
+      // Navigate to hotspots page when clicking on a variable without a trace context
+      navigate('/insights/hotspots');
+    }
+  }, [navigate]);
+
+  const navigateToDashboard = useCallback(() => {
+    navigate('/');
+  }, [navigate]);
+
+  const navigateToRaces = useCallback(() => {
+    navigate('/insights/races');
+  }, [navigate]);
+
+  const navigateToHotspots = useCallback(() => {
+    navigate('/insights/hotspots');
+  }, [navigate]);
+
+  const navigateToDependencyGraph = useCallback(() => {
+    navigate('/insights/dependency-graph');
+  }, [navigate]);
+
+  const navigateToSystemTraces = useCallback(() => {
+    navigate('/');
+  }, [navigate]);
+
   const selectedEvent = events.find(e => e.id === selectedEventId);
 
   // Filter traces by search query
@@ -194,6 +275,63 @@ export default function App() {
     traces: filteredTraces,
     onTraceSelect: handleTraceSelect,
   });
+
+  // Parse URL and sync to state (URL is the source of truth)
+  useEffect(() => {
+    const path = location.pathname;
+
+    // Handle root path
+    if (path === '/') {
+      setSidebarMode('system');
+      setSystemViewMode('insights');
+      setInsightsViewMode('dashboard');
+      setSelectedTraceId(null);
+      setSelectedEventId(null);
+      setSelectedServiceName(null);
+      return;
+    }
+
+    // Parse /insights/:tab
+    const insightsMatch = path.match(/^\/insights\/([^/]+)$/);
+    if (insightsMatch) {
+      const tab = insightsMatch[1] as InsightsViewMode;
+      setSidebarMode('system');
+      setSystemViewMode('insights');
+      setInsightsViewMode(tab);
+      setSelectedTraceId(null);
+      setSelectedEventId(null);
+      setSelectedServiceName(null);
+      return;
+    }
+
+    // Parse /services/:name/:tab?
+    const serviceMatch = path.match(/^\/services\/([^/]+)(?:\/([^/]+))?$/);
+    if (serviceMatch) {
+      const serviceName = decodeURIComponent(serviceMatch[1]);
+      const tab = (serviceMatch[2] as ServiceViewMode) || 'overview';
+      setSidebarMode('system');
+      setSystemViewMode('services');
+      setSelectedServiceName(serviceName);
+      setServiceViewMode(tab);
+      setSelectedTraceId(null);
+      setSelectedEventId(null);
+      return;
+    }
+
+    // Parse /traces/:id/:tab?/:eventId?
+    const traceMatch = path.match(/^\/traces\/([^/]+)(?:\/([^/]+))?(?:\/([^/]+))?$/);
+    if (traceMatch) {
+      const traceId = traceMatch[1];
+      const tab = (traceMatch[2] as ViewMode) || 'overview';
+      const eventId = traceMatch[3] || null;
+      setSidebarMode('traces');
+      setSelectedTraceId(traceId);
+      setViewMode(tab);
+      setSelectedEventId(eventId);
+      setSelectedServiceName(null);
+      return;
+    }
+  }, [location.pathname]);
 
   return (
     <div className="flex flex-col h-screen bg-background text-foreground">
@@ -270,81 +408,298 @@ export default function App() {
 
       {/* Main Content */}
       <div className="flex flex-1 overflow-hidden">
-        {/* Left Sidebar - Traces */}
+        {/* Left Sidebar - Mode Switcher + Content */}
         <aside className="w-64 border-r border-border bg-background">
           <div className="h-[calc(100dvh-4.5rem)] flex flex-col">
+            {/* Mode Switcher */}
             <div className="p-3 border-b border-border">
-              <div className="text-[10px] font-medium text-muted-foreground/70 mb-2 px-2 tracking-wider uppercase">
-                Traces
+              <div className="flex gap-1 p-1 bg-muted/30 rounded-md">
+                <button
+                  onClick={() => navigate('/')}
+                  className={`flex-1 px-3 py-1.5 text-xs font-medium rounded transition-colors ${
+                    sidebarMode === 'system'
+                      ? 'bg-background text-foreground shadow-sm'
+                      : 'text-muted-foreground hover:text-foreground'
+                  }`}
+                >
+                  System
+                </button>
+                <button
+                  onClick={() => {
+                    // Navigate to first trace if available, otherwise just switch mode
+                    if (traces.length > 0) {
+                      navigate(`/traces/${traces[0].trace_id}`);
+                    }
+                  }}
+                  className={`flex-1 px-3 py-1.5 text-xs font-medium rounded transition-colors ${
+                    sidebarMode === 'traces'
+                      ? 'bg-background text-foreground shadow-sm'
+                      : 'text-muted-foreground hover:text-foreground'
+                  }`}
+                >
+                  Traces
+                </button>
               </div>
-              <input
-                type="text"
-                placeholder="Search by ID..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-full px-3 py-1.5 text-xs bg-background border border-border rounded-md focus:outline-none focus:ring-1 focus:ring-primary/50"
-              />
             </div>
-            <div className="flex-1 overflow-y-auto p-3">
-              <TraceList
-                traces={filteredTraces}
-                selectedTraceId={selectedTraceId}
-                onSelect={handleTraceSelect}
-                onLoadMore={loadMoreTraces}
-                hasMore={hasMoreTraces && !searchQuery}
-                loadingMore={loadingMore}
-              />
-            </div>
+
+            {/* Conditional Content */}
+            {sidebarMode === 'system' ? (
+              <>
+                {/* System Sub-Navigation */}
+                <div className="p-3 border-b border-border">
+                  <div className="flex flex-col gap-1">
+                    <button
+                      onClick={() => navigate('/')}
+                      className={`px-3 py-2 text-xs font-medium rounded transition-colors text-left ${
+                        systemViewMode === 'insights'
+                          ? 'bg-muted text-foreground'
+                          : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'
+                      }`}
+                    >
+                      Insights
+                    </button>
+                    <button
+                      onClick={() => {
+                        // Navigate to first service if available
+                        if (services.length > 0) {
+                          navigate(`/services/${encodeURIComponent(services[0].name)}`);
+                        }
+                      }}
+                      className={`px-3 py-2 text-xs font-medium rounded transition-colors text-left ${
+                        systemViewMode === 'services'
+                          ? 'bg-muted text-foreground'
+                          : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'
+                      }`}
+                    >
+                      Services
+                    </button>
+                  </div>
+                </div>
+
+                {/* System Content */}
+                {systemViewMode === 'services' && (
+                  <div className="flex-1 overflow-y-auto p-3">
+                    <ServiceList
+                      services={services}
+                      selectedServiceName={selectedServiceName}
+                      onSelect={handleServiceSelect}
+                      onNavigateToServiceTraces={navigateToServiceTraces}
+                      loading={servicesLoading}
+                    />
+                  </div>
+                )}
+              </>
+            ) : (
+              <>
+                <div className="p-3 border-b border-border">
+                  <input
+                    type="text"
+                    placeholder="Search by ID..."
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    className="w-full px-3 py-1.5 text-xs bg-background border border-border rounded-md focus:outline-none focus:ring-1 focus:ring-primary/50"
+                  />
+                </div>
+                <div className="flex-1 overflow-y-auto p-3">
+                  <TraceList
+                    traces={filteredTraces}
+                    selectedTraceId={selectedTraceId}
+                    onSelect={handleTraceSelect}
+                    onLoadMore={loadMoreTraces}
+                    hasMore={hasMoreTraces && !searchQuery}
+                    loadingMore={loadingMore}
+                    onNavigateToService={navigateToService}
+                  />
+                </div>
+              </>
+            )}
           </div>
         </aside>
 
         {/* Middle Panel - Main View */}
         <main className="flex-1 flex flex-col overflow-hidden">
-          <Tabs value={viewMode} onValueChange={(v) => setViewMode(v as ViewMode)} className="flex-1 flex flex-col">
-            <TabsList className="w-full justify-start rounded-none border-b border-border/50 bg-transparent p-0 h-auto">
-              <TabsTrigger value="overview" className="rounded-none border-b border-transparent px-4 py-2.5 text-xs">
-                Overview
-              </TabsTrigger>
-              <TabsTrigger value="events" className="rounded-none border-b border-transparent px-4 py-2.5 text-xs flex items-center gap-1.5">
-                Events
-                {events.length > 0 && (
-                  <span className="text-[10px] px-1 py-0.5 rounded bg-muted-foreground/20">
-                    {events.length}
-                  </span>
-                )}
-              </TabsTrigger>
-              <TabsTrigger value="audit-trail" className="rounded-none border-b border-transparent px-4 py-2.5 text-xs">
-                Debugger
-              </TabsTrigger>
-              <TabsTrigger value="anomalies" className="rounded-none border-b border-transparent px-4 py-2.5 text-xs flex items-center gap-1.5">
-                Anomalies
-                {(anomaliesData?.anomaly_count || 0) > 0 && (
-                  <span className="text-[10px] px-1 py-0.5 rounded bg-orange-500/20 text-orange-300">
-                    {anomaliesData?.anomaly_count}
-                  </span>
-                )}
-              </TabsTrigger>
-              <TabsTrigger value="critical-path" className="rounded-none border-b border-transparent px-4 py-2.5 text-xs">
-                Critical Path
-              </TabsTrigger>
-              <TabsTrigger value="dependencies" className="rounded-none border-b border-transparent px-4 py-2.5 text-xs">
-                Dependencies
-              </TabsTrigger>
-              <TabsTrigger value="distributed-analysis" className="rounded-none border-b border-transparent px-4 py-2.5 text-xs flex items-center gap-1.5">
-                Distributed Analysis
-                {(() => {
-                  const serviceCount = new Set(events.map(e => e.metadata.service_name)).size;
-                  return serviceCount > 1 ? (
-                    <span className="text-[10px] px-1 py-0.5 rounded bg-cyan-500/20 text-cyan-300">
-                      {serviceCount}
+          {/* Conditional Rendering: System Mode or Traces Mode */}
+          {sidebarMode === 'system' ? (
+            systemViewMode === 'insights' ? (
+              /* Insights Mode - Tabs for Dashboard, Dependency Graph, Performance, Health */
+              <Tabs value={insightsViewMode} onValueChange={(v) => navigate(v === 'dashboard' ? '/' : `/insights/${v}`)} className="flex-1 flex flex-col">
+                <TabsList className="w-full justify-start rounded-none border-b border-border/50 bg-transparent p-0 h-auto">
+                  <TabsTrigger value="dashboard" className="rounded-none border-b border-transparent px-4 py-2.5 text-xs">
+                    Overview
+                  </TabsTrigger>
+                  <TabsTrigger value="dependency-graph" className="rounded-none border-b border-transparent px-4 py-2.5 text-xs">
+                    Dependency Graph
+                  </TabsTrigger>
+                  <TabsTrigger value="performance" className="rounded-none border-b border-transparent px-4 py-2.5 text-xs">
+                    Performance
+                  </TabsTrigger>
+                  <TabsTrigger value="health" className="rounded-none border-b border-transparent px-4 py-2.5 text-xs">
+                    Health
+                  </TabsTrigger>
+                  <TabsTrigger value="hotspots" className="rounded-none border-b border-transparent px-4 py-2.5 text-xs">
+                    Hotspots
+                  </TabsTrigger>
+                  <TabsTrigger value="races" className="rounded-none border-b border-transparent px-4 py-2.5 text-xs">
+                    Races
+                  </TabsTrigger>
+                </TabsList>
+
+                <div className="flex-1 overflow-hidden bg-background/50">
+                  <TabsContent value="dashboard" className="h-full m-0 p-0">
+                    <Dashboard
+                      onNavigateToTrace={navigateToTrace}
+                      onNavigateToServices={() => {
+                        setSystemViewMode('services');
+                      }}
+                      onNavigateToRaces={navigateToRaces}
+                      onNavigateToHotspots={navigateToHotspots}
+                      onNavigateToDependencyGraph={navigateToDependencyGraph}
+                      onNavigateToTraces={navigateToSystemTraces}
+                      onNavigateToService={navigateToService}
+                      onNavigateToVariable={navigateToVariable}
+                      services={services}
+                      servicesLoading={servicesLoading}
+                    />
+                  </TabsContent>
+                  <TabsContent value="dependency-graph" className="h-full m-0 p-0">
+                    <div className="h-[calc(100dvh-5.5rem)] overflow-y-auto p-6">
+                      <ServiceDependencyGraph services={services} />
+                    </div>
+                  </TabsContent>
+                  <TabsContent value="performance" className="h-full m-0 p-0">
+                    <SystemPerformance
+                      services={services.map(s => s.name)}
+                      onNavigateToTrace={navigateToTrace}
+                      onNavigateToService={navigateToService}
+                    />
+                  </TabsContent>
+                  <TabsContent value="health" className="h-full m-0 p-0">
+                    <div className="h-[calc(100dvh-5.5rem)] overflow-y-auto p-6">
+                      <SystemHealth services={services} />
+                    </div>
+                  </TabsContent>
+                  <TabsContent value="hotspots" className="h-full m-0 p-0">
+                    <div className="h-[calc(100dvh-5.5rem)] overflow-y-auto p-6">
+                      <SystemHotspots
+                        onNavigateToService={navigateToService}
+                        onNavigateToVariable={navigateToVariable}
+                      />
+                    </div>
+                  </TabsContent>
+                  <TabsContent value="races" className="h-full m-0 p-0">
+                    <div className="h-[calc(100dvh-5.5rem)] overflow-y-auto p-6">
+                      <GlobalRaces
+                        onNavigateToTrace={navigateToTrace}
+                        onNavigateToVariable={navigateToVariable}
+                      />
+                    </div>
+                  </TabsContent>
+                </div>
+              </Tabs>
+            ) : (
+              /* Services Mode - Show individual service tabs when selected */
+              selectedServiceName === null ? (
+                <div className="flex items-center justify-center h-full">
+                  <div className="text-center">
+                    <h3 className="text-base font-medium mb-1.5">No service selected</h3>
+                    <p className="text-muted-foreground text-sm">Select a service from the list to view details</p>
+                  </div>
+                </div>
+              ) : (
+                <Tabs value={serviceViewMode} onValueChange={(v) => navigate(v === 'overview' ? `/services/${encodeURIComponent(selectedServiceName!)}` : `/services/${encodeURIComponent(selectedServiceName!)}/${v}`)} className="flex-1 flex flex-col">
+                  <TabsList className="w-full justify-start rounded-none border-b border-border/50 bg-transparent p-0 h-auto">
+                    <TabsTrigger value="overview" className="rounded-none border-b border-transparent px-4 py-2.5 text-xs">
+                      Overview
+                    </TabsTrigger>
+                    <TabsTrigger value="traces" className="rounded-none border-b border-transparent px-4 py-2.5 text-xs">
+                      Traces
+                    </TabsTrigger>
+                    <TabsTrigger value="dependencies" className="rounded-none border-b border-transparent px-4 py-2.5 text-xs">
+                      Dependencies
+                    </TabsTrigger>
+                    <TabsTrigger value="performance" className="rounded-none border-b border-transparent px-4 py-2.5 text-xs">
+                      Performance
+                    </TabsTrigger>
+                  </TabsList>
+
+                  <div className="flex-1 overflow-hidden bg-background/50">
+                    <TabsContent value="overview" className="h-full m-0 p-0">
+                      <div className="h-[calc(100dvh-5.5rem)] overflow-y-auto p-6">
+                        {(() => {
+                          const service = services.find(s => s.name === selectedServiceName);
+                          return service ? (
+                            <ServiceOverview service={service} loading={servicesLoading} />
+                          ) : (
+                            <div className="flex items-center justify-center h-64">
+                              <div className="text-muted-foreground">Service not found</div>
+                            </div>
+                          );
+                        })()}
+                      </div>
+                    </TabsContent>
+                    <TabsContent value="traces" className="h-full m-0 p-0">
+                      <div className="h-[calc(100dvh-5.5rem)] overflow-y-auto p-6">
+                        {selectedServiceName && (
+                          <ServiceTraces
+                            serviceName={selectedServiceName}
+                            onSelectTrace={navigateToTrace}
+                            onNavigateToService={navigateToService}
+                          />
+                        )}
+                      </div>
+                    </TabsContent>
+                    <TabsContent value="dependencies" className="h-full m-0 p-0">
+                      <div className="h-[calc(100dvh-5.5rem)] overflow-y-auto p-6">
+                        {selectedServiceName && (
+                          <ServiceDependencies
+                            serviceName={selectedServiceName}
+                            onNavigateToService={navigateToService}
+                            onNavigateToServiceTraces={navigateToServiceTraces}
+                          />
+                        )}
+                      </div>
+                    </TabsContent>
+                    <TabsContent value="performance" className="h-full m-0 p-0">
+                      <div className="h-[calc(100dvh-5.5rem)] overflow-y-auto p-6">
+                        <div className="text-muted-foreground text-center py-12">
+                          Service-level performance metrics coming soon
+                        </div>
+                      </div>
+                    </TabsContent>
+                  </div>
+                </Tabs>
+              )
+            )
+          ) : (
+            /* Traces Mode */
+            <Tabs value={viewMode} onValueChange={(v) => navigate(selectedTraceId ? (v === 'overview' ? `/traces/${selectedTraceId}` : `/traces/${selectedTraceId}/${v}`) : '/')} className="flex-1 flex flex-col">
+              <TabsList className="w-full justify-start rounded-none border-b border-border/50 bg-transparent p-0 h-auto">
+                <TabsTrigger value="overview" className="rounded-none border-b border-transparent px-4 py-2.5 text-xs">
+                  Overview
+                </TabsTrigger>
+                <TabsTrigger value="events" className="rounded-none border-b border-transparent px-4 py-2.5 text-xs flex items-center gap-1.5">
+                  Events
+                  {events.length > 0 && (
+                    <span className="text-[10px] px-1 py-0.5 rounded bg-muted-foreground/20">
+                      {events.length}
                     </span>
-                  ) : null;
-                })()}
-              </TabsTrigger>
-              <TabsTrigger value="services" className="rounded-none border-b border-transparent px-4 py-2.5 text-xs">
-                Services
-              </TabsTrigger>
-            </TabsList>
+                  )}
+                </TabsTrigger>
+                <TabsTrigger value="performance" className="rounded-none border-b border-transparent px-4 py-2.5 text-xs">
+                  Performance
+                </TabsTrigger>
+                <TabsTrigger value="variables" className="rounded-none border-b border-transparent px-4 py-2.5 text-xs">
+                  Variables
+                </TabsTrigger>
+                <TabsTrigger value="anomalies" className="rounded-none border-b border-transparent px-4 py-2.5 text-xs flex items-center gap-1.5">
+                  Anomalies
+                  {(anomaliesData?.anomaly_count || 0) > 0 && (
+                    <span className="text-[10px] px-1 py-0.5 rounded bg-orange-500/20 text-orange-300">
+                      {anomaliesData?.anomaly_count}
+                    </span>
+                  )}
+                </TabsTrigger>
+              </TabsList>
 
             <div className="flex-1 overflow-hidden bg-background/50">
               {loading ? (
@@ -376,9 +731,20 @@ export default function App() {
                       criticalPathData={criticalPathData}
                       anomaliesData={anomaliesData}
                       raceCount={raceCount}
+                      onNavigateToService={navigateToService}
                     />
                   </TabsContent>
-                  <TabsContent value="audit-trail" className="h-full m-0 p-0">
+                  <TabsContent value="performance" className="h-full m-0 p-0">
+                    <div className="flex flex-col h-full">
+                      <div className="flex-1 border-b border-border overflow-hidden">
+                        <CriticalPathView data={criticalPathData} events={events} />
+                      </div>
+                      <div className="flex-1 overflow-hidden">
+                        <DependenciesView data={dependenciesData} />
+                      </div>
+                    </div>
+                  </TabsContent>
+                  <TabsContent value="variables" className="h-full m-0 p-0">
                     <AuditTrailView
                       auditTrails={auditTrails}
                       events={events}
@@ -389,51 +755,22 @@ export default function App() {
                   <TabsContent value="anomalies" className="h-full m-0 p-0">
                     <AnomaliesTab data={anomaliesData} />
                   </TabsContent>
-                  <TabsContent value="critical-path" className="h-full m-0 p-0">
-                    <CriticalPathView data={criticalPathData} events={events} />
-                  </TabsContent>
-                  <TabsContent value="dependencies" className="h-full m-0 p-0">
-                    <DependenciesView data={dependenciesData} />
-                  </TabsContent>
-                  <TabsContent value="distributed-analysis" className="h-full m-0 p-0 overflow-auto">
-                    <div className="p-6">
-                      <DistributedAnalysisView
-                        events={events}
-                        criticalPathData={criticalPathData}
-                        raceCount={raceCount}
-                        selectedEventId={selectedEventId}
-                        onEventSelect={handleEventSelect}
-                      />
-                    </div>
-                  </TabsContent>
                 </>
               )}
-              {/* Services tab - available without trace selection */}
-              <TabsContent value="services" className="h-full m-0 p-0">
-                <Services />
-              </TabsContent>
             </div>
           </Tabs>
+          )}
         </main>
 
-        {/* Right Sidebar - Details (only show on Events tab) */}
-        {viewMode === 'events' && (
+        {/* Right Sidebar - Details (only show on Events tab when event is selected) */}
+        {viewMode === 'events' && selectedEventId && (
           <aside className="w-96 border-l border-border bg-card/30 flex flex-col">
-            <div className="flex-1 border-b border-border">
+            <div className="flex-1 flex flex-col min-h-0">
               <div className="py-1.5 px-2.5 border-b border-border bg-card/50">
                 <h3 className="text-xs font-medium">Event Details</h3>
               </div>
-              <div className="h-[calc(50dvh-4rem)] overflow-y-auto px-2.5 py-1.5">
+              <div className="flex-1 overflow-y-auto px-2.5 py-1.5 min-h-0">
                 <EventDetails event={selectedEvent} />
-              </div>
-            </div>
-
-            <div className="flex-1">
-              <div className="py-1.5 px-2.5 border-b border-border bg-card/50">
-                <h3 className="text-xs font-medium">Analysis</h3>
-              </div>
-              <div className="h-[calc(50dvh-4rem)] overflow-y-auto px-2.5 py-1.5">
-                <RaceConditions raceInfo={raceInfo} anomaliesData={anomaliesData} />
               </div>
             </div>
           </aside>

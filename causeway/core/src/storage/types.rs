@@ -78,4 +78,6 @@ pub struct TraceSummary {
     pub event_count: i64,
     pub first_timestamp: DateTime<Utc>,
     pub last_timestamp: DateTime<Utc>,
+    pub services: Vec<String>,
+    pub service_count: usize,
 }

@@ -74,6 +74,43 @@ pause() {
   printf "\n"
 }
 
+kill_processes_on_port() {
+  local port=$1
+
+  if command -v lsof >/dev/null 2>&1; then
+    local pids
+    pids=$(lsof -t -i :"${port}" 2>/dev/null | sort -u)
+    if [[ -n "${pids}" ]]; then
+      printf "${DIM}Reclaiming port %s (PIDs: %s)...${RESET}\n" "${port}" "${pids}"
+      while read -r pid; do
+        [[ -z "${pid}" ]] && continue
+        kill "${pid}" >/dev/null 2>&1 || true
+      done <<<"${pids}"
+      printf "${GREEN}✓ Port %s is now free${RESET}\n" "${port}"
+    else
+      printf "${DIM}No active process on port %s${RESET}\n" "${port}"
+    fi
+  elif command -v fuser >/dev/null 2>&1; then
+    if fuser -k "${port}"/tcp >/dev/null 2>&1; then
+      printf "${GREEN}✓ Freed port %s${RESET}\n" "${port}"
+    else
+      printf "${DIM}No active process on port %s${RESET}\n" "${port}"
+    fi
+  else
+    printf "${YELLOW}Warning:${RESET} unable to reclaim port %s (install lsof or fuser)\n" "${port}"
+  fi
+}
+
+ensure_raceway_binary() {
+  if [[ -x "${SCRIPT_DIR}/target/release/raceway" ]]; then
+    return 0
+  fi
+
+  printf "${CYAN}${BOLD}Building Raceway binary (release)${RESET}\n"
+  require_tool cargo
+  (cd "${SCRIPT_DIR}" && cargo build --release -p raceway)
+}
+
 # ─── Actions ────────────────────────────────────────────────────────────────────
 
 # Core Development
@@ -81,11 +118,21 @@ action_start_dev_env() {
   printf "${CYAN}${BOLD}${ICON_SERVER} Starting Development Environment${RESET}\n"
   printf "${DIM}This will start the server and web UI${RESET}\n\n"
 
-  require_tool cargo
+  ensure_raceway_binary
 
-  # Start server in background
+  # Kill any existing raceway processes
+  printf "${YELLOW}Stopping any existing Raceway server instances...${RESET}\n"
+  pkill -f "raceway serve" 2>/dev/null || true
+
+  # Kill processes on ports
+  kill_processes_on_port 8080
+  kill_processes_on_port 3005
+
+  # Small delay to ensure processes are fully stopped
+  sleep 1
+
   printf "${GREEN}Starting Raceway server...${RESET}\n"
-  cargo run --release -- serve &
+  "${SCRIPT_DIR}/target/release/raceway" serve &
   SERVER_PID=$!
 
   sleep 2
@@ -201,11 +248,19 @@ action_tests_all() {
   run_test_suite "Integration tests (API)" "cargo test -p raceway-test --test api --quiet"
   run_test_suite "Integration tests (Distributed)" "cargo test -p raceway-test --test distributed --quiet"
   run_test_suite "Integration tests (E2E)" "cargo test -p raceway-test --test e2e --quiet"
+  run_test_suite "Storage backend (memory)" "cargo test -p raceway-core memory_backend_distributed_insights --quiet"
+
+  if [[ -n "${RACEWAY_TEST_PG_URL:-}" ]]; then
+    run_test_suite "Storage backend (Postgres)" "RACEWAY_TEST_PG_URL=\"${RACEWAY_TEST_PG_URL}\" cargo test -p raceway-core postgres_backend_distributed_insights --quiet"
+  else
+    printf "${YELLOW}Storage backend (Postgres)${RESET} ${DIM}- skipped (set RACEWAY_TEST_PG_URL)${RESET}\n"
+  fi
 
   printf "\n${BOLD}SDK Tests${RESET}\n"
 
   if command -v npm >/dev/null 2>&1; then
     run_test_suite "TypeScript SDK" "./node_modules/.bin/jest --watchAll=false --forceExit --silent" "${SCRIPT_DIR}/sdks/typescript"
+    run_test_suite "Babel Plugin" "npm test --silent" "${SCRIPT_DIR}/sdks/typescript/babel-plugin"
   fi
 
   if command -v go >/dev/null 2>&1; then
@@ -229,6 +284,15 @@ action_tests_core() {
     "cargo test -p raceway-core graph::tests"
   run_step "${ICON_TEST} Integration tests" \
     "cargo test -p raceway-test"
+  run_step "${ICON_TEST} Storage backend (memory)" \
+    "cargo test -p raceway-core memory_backend_distributed_insights"
+
+  if [[ -n "${RACEWAY_TEST_PG_URL:-}" ]]; then
+    run_step "${ICON_TEST} Storage backend (Postgres)" \
+      "RACEWAY_TEST_PG_URL=\"${RACEWAY_TEST_PG_URL}\" cargo test -p raceway-core postgres_backend_distributed_insights"
+  else
+    printf "${YELLOW}Skipping Postgres storage backend tests (set RACEWAY_TEST_PG_URL)${RESET}\n"
+  fi
 }
 
 action_tests_sdk_all() {
@@ -238,6 +302,10 @@ action_tests_sdk_all() {
     run_step "${ICON_TEST} TypeScript SDK tests" \
       "npm test" \
       "${SCRIPT_DIR}/sdks/typescript"
+
+    run_step "${ICON_TEST} Babel Plugin tests" \
+      "npm test" \
+      "${SCRIPT_DIR}/sdks/typescript/babel-plugin"
   fi
 
   if command -v go >/dev/null 2>&1; then
@@ -259,11 +327,35 @@ action_tests_sdk_all() {
   fi
 }
 
+action_tests_storage_backends() {
+  require_tool cargo
+  run_step "${ICON_TEST} Storage backend (memory)" \
+    "cargo test -p raceway-core memory_backend_distributed_insights"
+
+  if [[ -n "${RACEWAY_TEST_PG_URL:-}" ]]; then
+    run_step "${ICON_TEST} Storage backend (Postgres)" \
+      "RACEWAY_TEST_PG_URL=\"${RACEWAY_TEST_PG_URL}\" cargo test -p raceway-core postgres_backend_distributed_insights"
+  else
+    printf "${YELLOW}Skipping Postgres storage backend tests (set RACEWAY_TEST_PG_URL)${RESET}\n"
+  fi
+}
+
 action_test_sdk_typescript() {
   require_tool npm
   run_step "${ICON_TEST} TypeScript SDK tests" \
     "npm test" \
     "${SCRIPT_DIR}/sdks/typescript"
+
+  run_step "${ICON_TEST} Babel Plugin tests" \
+    "npm test" \
+    "${SCRIPT_DIR}/sdks/typescript/babel-plugin"
+}
+
+action_test_babel_plugin() {
+  require_tool npm
+  run_step "${ICON_TEST} Babel Plugin tests" \
+    "npm test" \
+    "${SCRIPT_DIR}/sdks/typescript/babel-plugin"
 }
 
 action_test_sdk_python() {
@@ -293,18 +385,50 @@ action_test_sdk_rust() {
 
 # Demo Apps
 action_server() {
-  require_tool cargo
-  run_step "${ICON_SERVER} Starting server" \
-    "cargo run --release -- serve"
+  ensure_raceway_binary
+
+  # Kill any existing raceway processes
+  printf "${YELLOW}Stopping any existing Raceway server instances...${RESET}\n"
+  pkill -f "raceway serve" 2>/dev/null || true
+
+  printf "${DIM}Cleaning up port 8080...${RESET}\n"
+  kill_processes_on_port 8080 || true
+
+  # Small delay to ensure processes are fully stopped
+  sleep 1
+
+  printf "\n${CYAN}${BOLD}${ICON_SERVER} Starting server${RESET}\n"
+  printf "${DIM}→ ${SCRIPT_DIR}/target/release/raceway serve &${RESET}\n\n"
+
+  # Start server in background
+  "${SCRIPT_DIR}/target/release/raceway" serve > /tmp/raceway-server.log 2>&1 &
+  SERVER_PID=$!
+
+  sleep 2
+
+  # Check if server started successfully
+  if ps -p $SERVER_PID > /dev/null 2>&1; then
+    printf "${GREEN}${BOLD}✓ Server started successfully!${RESET}\n"
+    printf "${DIM}PID: ${SERVER_PID}${RESET}\n"
+    printf "${DIM}Listening on: http://localhost:8080${RESET}\n"
+    printf "${DIM}Logs: /tmp/raceway-server.log${RESET}\n\n"
+    printf "${YELLOW}To view logs: tail -f /tmp/raceway-server.log${RESET}\n"
+    printf "${YELLOW}To stop: pkill -f 'raceway serve'${RESET}\n"
+  else
+    printf "${RED}${BOLD}✗ Server failed to start${RESET}\n"
+    printf "${YELLOW}Check logs: tail /tmp/raceway-server.log${RESET}\n"
+    return 1
+  fi
 }
 
 action_tui() {
-  require_tool cargo
+  ensure_raceway_binary
   run_step "${ICON_TUI} Launching TUI" \
-    "cargo run --release -- tui"
+    "${SCRIPT_DIR}/target/release/raceway tui"
 }
 
 action_web() {
+  kill_processes_on_port 3005
   local pkg_manager
   if command -v pnpm >/dev/null 2>&1; then
     pkg_manager="pnpm"
@@ -323,6 +447,14 @@ action_web() {
   run_step "${ICON_WEB} Starting Web UI (${pkg_manager} on port 3005)" \
     "${command}" \
     "${SCRIPT_DIR}/web"
+}
+
+action_restart_server() {
+  action_server
+}
+
+action_restart_web() {
+  action_web
 }
 
 action_demo_typescript() {
@@ -442,6 +574,10 @@ action_sdk_build_all() {
     run_step "${ICON_SDK} Building TypeScript SDK" \
       "npm run build" \
       "${SCRIPT_DIR}/sdks/typescript"
+
+    run_step "${ICON_SDK} Building Babel Plugin" \
+      "npm run build" \
+      "${SCRIPT_DIR}/sdks/typescript/babel-plugin"
   fi
 
   if command -v cargo >/dev/null 2>&1; then
@@ -656,6 +792,72 @@ action_clean_artifacts() {
   fi
 }
 
+action_clean_build_artifacts() {
+  printf "${CYAN}${BOLD}${ICON_CLEAN} Cleaning All Build Artifacts${RESET}\n\n"
+
+  # Calculate sizes before cleanup
+  printf "${BOLD}📊 Current disk usage:${RESET}\n"
+  du -sh target/ 2>/dev/null && printf "\n" || true
+  du -sh sdks/rust/target/ 2>/dev/null || true
+  du -sh sdks/python/raceway_sdk.egg-info 2>/dev/null || true
+  find . -name "__pycache__" -type d | head -5 | xargs du -sh 2>/dev/null || true
+
+  printf "\n${YELLOW}This will remove:${RESET}\n"
+  printf "  - Rust target/ directories (all compiled artifacts)\n"
+  printf "  - Python __pycache__/ and *.egg-info/\n"
+  printf "  - Node node_modules/ in examples\n"
+  printf "  - All example build artifacts\n\n"
+
+  printf "Continue? (y/N): "
+  read -r confirm
+
+  if [[ "${confirm}" =~ ^[Yy]$ ]]; then
+    printf "\n${CYAN}🗑️  Removing Rust artifacts...${RESET}\n"
+
+    # Main target directory
+    if [[ -d "target" ]]; then
+      rm -rf target/
+      printf "${GREEN}  ✓ Removed target/${RESET}\n"
+    fi
+
+    # SDK target
+    if [[ -d "sdks/rust/target" ]]; then
+      rm -rf sdks/rust/target/
+      printf "${GREEN}  ✓ Removed sdks/rust/target/${RESET}\n"
+    fi
+
+    # Example target directories
+    find examples -name "target" -type d -exec rm -rf {} + 2>/dev/null || true
+    printf "${GREEN}  ✓ Removed example target/ directories${RESET}\n"
+
+    printf "\n${CYAN}🗑️  Removing Python artifacts...${RESET}\n"
+
+    # Python caches and build info
+    find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+    find . -type d -name "*.egg-info" -exec rm -rf {} + 2>/dev/null || true
+    find . -type f -name "*.pyc" -delete 2>/dev/null || true
+    find . -type d -name ".pytest_cache" -exec rm -rf {} + 2>/dev/null || true
+
+    printf "${GREEN}  ✓ Removed __pycache__/ directories${RESET}\n"
+    printf "${GREEN}  ✓ Removed *.egg-info/ directories${RESET}\n"
+    printf "${GREEN}  ✓ Removed .pyc files${RESET}\n"
+
+    printf "\n${CYAN}🗑️  Removing Node artifacts in examples...${RESET}\n"
+
+    # Only remove node_modules in examples, not in web/ or sdks/
+    find examples -name "node_modules" -type d -exec rm -rf {} + 2>/dev/null || true
+    printf "${GREEN}  ✓ Removed node_modules/ in examples/${RESET}\n"
+
+    printf "\n${GREEN}${BOLD}✅ Cleanup complete!${RESET}\n"
+    printf "\n${DIM}💡 To rebuild:${RESET}\n"
+    printf "${DIM}   Rust:       cargo build --release${RESET}\n"
+    printf "${DIM}   Python SDK: cd sdks/python && pip install -e .${RESET}\n"
+    printf "${DIM}   Examples:   cd examples/<name> && npm install${RESET}\n"
+  else
+    printf "${DIM}Cancelled${RESET}\n"
+  fi
+}
+
 action_view_logs() {
   printf "${CYAN}${BOLD}${ICON_LOGS} View Logs${RESET}\n\n"
 
@@ -708,6 +910,7 @@ ${GREEN}1)${RESET} Build core (cargo build)
 ${GREEN}2)${RESET} Run all tests (core + integration + SDKs)
 ${GREEN}3)${RESET} Run core tests only
 ${GREEN}4)${RESET} Run SDK tests only
+${GREEN}5)${RESET} Run storage backend tests only
 
 ${YELLOW}b)${RESET} ${ICON_BACK}  Back to main menu
 EOF
@@ -720,6 +923,7 @@ EOF
       2) action_tests_all; pause ;;
       3) action_tests_core; pause ;;
       4) action_tests_sdk_all; pause ;;
+      5) action_tests_storage_backends; pause ;;
       b|B) return ;;
       *) printf "${RED}Invalid selection${RESET}\n\n"; sleep 1 ;;
     esac
@@ -794,10 +998,11 @@ ${BOLD}${CYAN}${ICON_SDK}  SDK Tools${RESET}
 
 ${GREEN}1)${RESET} Build all SDKs
 ${GREEN}2)${RESET} Test all SDKs
-${GREEN}3)${RESET} Test TypeScript SDK
-${GREEN}4)${RESET} Test Python SDK
-${GREEN}5)${RESET} Test Go SDK
-${GREEN}6)${RESET} Test Rust SDK
+${GREEN}3)${RESET} Test TypeScript SDK (includes Babel plugin)
+${GREEN}4)${RESET} Test Babel Plugin only
+${GREEN}5)${RESET} Test Python SDK
+${GREEN}6)${RESET} Test Go SDK
+${GREEN}7)${RESET} Test Rust SDK
 
 ${YELLOW}b)${RESET} ${ICON_BACK}  Back to main menu
 EOF
@@ -809,9 +1014,10 @@ EOF
       1) action_sdk_build_all; pause ;;
       2) action_tests_sdk_all; pause ;;
       3) action_test_sdk_typescript; pause ;;
-      4) action_test_sdk_python; pause ;;
-      5) action_test_sdk_go; pause ;;
-      6) action_test_sdk_rust; pause ;;
+      4) action_test_babel_plugin; pause ;;
+      5) action_test_sdk_python; pause ;;
+      6) action_test_sdk_go; pause ;;
+      7) action_test_sdk_rust; pause ;;
       b|B) return ;;
       *) printf "${RED}Invalid selection${RESET}\n\n"; sleep 1 ;;
     esac
@@ -853,6 +1059,7 @@ ${BOLD}${CYAN}${ICON_UTILITIES}  Utilities${RESET}
 ${GREEN}1)${RESET} Format code (cargo fmt, prettier)
 ${GREEN}2)${RESET} Clean build artifacts
 ${GREEN}3)${RESET} View logs
+${GREEN}4)${RESET} Clean ALL build artifacts (Rust, Python, Node)
 
 ${YELLOW}b)${RESET} ${ICON_BACK}  Back to main menu
 EOF
@@ -864,6 +1071,7 @@ EOF
       1) action_format_code; pause ;;
       2) action_clean_artifacts; pause ;;
       3) action_view_logs ;;
+      4) action_clean_build_artifacts; pause ;;
       b|B) return ;;
       *) printf "${RED}Invalid selection${RESET}\n\n"; sleep 1 ;;
     esac
@@ -877,14 +1085,17 @@ print_main_menu() {
   cat <<EOF
 ${BOLD}${CYAN}Quick Access${RESET}
 ${GREEN}1)${RESET} ${ICON_SERVER}  Start Dev Environment (Server + Web UI)
+${GREEN}2)${RESET} ${ICON_SERVER}  Restart Server (port 8080)
+${GREEN}3)${RESET} ${ICON_WEB}  Restart Web UI (port 3005)
+${GREEN}4)${RESET} ${ICON_TUI}  Launch TUI
 
 ${BOLD}${CYAN}Menus${RESET}
-${GREEN}2)${RESET} ${ICON_BUILD}  Build & Test
-${GREEN}3)${RESET} ${ICON_DEMO}  Demo Applications
-${GREEN}4)${RESET} ${ICON_DISTRIBUTED}  Distributed Tracing
-${GREEN}5)${RESET} ${ICON_SDK}  SDK Tools
-${GREEN}6)${RESET} ${ICON_DATABASE}  Database
-${GREEN}7)${RESET} ${ICON_UTILITIES}  Utilities
+${GREEN}5)${RESET} ${ICON_BUILD}  Build & Test
+${GREEN}6)${RESET} ${ICON_DEMO}  Demo Applications
+${GREEN}7)${RESET} ${ICON_DISTRIBUTED}  Distributed Tracing
+${GREEN}8)${RESET} ${ICON_SDK}  SDK Tools
+${GREEN}9)${RESET} ${ICON_DATABASE}  Database
+${GREEN}10)${RESET} ${ICON_UTILITIES}  Utilities
 
 ${YELLOW}q)${RESET} ${ICON_EXIT}  Quit
 EOF
@@ -899,12 +1110,15 @@ main_loop() {
 
     case "${choice}" in
       1) action_start_dev_env ;;
-      2) menu_build_test ;;
-      3) menu_demos ;;
-      4) menu_distributed ;;
-      5) menu_sdks ;;
-      6) menu_database ;;
-      7) menu_utilities ;;
+      2) action_restart_server; pause ;;
+      3) action_restart_web; pause ;;
+      4) action_tui; pause ;;
+      5) menu_build_test ;;
+      6) menu_demos ;;
+      7) menu_distributed ;;
+      8) menu_sdks ;;
+      9) menu_database ;;
+      10) menu_utilities ;;
       q|Q) printf "${ICON_EXIT} Bye!\n"; exit 0 ;;
       *) printf "${RED}Invalid selection${RESET}\n\n"; sleep 1 ;;
     esac

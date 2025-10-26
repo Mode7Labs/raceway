@@ -1,5 +1,5 @@
 """
-AI-powered anomaly detection for causal graphs.
+Anomaly detection for causal graphs.
 Detects race conditions, unexpected state changes, and suspicious patterns.
 """
 

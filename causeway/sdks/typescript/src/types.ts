@@ -112,6 +112,22 @@ export interface CustomEvent {
 }
 
 /**
+ * Lock acquire event
+ */
+export interface LockAcquireEvent {
+  lock_id: string;
+  lock_type: string;
+}
+
+/**
+ * Lock release event
+ */
+export interface LockReleaseEvent {
+  lock_id: string;
+  lock_type: string;
+}
+
+/**
  * Union type for all event data
  */
 export type EventData =
@@ -123,6 +139,8 @@ export type EventData =
   | { HttpResponse: HttpResponseEvent }
   | { DatabaseQuery: DatabaseQueryEvent }
   | { DatabaseResult: DatabaseResultEvent }
+  | { LockAcquire: LockAcquireEvent }
+  | { LockRelease: LockReleaseEvent }
   | { Error: ErrorEvent }
   | { Custom: CustomEvent };
 

@@ -22,16 +22,16 @@ describe('trace-context', () => {
       const result = parseIncomingTraceHeaders(headers, defaults);
 
       expect(result.traceId).toBe(VALID_TRACE_ID);
-      expect(result.parentSpanId).toBe(VALID_SPAN_ID);
+      expect(result.spanId).toBe(VALID_SPAN_ID);
+      expect(result.parentSpanId).toBeNull();
       expect(result.distributed).toBe(true);
-      expect(result.spanId).toMatch(/^[0-9a-f]{16}$/);
     });
 
     it('should parse valid raceway-clock header', () => {
       const clockPayload = {
         trace_id: VALID_TRACE_ID,
         span_id: VALID_SPAN_ID,
-        parent_span_id: null,
+        parent_span_id: 'parent-span-1111',
         service: 'upstream-service',
         instance: 'upstream-1',
         clock: [
@@ -47,7 +47,8 @@ describe('trace-context', () => {
       const result = parseIncomingTraceHeaders(headers, defaults);
 
       expect(result.traceId).toBe(VALID_TRACE_ID);
-      expect(result.parentSpanId).toBe(VALID_SPAN_ID);
+      expect(result.spanId).toBe(VALID_SPAN_ID);
+      expect(result.parentSpanId).toBe('parent-span-1111');
       expect(result.distributed).toBe(true);
       expect(result.clockVector).toContainEqual(['upstream-service#upstream-1', 5]);
       expect(result.clockVector).toContainEqual(['other-service#other-1', 3]);
@@ -57,7 +58,7 @@ describe('trace-context', () => {
       const clockPayload = {
         trace_id: VALID_TRACE_ID,
         span_id: VALID_SPAN_ID,
-        parent_span_id: null,
+        parent_span_id: 'upstream-parent',
         service: 'upstream',
         instance: 'up-1',
         clock: [['upstream#up-1', 10]],
@@ -71,7 +72,8 @@ describe('trace-context', () => {
       const result = parseIncomingTraceHeaders(headers, defaults);
 
       expect(result.traceId).toBe(VALID_TRACE_ID);
-      expect(result.parentSpanId).toBe(VALID_SPAN_ID);
+      expect(result.spanId).toBe(VALID_SPAN_ID);
+      expect(result.parentSpanId).toBe('upstream-parent');
       expect(result.distributed).toBe(true);
       expect(result.clockVector).toContainEqual(['upstream#up-1', 10]);
     });
@@ -361,7 +363,8 @@ describe('trace-context', () => {
 
       // Verify trace continuity
       expect(parsedB.traceId).toBe(parsed.traceId);
-      expect(parsedB.parentSpanId).toBe(outgoingHeaders.childSpanId);
+      expect(parsedB.spanId).toBe(outgoingHeaders.childSpanId);
+      expect(parsedB.parentSpanId).toBe(contextA.spanId);
       expect(parsedB.distributed).toBe(true);
 
       // Verify clock propagation

@@ -2,14 +2,16 @@ import { type Event } from '../types';
 import { cn } from '@/lib/utils';
 import { Badge } from './ui/badge';
 import { getEventKindBadgeColor, getThreadIdColor } from '@/lib/event-colors';
+import { ServiceLink } from './ServiceLink';
 
 interface EventsViewProps {
   events: Event[];
   selectedEventId: string | null;
   onEventSelect: (eventId: string) => void;
+  onNavigateToService?: (serviceName: string) => void;
 }
 
-export function EventsView({ events, selectedEventId, onEventSelect }: EventsViewProps) {
+export function EventsView({ events, selectedEventId, onEventSelect, onNavigateToService }: EventsViewProps) {
   const getEventKind = (kind: Record<string, any>): string => {
     if (typeof kind === 'string') return kind;
     const keys = Object.keys(kind);
@@ -17,10 +19,31 @@ export function EventsView({ events, selectedEventId, onEventSelect }: EventsVie
       const key = keys[0];
       const value = kind[key];
       if (typeof value === 'object' && value !== null) {
-        // For StateChange, extract the access_type value and format nicely
+        // For StateChange, extract the access_type value
         if (key === 'StateChange' && value.access_type) {
           return `StateChange | ${value.access_type}`;
         }
+
+        // For HttpRequest, show method and URL
+        if (key === 'HttpRequest') {
+          const method = value.method || 'GET';
+          const url = value.url || value.path || 'unknown';
+          return `HttpRequest | ${method} ${url}`;
+        }
+
+        // For HttpResponse, show status code
+        if (key === 'HttpResponse') {
+          const status = value.status || value.status_code || '200';
+          return `HttpResponse | ${status}`;
+        }
+
+        // For FunctionCall, show function name
+        if (key === 'FunctionCall') {
+          const funcName = value.function_name || value.name || 'unknown';
+          return `FunctionCall | ${funcName}`;
+        }
+
+        // Default: show key::subkey if there are nested keys
         const subKeys = Object.keys(value);
         if (subKeys.length > 0) {
           return `${key}::${subKeys[0]}`;
@@ -61,7 +84,17 @@ export function EventsView({ events, selectedEventId, onEventSelect }: EventsVie
               <span className="font-mono text-muted-foreground text-[11px]">
                 {timestamp}
               </span>
-              {event.metadata.service_name && (
+              {event.metadata.service_name && onNavigateToService && (
+                <ServiceLink
+                  serviceName={event.metadata.service_name}
+                  onClick={onNavigateToService}
+                >
+                  <Badge variant="outline" className="text-[10px] font-mono bg-cyan-500/10 text-cyan-400 border-cyan-500/30 hover:bg-cyan-500/20 cursor-pointer">
+                    {event.metadata.service_name}
+                  </Badge>
+                </ServiceLink>
+              )}
+              {event.metadata.service_name && !onNavigateToService && (
                 <Badge variant="outline" className="text-[10px] font-mono bg-cyan-500/10 text-cyan-400 border-cyan-500/30">
                   {event.metadata.service_name}
                 </Badge>

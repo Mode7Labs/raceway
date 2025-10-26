@@ -66,7 +66,10 @@ async fn test_api_traces_list_pagination() -> Result<()> {
         fixture.trace_id = uuid::Uuid::new_v4();
 
         // Modify events to have unique trace_id
-        fixture.events.iter_mut().for_each(|e| e.trace_id = fixture.trace_id);
+        fixture
+            .events
+            .iter_mut()
+            .for_each(|e| e.trace_id = fixture.trace_id);
 
         let payload = json!({
             "events": fixture.events,
@@ -130,7 +133,9 @@ async fn test_api_trace_get_valid() -> Result<()> {
     wait_for_trace(&app, fixture.trace_id.to_string(), 4).await?;
 
     // Get full trace
-    let trace = app.get_json(&format!("/api/traces/{}", fixture.trace_id)).await?;
+    let trace = app
+        .get_json(&format!("/api/traces/{}", fixture.trace_id))
+        .await?;
     let data = &trace["data"];
 
     // Verify structure
@@ -153,7 +158,9 @@ async fn test_api_trace_get_with_analysis() -> Result<()> {
     app.post_json("/events", payload).await?;
     wait_for_trace(&app, fixture.trace_id.to_string(), 4).await?;
 
-    let trace = app.get_json(&format!("/api/traces/{}", fixture.trace_id)).await?;
+    let trace = app
+        .get_json(&format!("/api/traces/{}", fixture.trace_id))
+        .await?;
     let data = &trace["data"];
 
     // Verify race detection
@@ -176,10 +183,15 @@ async fn test_api_trace_get_nonexistent() -> Result<()> {
     let app = TestApp::new(Config::default()).await?;
 
     let non_existent_id = uuid::Uuid::new_v4();
-    let result = app.get_json(&format!("/api/traces/{}", non_existent_id)).await;
+    let result = app
+        .get_json(&format!("/api/traces/{}", non_existent_id))
+        .await;
 
     // Should fail (404)
-    assert!(result.is_err(), "Should return error for non-existent trace");
+    assert!(
+        result.is_err(),
+        "Should return error for non-existent trace"
+    );
 
     Ok(())
 }
@@ -249,7 +261,10 @@ async fn test_api_events_post_invalid_structure() -> Result<()> {
     let result = app.post_json("/events", payload).await;
 
     // Should fail with validation error
-    assert!(result.is_err(), "Should return error for invalid event structure");
+    assert!(
+        result.is_err(),
+        "Should return error for invalid event structure"
+    );
 
     Ok(())
 }
@@ -280,7 +295,9 @@ async fn test_api_events_post_large_batch() -> Result<()> {
     // Verify all events were stored
     wait_for_trace(&app, fixture.trace_id.to_string(), 100).await?;
 
-    let trace = app.get_json(&format!("/api/traces/{}", fixture.trace_id)).await?;
+    let trace = app
+        .get_json(&format!("/api/traces/{}", fixture.trace_id))
+        .await?;
     let stored_events = trace["data"]["events"].as_array().unwrap();
 
     assert_eq!(stored_events.len(), 100);
@@ -330,7 +347,9 @@ async fn test_api_full_workflow() -> Result<()> {
     assert_eq!(list_after["data"]["traces"].as_array().unwrap().len(), 1);
 
     // 4. Get full trace should return complete data
-    let trace = app.get_json(&format!("/api/traces/{}", fixture.trace_id)).await?;
+    let trace = app
+        .get_json(&format!("/api/traces/{}", fixture.trace_id))
+        .await?;
     assert_eq!(trace["data"]["events"].as_array().unwrap().len(), 4);
     assert!(trace["data"]["analysis"]["race_details"].is_array());
 
@@ -345,7 +364,10 @@ async fn test_api_concurrent_submissions() -> Result<()> {
     for _ in 0..5 {
         let mut fixture = sample_trace_fixture();
         fixture.trace_id = uuid::Uuid::new_v4();
-        fixture.events.iter_mut().for_each(|e| e.trace_id = fixture.trace_id);
+        fixture
+            .events
+            .iter_mut()
+            .for_each(|e| e.trace_id = fixture.trace_id);
 
         let payload = json!({
             "events": fixture.events,

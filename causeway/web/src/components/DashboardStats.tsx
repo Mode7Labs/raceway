@@ -25,7 +25,8 @@ export function DashboardStats({
   }
 
   // Calculate stats
-  const uniqueThreads = new Set(events.map((e) => e.metadata.thread_id)).size;
+  const uniqueServices = new Set(events.map((e) => e.metadata.service_name)).size;
+  const isDistributed = uniqueServices > 1;
   const traceDuration = criticalPathData?.trace_total_duration_ms || 0;
   const criticalPathPercentage = criticalPathData?.percentage_of_total || 0;
 
@@ -47,19 +48,23 @@ export function DashboardStats({
       tooltip: "Total number of captured events in this trace",
       navigateTo: "events",
     },
+    ...(isDistributed
+      ? [
+          {
+            label: "Services",
+            value: uniqueServices.toString(),
+            color: "text-cyan-400",
+            tooltip: "Number of services involved in this distributed trace",
+            navigateTo: "events",
+          },
+        ]
+      : []),
     {
       label: "Trace Duration",
       value: `${traceDuration.toFixed(2)}ms`,
       color: "text-cyan-400",
       tooltip: "Total execution time from first to last event",
-      navigateTo: "critical-path",
-    },
-    {
-      label: "Concurrency",
-      value: uniqueThreads.toString(),
-      color: "text-purple-400",
-      tooltip: "Number of unique threads active during execution",
-      navigateTo: "events",
+      navigateTo: "performance",
     },
     {
       label: "Critical Path",
@@ -74,7 +79,7 @@ export function DashboardStats({
         criticalPathPercentage > 70
           ? "High critical path indicates potential bottleneck"
           : "Percentage of total duration spent in critical path",
-      navigateTo: "critical-path",
+      navigateTo: "performance",
     },
     {
       label: "Anomalies",

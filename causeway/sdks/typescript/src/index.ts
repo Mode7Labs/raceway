@@ -1,7 +1,7 @@
 /**
  * Raceway SDK - TypeScript/JavaScript
  *
- * AI-powered causal debugging engine for distributed systems
+ * Causal debugging engine for distributed systems
  */
 
 export { Raceway } from './raceway';
@@ -9,6 +9,9 @@ export { RacewayClient } from './client';
 
 export * from './types';
 export * from './auto-track';
+
+// Re-export runtime for Babel plugin
+export { initializeRuntime } from './runtime';
 
 // Re-export for convenience
 export {

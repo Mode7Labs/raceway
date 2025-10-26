@@ -8,7 +8,12 @@ use tokio::time::{sleep, Duration};
 use uuid::Uuid;
 
 // Helper to create distributed event metadata
-fn create_metadata(service: &str, instance: &str, span_id: Option<String>, parent_span: Option<String>) -> EventMetadata {
+fn create_metadata(
+    service: &str,
+    instance: &str,
+    span_id: Option<String>,
+    parent_span: Option<String>,
+) -> EventMetadata {
     EventMetadata {
         thread_id: format!("{}-thread-1", service),
         process_id: 1,
@@ -343,7 +348,12 @@ async fn test_orphaned_span_handling() -> Result<()> {
             file: "b.rs".into(),
             line: 1,
         },
-        metadata: create_metadata("service-b", "b1", Some("span-b".into()), Some("non-existent-span".into())),
+        metadata: create_metadata(
+            "service-b",
+            "b1",
+            Some("span-b".into()),
+            Some("non-existent-span".into()),
+        ),
         causality_vector: Vec::new(),
         lock_set: Vec::new(),
     };
@@ -407,7 +417,12 @@ async fn test_four_service_chain_realistic() -> Result<()> {
             file: "server.py".into(),
             line: 40,
         },
-        metadata: create_metadata("python-service", "py-1", Some(span_py.into()), Some(span_ts.into())),
+        metadata: create_metadata(
+            "python-service",
+            "py-1",
+            Some(span_py.into()),
+            Some(span_ts.into()),
+        ),
         causality_vector: Vec::new(),
         lock_set: Vec::new(),
     };
@@ -425,7 +440,12 @@ async fn test_four_service_chain_realistic() -> Result<()> {
             file: "main.go".into(),
             line: 30,
         },
-        metadata: create_metadata("go-service", "go-1", Some(span_go.into()), Some(span_py.into())),
+        metadata: create_metadata(
+            "go-service",
+            "go-1",
+            Some(span_go.into()),
+            Some(span_py.into()),
+        ),
         causality_vector: Vec::new(),
         lock_set: Vec::new(),
     };
@@ -443,7 +463,12 @@ async fn test_four_service_chain_realistic() -> Result<()> {
             file: "main.rs".into(),
             line: 100,
         },
-        metadata: create_metadata("rust-service", "rust-1", Some(span_rust.into()), Some(span_go.into())),
+        metadata: create_metadata(
+            "rust-service",
+            "rust-1",
+            Some(span_rust.into()),
+            Some(span_go.into()),
+        ),
         causality_vector: Vec::new(),
         lock_set: Vec::new(),
     };
@@ -513,7 +538,12 @@ async fn test_multiple_traces_isolated() -> Result<()> {
             file: "b.rs".into(),
             line: 1,
         },
-        metadata: create_metadata("service-b", "b1", Some("span-1b".into()), Some("span-1a".into())),
+        metadata: create_metadata(
+            "service-b",
+            "b1",
+            Some("span-1b".into()),
+            Some("span-1a".into()),
+        ),
         causality_vector: Vec::new(),
         lock_set: Vec::new(),
     };
@@ -548,7 +578,12 @@ async fn test_multiple_traces_isolated() -> Result<()> {
             file: "d.rs".into(),
             line: 1,
         },
-        metadata: create_metadata("service-d", "d1", Some("span-2d".into()), Some("span-2c".into())),
+        metadata: create_metadata(
+            "service-d",
+            "d1",
+            Some("span-2d".into()),
+            Some("span-2c".into()),
+        ),
         causality_vector: Vec::new(),
         lock_set: Vec::new(),
     };

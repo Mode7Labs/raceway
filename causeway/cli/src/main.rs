@@ -5,8 +5,8 @@ use raceway_core::Config;
 use std::path::PathBuf;
 
 #[derive(Parser)]
-#[command(name = "causeway")]
-#[command(about = "AI-powered causal debugging for distributed systems", long_about = None)]
+#[command(name = "raceway")]
+#[command(about = "Causal debugging for distributed systems", long_about = None)]
 struct Cli {
     /// Path to configuration file
     #[arg(short, long, default_value = "raceway.toml")]

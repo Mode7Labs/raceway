@@ -23,23 +23,23 @@ func TestParseIncomingHeaders(t *testing.T) {
 		if result.TraceID != validTraceID {
 			t.Errorf("expected trace ID %s, got %s", validTraceID, result.TraceID)
 		}
-		if result.ParentSpanID == nil || *result.ParentSpanID != validSpanID {
-			t.Errorf("expected parent span ID %s, got %v", validSpanID, result.ParentSpanID)
-		}
-		if !result.Distributed {
-			t.Error("expected distributed=true")
-		}
-		if len(result.SpanID) != 16 {
-			t.Errorf("expected span ID length 16, got %d", len(result.SpanID))
-		}
+	if result.SpanID != validSpanID {
+		t.Errorf("expected span ID %s, got %s", validSpanID, result.SpanID)
+	}
+	if result.ParentSpanID != nil {
+		t.Errorf("expected nil parent span ID, got %v", result.ParentSpanID)
+	}
+	if !result.Distributed {
+		t.Error("expected distributed=true")
+	}
 	})
 
 	t.Run("parse valid raceway-clock", func(t *testing.T) {
 		clockPayload := map[string]interface{}{
 			"trace_id":       validTraceID,
-			"span_id":        validSpanID,
-			"parent_span_id": nil,
-			"service":        "upstream-service",
+		"span_id":        validSpanID,
+		"parent_span_id": "parent-span-1111",
+		"service":        "upstream-service",
 			"instance":       "upstream-1",
 			"clock": [][]interface{}{
 				{"upstream-service#upstream-1", float64(5)},
@@ -57,9 +57,12 @@ func TestParseIncomingHeaders(t *testing.T) {
 		if result.TraceID != validTraceID {
 			t.Errorf("expected trace ID %s, got %s", validTraceID, result.TraceID)
 		}
-		if result.ParentSpanID == nil || *result.ParentSpanID != validSpanID {
-			t.Errorf("expected parent span ID %s, got %v", validSpanID, result.ParentSpanID)
-		}
+	if result.SpanID != validSpanID {
+		t.Errorf("expected span ID %s, got %s", validSpanID, result.SpanID)
+	}
+	if result.ParentSpanID == nil || *result.ParentSpanID != "parent-span-1111" {
+		t.Errorf("expected parent span ID parent-span-1111, got %v", result.ParentSpanID)
+	}
 		if !result.Distributed {
 			t.Error("expected distributed=true")
 		}
@@ -74,8 +77,8 @@ func TestParseIncomingHeaders(t *testing.T) {
 	t.Run("combine traceparent and raceway-clock", func(t *testing.T) {
 		clockPayload := map[string]interface{}{
 			"trace_id":       validTraceID,
-			"span_id":        validSpanID,
-			"parent_span_id": nil,
+		"span_id":        validSpanID,
+		"parent_span_id": "upstream-parent",
 			"service":        "upstream",
 			"instance":       "up-1",
 			"clock":          [][]interface{}{{"upstream#up-1", float64(10)}},
@@ -92,9 +95,12 @@ func TestParseIncomingHeaders(t *testing.T) {
 		if result.TraceID != validTraceID {
 			t.Errorf("expected trace ID %s, got %s", validTraceID, result.TraceID)
 		}
-		if result.ParentSpanID == nil || *result.ParentSpanID != validSpanID {
-			t.Errorf("expected parent span ID %s, got %v", validSpanID, result.ParentSpanID)
-		}
+	if result.SpanID != validSpanID {
+		t.Errorf("expected span ID %s, got %s", validSpanID, result.SpanID)
+	}
+	if result.ParentSpanID == nil || *result.ParentSpanID != "upstream-parent" {
+		t.Errorf("expected parent span ID upstream-parent, got %v", result.ParentSpanID)
+	}
 		if !result.Distributed {
 			t.Error("expected distributed=true")
 		}
@@ -437,10 +443,13 @@ func TestEndToEndScenarios(t *testing.T) {
 		if parsedB.TraceID != parsed.TraceID {
 			t.Error("trace ID should be preserved")
 		}
-		if parsedB.ParentSpanID == nil || *parsedB.ParentSpanID != outgoing.ChildSpanID {
-			t.Error("parent span ID should match child span ID")
-		}
-		if !parsedB.Distributed {
+	if parsedB.SpanID != outgoing.ChildSpanID {
+		t.Error("span ID should match propagated child span ID")
+	}
+	if parsedB.ParentSpanID == nil || *parsedB.ParentSpanID != parsed.SpanID {
+		t.Error("parent span ID should reference caller span ID")
+	}
+	if !parsedB.Distributed {
 			t.Error("expected distributed=true")
 		}
 

@@ -75,10 +75,7 @@ impl Config {
             other => anyhow::bail!("Invalid storage backend: {}", other),
         }
 
-        if matches!(
-            self.storage.backend.as_str(),
-            "postgres" | "supabase"
-        ) {
+        if matches!(self.storage.backend.as_str(), "postgres" | "supabase") {
             if self.storage.postgres.connection_string.is_none() {
                 anyhow::bail!("PostgreSQL/Supabase backend requires connection_string");
             }
@@ -434,4 +431,3 @@ mod tests {
         assert_eq!(config.logging.level, "debug");
     }
 }
-

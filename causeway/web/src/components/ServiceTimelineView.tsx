@@ -1,15 +1,14 @@
-import { useState, useMemo } from 'react';
+import { useMemo } from 'react';
 import { type Event } from '../types';
 import { cn } from '@/lib/utils';
 import { Badge } from './ui/badge';
-import { Button } from './ui/button';
-import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { getEventKindBackgroundColor } from '@/lib/event-colors';
 
 interface ServiceTimelineViewProps {
   events: Event[];
   selectedEventId: string | null;
   onEventSelect: (eventId: string) => void;
+  zoomLevel: number;
 }
 
 interface TimelineEvent {
@@ -19,14 +18,51 @@ interface TimelineEvent {
   duration: number;
   left: number;
   width: number;
+  serviceIndex: number;
+  row?: number;
 }
 
-export function ServiceTimelineView({ events, selectedEventId, onEventSelect }: ServiceTimelineViewProps) {
-  const [zoomLevel, setZoomLevel] = useState(2);
+interface CrossServiceConnection {
+  from: TimelineEvent;
+  to: TimelineEvent;
+  latencyMs: number;
+}
 
-  const { timelineData, services, minTime, maxTime, totalDuration } = useMemo(() => {
+export function ServiceTimelineView({ events, selectedEventId, onEventSelect, zoomLevel }: ServiceTimelineViewProps) {
+  // Assign events to rows to avoid visual overlap within each service lane
+  const assignRowsToEvents = (serviceEvents: TimelineEvent[]): void => {
+    if (serviceEvents.length === 0) return;
+
+    const sorted = [...serviceEvents].sort((a, b) => a.startTime - b.startTime);
+    const rowEndTimes: number[] = [];
+
+    sorted.forEach(event => {
+      let assignedRow = 0;
+      for (let i = 0; i < rowEndTimes.length; i++) {
+        if (event.startTime >= rowEndTimes[i]) {
+          assignedRow = i;
+          break;
+        }
+      }
+
+      if (assignedRow === 0 && rowEndTimes.length > 0 && event.startTime < rowEndTimes[0]) {
+        assignedRow = rowEndTimes.length;
+      }
+
+      event.row = assignedRow;
+
+      const eventEndTime = event.startTime + event.duration;
+      if (assignedRow >= rowEndTimes.length) {
+        rowEndTimes.push(eventEndTime);
+      } else {
+        rowEndTimes[assignedRow] = eventEndTime;
+      }
+    });
+  };
+
+  const { timelineData, services, minTime, maxTime, totalDuration, connections, serviceRowCounts } = useMemo(() => {
     if (events.length === 0) {
-      return { timelineData: [], services: [], minTime: 0, maxTime: 0, totalDuration: 0 };
+      return { timelineData: [], services: [], minTime: 0, maxTime: 0, totalDuration: 0, connections: [], serviceRowCounts: new Map<string, number>() };
     }
 
     // Parse timestamps and extract services
@@ -55,6 +91,9 @@ export function ServiceTimelineView({ events, selectedEventId, onEventSelect }: 
       return aFirst - bFirst;
     });
 
+    // Create service index map
+    const serviceIndexMap = new Map(services.map((s, i) => [s, i]));
+
     // Create timeline events with positions
     const timelineData: TimelineEvent[] = parsedEvents.map(pe => {
       const relativeStart = pe.timestamp - minTime;
@@ -77,10 +116,42 @@ export function ServiceTimelineView({ events, selectedEventId, onEventSelect }: 
         duration: durationMs,
         left: clampedLeft,
         width: actualWidth,
+        serviceIndex: serviceIndexMap.get(pe.service) || 0,
       };
     });
 
-    return { timelineData, services, minTime, maxTime, totalDuration };
+    // Build event map for quick lookup
+    const eventMap = new Map(timelineData.map(te => [te.event.id, te]));
+
+    // Find cross-service connections
+    const connections: CrossServiceConnection[] = [];
+    timelineData.forEach(te => {
+      if (te.event.parent_id) {
+        const parent = eventMap.get(te.event.parent_id);
+        if (parent && parent.service !== te.service) {
+          // Calculate latency (time between parent end and child start)
+          const parentEndTime = parent.startTime + parent.duration;
+          const latencyMs = te.startTime - parentEndTime;
+
+          connections.push({
+            from: parent,
+            to: te,
+            latencyMs: Math.max(0, latencyMs),
+          });
+        }
+      }
+    });
+
+    // Assign rows to events within each service to prevent overlaps
+    const serviceRowCounts = new Map<string, number>();
+    services.forEach(service => {
+      const serviceEvents = timelineData.filter(te => te.service === service);
+      assignRowsToEvents(serviceEvents);
+      const maxRow = Math.max(0, ...serviceEvents.map(te => te.row || 0));
+      serviceRowCounts.set(service, maxRow + 1);
+    });
+
+    return { timelineData, services, minTime, maxTime, totalDuration, connections, serviceRowCounts };
   }, [events]);
 
   const getEventKind = (kind: Record<string, any>): string => {
@@ -128,6 +199,15 @@ export function ServiceTimelineView({ events, selectedEventId, onEventSelect }: 
     return count;
   }, [events]);
 
+  // Identify bottlenecks (events with longest duration)
+  const bottleneckThreshold = useMemo(() => {
+    if (timelineData.length === 0) return 0;
+    const durations = timelineData.map(te => te.duration).sort((a, b) => b - a);
+    // Top 10% longest events are considered bottlenecks
+    const thresholdIndex = Math.floor(durations.length * 0.1);
+    return durations[thresholdIndex] || durations[0] || 0;
+  }, [timelineData]);
+
   if (events.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center h-64 text-center space-y-2">
@@ -140,173 +220,171 @@ export function ServiceTimelineView({ events, selectedEventId, onEventSelect }: 
   }
 
   return (
-    <div className="space-y-4">
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-sm font-medium">Service Timeline Overview</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <div className="grid grid-cols-3 gap-4 text-xs">
-            <div>
-              <span className="text-muted-foreground">Services:</span>{' '}
-              <span className="font-medium">{services.length}</span>
-            </div>
-            <div>
-              <span className="text-muted-foreground">Total Events:</span>{' '}
-              <span className="font-medium">{events.length}</span>
-            </div>
-            <div>
-              <span className="text-muted-foreground">Duration:</span>{' '}
-              <span className="font-medium">{totalDuration.toFixed(2)} ms</span>
-            </div>
+    <div className="space-y-1 overflow-x-auto">
+      <div style={{ width: `${100 * zoomLevel}%`, minWidth: '100%' }}>
+        {/* Time axis */}
+        <div className="relative h-8 mb-2 border-b border-border">
+          <div className="absolute left-0 top-0 text-[11px] text-muted-foreground">
+            {formatTimestamp(minTime)}
           </div>
-          {crossServiceCalls > 0 && (
-            <div className="p-2.5 rounded-md bg-blue-500/10 border border-blue-500/30 text-xs">
-              🔗 {crossServiceCalls} cross-service call{crossServiceCalls !== 1 ? 's' : ''} detected
-            </div>
-          )}
-        </CardContent>
-      </Card>
+          <div className="absolute right-0 top-0 text-[11px] text-muted-foreground">
+            {formatTimestamp(maxTime)}
+          </div>
+        </div>
 
-      <Card>
-        <CardHeader className="flex flex-row items-center justify-between">
-          <CardTitle className="text-sm font-medium">Service Timeline</CardTitle>
-          <div className="flex items-center gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-7 text-xs"
-              onClick={() => setZoomLevel(Math.max(1, zoomLevel - 0.5))}
-              disabled={zoomLevel <= 1}
-            >
-              -
-            </Button>
-            <span className="text-xs text-muted-foreground min-w-[3rem] text-center">
-              {zoomLevel.toFixed(1)}x
-            </span>
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-7 text-xs"
-              onClick={() => setZoomLevel(Math.min(5, zoomLevel + 0.5))}
-              disabled={zoomLevel >= 5}
-            >
-              +
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-7 text-xs"
-              onClick={() => setZoomLevel(1)}
-              disabled={zoomLevel === 1}
-            >
-              Reset
-            </Button>
-          </div>
-        </CardHeader>
-        <CardContent>
-          <div className="space-y-1 overflow-x-auto">
-            <div style={{ width: `${100 * zoomLevel}%`, minWidth: '100%' }}>
-              {/* Time axis */}
-              <div className="relative h-8 mb-2 border-b border-border">
-                <div className="absolute left-0 top-0 text-[11px] text-muted-foreground">
-                  {formatTimestamp(minTime)}
-                </div>
-                <div className="absolute right-0 top-0 text-[11px] text-muted-foreground">
-                  {formatTimestamp(maxTime)}
-                </div>
+        {/* Service lanes */}
+        {services.map((service) => {
+          const serviceEvents = timelineData.filter(te => te.service === service);
+          const rowCount = serviceRowCounts.get(service) || 1;
+          const laneHeight = Math.max(48, rowCount * 32); // Minimum 48px, 32px per row
+          const eventHeight = Math.min(24, laneHeight / rowCount - 4); // Event height with padding
+
+          return (
+            <div key={service} className="space-y-1 mb-4">
+              <div className="flex items-center gap-2 text-[11px]">
+                <Badge variant="outline" className="text-[10px] font-mono bg-cyan-500/10 text-cyan-400 border-cyan-500/30">
+                  {service}
+                </Badge>
+                <Badge variant="outline" className="text-[10px]">
+                  {serviceEvents.length} events
+                </Badge>
+                {rowCount > 1 && (
+                  <Badge variant="outline" className="text-[10px] bg-blue-500/10">
+                    {rowCount} lanes
+                  </Badge>
+                )}
               </div>
+              <div
+                className="relative rounded-md bg-muted"
+                style={{ height: `${laneHeight}px` }}
+              >
+                {serviceEvents.map((te) => {
+                  const isSelected = te.event.id === selectedEventId;
+                  const eventKind = getEventKind(te.event.kind);
+                  const bgColor = getEventColor(te.event);
+                  const isBottleneck = te.duration >= bottleneckThreshold && bottleneckThreshold > 0;
+                  const effectiveWidth = te.width * zoomLevel;
 
-              {/* Service lanes */}
-              {services.map((service) => {
-                const serviceEvents = timelineData.filter(te => te.service === service);
+                  // Calculate vertical position based on row
+                  const row = te.row || 0;
+                  const rowHeight = laneHeight / rowCount;
+                  const topPosition = row * rowHeight + (rowHeight - eventHeight) / 2;
 
-                return (
-                  <div key={service} className="space-y-1 mb-4">
-                    <div className="flex items-center gap-2 text-[11px]">
-                      <Badge variant="outline" className="text-[10px] font-mono bg-cyan-500/10 text-cyan-400 border-cyan-500/30">
-                        {service}
-                      </Badge>
-                      <span className="text-muted-foreground">
-                        {serviceEvents.length} event{serviceEvents.length !== 1 ? 's' : ''}
+                  return (
+                    <button
+                      key={te.event.id}
+                      onClick={() => onEventSelect(te.event.id)}
+                      className={cn(
+                        "absolute rounded-sm border-2 transition-all hover:z-10 hover:scale-110 cursor-pointer overflow-hidden",
+                        isSelected ? "border-primary ring-2 ring-primary" : "border-transparent",
+                        isBottleneck && !isSelected && "ring-1 ring-yellow-500/50 shadow-lg shadow-yellow-500/20"
+                      )}
+                      style={{
+                        left: `${te.left}%`,
+                        width: `${te.width}%`,
+                        top: `${topPosition}px`,
+                        height: `${eventHeight}px`,
+                        minWidth: '4px',
+                        backgroundColor: bgColor,
+                      }}
+                      title={`${eventKind} @ ${formatTimestamp(te.startTime)} | Duration: ${te.duration.toFixed(2)}ms${isBottleneck ? ' ⚠️ BOTTLENECK' : ''}`}
+                    >
+                      <span className="text-[9px] text-white truncate px-0.5 block">
+                        {effectiveWidth > 2 && eventKind}
                       </span>
-                    </div>
-                    <div className="relative h-12 rounded-md bg-muted">
-                      {serviceEvents.map((te) => {
-                        const isSelected = te.event.id === selectedEventId;
-                        const eventKind = getEventKind(te.event.kind);
-                        const bgColor = getEventColor(te.event);
-                        // Account for zoom when deciding to show label
-                        const effectiveWidth = te.width * zoomLevel;
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })}
 
-                        return (
-                          <button
-                            key={te.event.id}
-                            onClick={() => onEventSelect(te.event.id)}
-                            className={cn(
-                              "absolute top-1/2 -translate-y-1/2 h-8 rounded-sm border-2 transition-all hover:z-10 hover:scale-110 cursor-pointer overflow-hidden",
-                              isSelected ? "border-primary ring-2 ring-primary" : "border-transparent"
-                            )}
-                            style={{
-                              left: `${te.left}%`,
-                              width: `${te.width}%`,
-                              minWidth: '4px',
-                              backgroundColor: bgColor,
-                            }}
-                            title={`${eventKind} @ ${formatTimestamp(te.startTime)} (Thread: ${te.event.metadata.thread_id})`}
-                          >
-                            <span className="text-[9px] text-white truncate px-0.5 block">
-                              {effectiveWidth > 2 && eventKind}
-                            </span>
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        </CardContent>
-      </Card>
+        {/* SVG overlay for connection lines */}
+        <svg
+          className="absolute top-0 left-0 w-full pointer-events-none"
+          style={{ height: `${services.reduce((acc, service) => {
+            const rowCount = serviceRowCounts.get(service) || 1;
+            const laneHeight = Math.max(48, rowCount * 32);
+            return acc + laneHeight + 36; // 36 = space-y-1 + mb-4 + label height
+          }, 40)}px` }}
+        >
+          <defs>
+            <marker
+              id="arrowhead-service"
+              markerWidth="8"
+              markerHeight="8"
+              refX="7"
+              refY="4"
+              orient="auto"
+            >
+              <polygon points="0 0, 8 4, 0 8" fill="rgb(59, 130, 246)" opacity="0.6" />
+            </marker>
+          </defs>
+          {connections.map((conn, idx) => {
+            // Calculate cumulative heights for each service
+            let fromY = 40; // Initial offset for time axis
+            let toY = 40;
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-sm font-medium">Legend</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
-            <div className="flex items-center gap-2">
-              <div className="w-4 h-4 rounded-sm bg-blue-500/80"></div>
-              <span>Read Operations</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <div className="w-4 h-4 rounded-sm bg-orange-500/80"></div>
-              <span>Write Operations</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <div className="w-4 h-4 rounded-sm bg-green-500/80"></div>
-              <span>Thread Spawn</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <div className="w-4 h-4 rounded-sm bg-purple-500/80"></div>
-              <span>Thread Join/Wait</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <div className="w-4 h-4 rounded-sm bg-red-500/80"></div>
-              <span>Lock Acquire</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <div className="w-4 h-4 rounded-sm bg-pink-500/80"></div>
-              <span>Lock Release</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <div className="w-4 h-4 rounded-sm bg-gray-500/80"></div>
-              <span>Other Events</span>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
+            for (let i = 0; i < services.length; i++) {
+              const svc = services[i];
+              const rowCount = serviceRowCounts.get(svc) || 1;
+              const laneHeight = Math.max(48, rowCount * 32);
+              const labelHeight = 36; // Height of label + spacing
+
+              if (i < conn.from.serviceIndex) {
+                fromY += laneHeight + labelHeight;
+              }
+              if (i < conn.to.serviceIndex) {
+                toY += laneHeight + labelHeight;
+              }
+            }
+
+            // Add offset to center of the lane
+            const fromRowCount = serviceRowCounts.get(conn.from.service) || 1;
+            const fromLaneHeight = Math.max(48, fromRowCount * 32);
+            fromY += fromLaneHeight / 2;
+
+            const toRowCount = serviceRowCounts.get(conn.to.service) || 1;
+            const toLaneHeight = Math.max(48, toRowCount * 32);
+            toY += toLaneHeight / 2;
+
+            const fromX = conn.from.left + conn.from.width;
+            const toX = conn.to.left;
+
+            const midY = (fromY + toY) / 2;
+            const path = `M ${fromX}% ${fromY} L ${fromX}% ${midY} L ${toX}% ${midY} L ${toX}% ${toY}`;
+
+            const isHighlighted = conn.from.event.id === selectedEventId || conn.to.event.id === selectedEventId;
+
+            return (
+              <g key={idx}>
+                <path
+                  d={path}
+                  stroke={isHighlighted ? "rgb(59, 130, 246)" : "rgb(59, 130, 246)"}
+                  strokeWidth={isHighlighted ? "2.5" : "1.5"}
+                  fill="none"
+                  opacity={isHighlighted ? "0.9" : "0.4"}
+                  strokeDasharray={isHighlighted ? "none" : "4 2"}
+                  markerEnd="url(#arrowhead-service)"
+                />
+                {conn.latencyMs > 0.1 && (
+                  <text
+                    x={`${(fromX + toX) / 2}%`}
+                    y={midY - 5}
+                    fontSize="10"
+                    fill="rgb(156, 163, 175)"
+                    textAnchor="middle"
+                    className="font-mono"
+                  >
+                    +{conn.latencyMs.toFixed(1)}ms
+                  </text>
+                )}
+              </g>
+            );
+          })}
+        </svg>
+      </div>
     </div>
   );
 }

@@ -5,6 +5,7 @@ import { getThreadIdColor, getEventKindColor } from '@/lib/event-colors';
 import { Badge } from './ui/badge';
 import { Button } from './ui/button';
 import { Copy, Check } from 'lucide-react';
+import { VectorClockDisplay } from './VectorClockDisplay';
 
 interface EventDetailsProps {
   event: Event | undefined;
@@ -166,9 +167,7 @@ export function EventDetails({ event }: EventDetailsProps) {
       {/* Causality Vector */}
       <div className="space-y-1">
         <h4 className="text-[10px] font-semibold text-muted-foreground uppercase">Causality Vector</h4>
-        <pre className="font-mono text-[10px] bg-muted p-2 rounded overflow-x-auto text-muted-foreground leading-relaxed">
-          {formatJSON(event.causality_vector)}
-        </pre>
+        <VectorClockDisplay causalityVector={event.causality_vector} />
       </div>
 
       {/* Lock Set */}

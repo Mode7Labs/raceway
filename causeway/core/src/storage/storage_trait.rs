@@ -39,6 +39,14 @@ pub trait StorageBackend: Send + Sync {
         page_size: usize,
     ) -> Result<(Vec<TraceSummary>, usize)>;
 
+    /// Get paginated trace summaries filtered by service name
+    async fn get_trace_summaries_by_service(
+        &self,
+        service_name: &str,
+        page: usize,
+        page_size: usize,
+    ) -> Result<(Vec<TraceSummary>, usize)>;
+
     /// Get trace roots (entry point events) for a specific trace
     async fn get_trace_roots(&self, trace_id: Uuid) -> Result<Vec<Uuid>>;
 
@@ -94,6 +102,31 @@ pub trait StorageBackend: Send + Sync {
         &self,
         service_name: &str,
     ) -> Result<(Vec<(String, usize, usize)>, Vec<(String, usize, usize)>)>;
+
+    // ========================================================================
+    // Global System Analysis (Phase 4 - Cross-Trace Insights)
+    // ========================================================================
+
+    /// Get all distributed edges with service names resolved
+    /// Returns Vec of (from_service, to_service, link_type, call_count)
+    async fn get_all_distributed_edges(&self) -> Result<Vec<serde_json::Value>>;
+
+    /// Get global race candidates from cross_trace_index
+    /// Returns variables with concurrent access across traces
+    async fn get_global_race_candidates(&self) -> Result<Vec<serde_json::Value>>;
+
+    /// Get system hotspots - most accessed variables and busiest service calls
+    /// Returns (top_variables, top_service_calls)
+    async fn get_system_hotspots(&self)
+        -> Result<(Vec<serde_json::Value>, Vec<serde_json::Value>)>;
+
+    /// Get service health metrics
+    /// Returns health status for all services including last activity and trace counts
+    async fn get_service_health(&self, time_window_minutes: u64) -> Result<Vec<serde_json::Value>>;
+
+    /// Get performance metrics across the system
+    /// Returns aggregated performance data including latencies, throughput, and event metrics
+    async fn get_performance_metrics(&self, limit: usize) -> Result<serde_json::Value>;
 
     // ========================================================================
     // Maintenance

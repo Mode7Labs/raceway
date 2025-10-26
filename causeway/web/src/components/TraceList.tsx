@@ -1,6 +1,7 @@
 import { cn } from '@/lib/utils';
 import { Loader2 } from 'lucide-react';
 import type { TraceMetadata } from '@/types';
+import { ServiceLink } from './ServiceLink';
 
 interface TraceListProps {
   traces: TraceMetadata[];
@@ -9,6 +10,7 @@ interface TraceListProps {
   onLoadMore?: () => void;
   hasMore?: boolean;
   loadingMore?: boolean;
+  onNavigateToService?: (serviceName: string) => void;
 }
 
 function formatTimeAgo(timestamp: string): string {
@@ -25,18 +27,18 @@ function formatTimeAgo(timestamp: string): string {
   return `${days}d ago`;
 }
 
-export function TraceList({ traces, selectedTraceId, onSelect, onLoadMore, hasMore, loadingMore }: TraceListProps) {
+export function TraceList({ traces, selectedTraceId, onSelect, onLoadMore, hasMore, loadingMore, onNavigateToService }: TraceListProps) {
   return (
     <div className="space-y-1">
       {traces.map((trace) => {
         const isSelected = trace.trace_id === selectedTraceId;
+        const isDistributed = trace.service_count > 1;
 
         return (
-          <button
+          <div
             key={trace.trace_id}
-            onClick={() => onSelect(trace.trace_id)}
             className={cn(
-              "w-full flex flex-col items-start gap-1 px-3 py-2.5 rounded-md text-xs transition-all cursor-pointer border",
+              "w-full flex flex-col items-start gap-1 px-3 py-2.5 rounded-md text-xs transition-all border",
               "hover:bg-muted/50 hover:border-border",
               isSelected
                 ? "bg-muted border-border shadow-sm"
@@ -44,15 +46,37 @@ export function TraceList({ traces, selectedTraceId, onSelect, onLoadMore, hasMo
             )}
             title={trace.trace_id}
           >
-            <span className="text-foreground/90 text-xs">
-              {trace.trace_id.substring(0, 8)}
-            </span>
-            <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
+            <div className="flex items-center justify-between w-full cursor-pointer" onClick={() => onSelect(trace.trace_id)}>
+              <span className="text-foreground/90 text-xs">
+                {trace.trace_id.substring(0, 8)}
+              </span>
+              {isDistributed && (
+                <span className="text-[9px] px-1.5 py-0.5 rounded bg-cyan-500/10 text-cyan-400 border border-cyan-500/20">
+                  {trace.service_count} svc
+                </span>
+              )}
+            </div>
+            <div className="flex items-center gap-2 text-[10px] text-muted-foreground cursor-pointer" onClick={() => onSelect(trace.trace_id)}>
               <span>{trace.event_count} events</span>
               <span>•</span>
               <span>{formatTimeAgo(trace.last_timestamp)}</span>
             </div>
-          </button>
+            {trace.services && trace.services.length > 0 && onNavigateToService && (
+              <div className="flex gap-1 flex-wrap mt-0.5">
+                {trace.services.map((service) => (
+                  <ServiceLink
+                    key={service}
+                    serviceName={service}
+                    onClick={onNavigateToService}
+                  >
+                    <span className="text-[9px] px-1.5 py-0.5 rounded bg-muted font-mono hover:bg-muted/80">
+                      {service}
+                    </span>
+                  </ServiceLink>
+                ))}
+              </div>
+            )}
+          </div>
         );
       })}
 

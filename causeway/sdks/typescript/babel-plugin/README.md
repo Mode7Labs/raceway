@@ -1,15 +1,23 @@
 # Babel Plugin Raceway
 
-Automatic instrumentation for Raceway - AI-powered causal debugging engine.
+Automatic instrumentation for Raceway - causal debugging and race condition detection.
+
+**Transform your code at build-time to automatically track:**
+- ✅ Variable reads and writes
+- ✅ Function calls with arguments
+- ✅ Async/await operations
+- ✅ Property access on objects
+
+**Zero code changes required** - just configure Babel and your code is automatically instrumented!
 
 ## Installation
 
 ```bash
 npm install --save-dev babel-plugin-raceway
-npm install raceway-sdk
+npm install @mode-7/raceway-node
 ```
 
-## Usage
+## Quick Start
 
 ### With Babel Config
 
@@ -49,7 +57,7 @@ function transferMoney(from, to, amount) {
 
 **After:**
 ```javascript
-import __raceway from 'raceway-sdk/runtime';
+import __raceway from '@mode-7/raceway-node/runtime';
 
 function transferMoney(from, to, amount) {
   __raceway.captureFunctionCall('transferMoney', { from, to, amount }, {
@@ -140,22 +148,42 @@ module.exports = {
 
 ## Runtime Setup
 
-The plugin requires a runtime module that initializes Raceway:
+Initialize the Raceway runtime in your application entry point:
 
 ```javascript
-// raceway-sdk/runtime.js
-import { Raceway } from 'raceway-sdk';
+// app.js or server.js
+import { initializeRuntime } from '@mode-7/raceway-node/runtime';
+import express from 'express';
 
-const raceway = new Raceway({
+// Initialize Raceway runtime before any instrumented code runs
+const raceway = initializeRuntime({
   serverUrl: process.env.RACEWAY_URL || 'http://localhost:8080',
-  serviceName: process.env.SERVICE_NAME,
-  environment: process.env.NODE_ENV
+  serviceName: process.env.SERVICE_NAME || 'my-service',
+  environment: process.env.NODE_ENV || 'development'
 });
 
-// Start a trace automatically
-raceway.startTrace();
+const app = express();
 
-export default raceway;
+// Install middleware for request context
+app.use(raceway.getInstance().middleware());
+
+// Your routes - automatically instrumented by Babel!
+app.post('/api/transfer', (req, res) => {
+  const { from, to, amount } = req.body;
+
+  // All variable access automatically tracked!
+  const balance = accounts[from].balance;
+  if (balance < amount) {
+    return res.status(400).json({ error: 'Insufficient funds' });
+  }
+
+  accounts[from].balance -= amount;
+  accounts[to].balance += amount;
+
+  res.json({ success: true });
+});
+
+app.listen(3000);
 ```
 
 ## Performance

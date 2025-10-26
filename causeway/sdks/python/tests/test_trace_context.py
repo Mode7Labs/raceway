@@ -28,17 +28,16 @@ class TestParseIncomingHeaders:
         )
 
         assert result.trace_id == VALID_TRACE_ID
-        assert result.parent_span_id == VALID_SPAN_ID
+        assert result.span_id == VALID_SPAN_ID
+        assert result.parent_span_id is None
         assert result.distributed is True
-        assert len(result.span_id) == 16  # 16 hex characters
-        assert all(c in "0123456789abcdef" for c in result.span_id)
 
     def test_parse_valid_raceway_clock(self):
         """Should parse valid raceway-clock header."""
         clock_payload = {
             "trace_id": VALID_TRACE_ID,
             "span_id": VALID_SPAN_ID,
-            "parent_span_id": None,
+            "parent_span_id": "parent-span-1111",
             "service": "upstream-service",
             "instance": "upstream-1",
             "clock": [
@@ -56,7 +55,8 @@ class TestParseIncomingHeaders:
         )
 
         assert result.trace_id == VALID_TRACE_ID
-        assert result.parent_span_id == VALID_SPAN_ID
+        assert result.span_id == VALID_SPAN_ID
+        assert result.parent_span_id == "parent-span-1111"
         assert result.distributed is True
         assert ("upstream-service#upstream-1", 5) in result.clock_vector
         assert ("other-service#other-1", 3) in result.clock_vector
@@ -66,7 +66,7 @@ class TestParseIncomingHeaders:
         clock_payload = {
             "trace_id": VALID_TRACE_ID,
             "span_id": VALID_SPAN_ID,
-            "parent_span_id": None,
+            "parent_span_id": "upstream-parent",
             "service": "upstream",
             "instance": "up-1",
             "clock": [["upstream#up-1", 10]],
@@ -84,7 +84,8 @@ class TestParseIncomingHeaders:
         )
 
         assert result.trace_id == VALID_TRACE_ID
-        assert result.parent_span_id == VALID_SPAN_ID
+        assert result.span_id == VALID_SPAN_ID
+        assert result.parent_span_id == "upstream-parent"
         assert result.distributed is True
         assert ("upstream#up-1", 10) in result.clock_vector
 
@@ -386,7 +387,8 @@ class TestEndToEndScenarios:
 
         # Verify trace continuity
         assert parsed_b.trace_id == parsed.trace_id
-        assert parsed_b.parent_span_id == outgoing_headers.child_span_id
+        assert parsed_b.span_id == outgoing_headers.child_span_id
+        assert parsed_b.parent_span_id == parsed.span_id
         assert parsed_b.distributed is True
 
         # Verify clock propagation

@@ -29,7 +29,7 @@ use std::time::Instant;
 
 struct App {
     server_url: String,
-    traces: Vec<String>, // Deprecated - kept for now for backward compat
+    traces: Vec<String>,    // Deprecated - kept for now for backward compat
     trace_ids: Vec<String>, // Actual trace IDs for API calls
     trace_metadata: Vec<TraceMetadata>, // Full metadata including services
     selected_trace: usize,
@@ -538,11 +538,15 @@ impl App {
                         DistributedTraceAnalysisData {
                             trace_id: trace_id.clone(),
                             service_breakdown: ServiceBreakdown {
-                                services: deps.services.iter().map(|s| ServiceStats {
-                                    name: s.name.clone(),
-                                    event_count: s.event_count,
-                                    total_duration_ms: 0.0, // Not computed in current implementation
-                                }).collect(),
+                                services: deps
+                                    .services
+                                    .iter()
+                                    .map(|s| ServiceStats {
+                                        name: s.name.clone(),
+                                        event_count: s.event_count,
+                                        total_duration_ms: 0.0, // Not computed in current implementation
+                                    })
+                                    .collect(),
                                 cross_service_calls: deps.dependencies.len(),
                                 total_services: deps.services.len(),
                             },
@@ -838,7 +842,7 @@ impl App {
                 self.fetch_global_analysis();
             }
         } // Distributed analysis is now always loaded from dependencies in fetch_trace_details()
-        // Other view modes (CriticalPath, Anomalies, Dependencies) already loaded via /full endpoint
+          // Other view modes (CriticalPath, Anomalies, Dependencies) already loaded via /full endpoint
     }
 
     fn fetch_first_race_variable(&mut self) {
@@ -1369,11 +1373,7 @@ fn ui(f: &mut Frame, app: &App) {
         ViewMode::DistributedAnalysis => {
             // Render distributed trace analysis
             if let Some(ref data) = app.distributed_analysis_data {
-                distributed_analysis_view::render_distributed_analysis(
-                    f,
-                    main_chunks[1],
-                    data,
-                );
+                distributed_analysis_view::render_distributed_analysis(f, main_chunks[1], data);
             } else {
                 // Show loading message
                 let title = "🌐 Distributed Trace Analysis";

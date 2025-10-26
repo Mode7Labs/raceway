@@ -119,7 +119,8 @@ impl AnalysisService {
         // Debug logging for distributed tracing
         if event.metadata.instance_id.is_some()
             || event.metadata.distributed_span_id.is_some()
-            || event.metadata.upstream_span_id.is_some() {
+            || event.metadata.upstream_span_id.is_some()
+        {
             tracing::debug!(
                 "Event {} has distributed metadata: instance_id={:?}, span_id={:?}, upstream={:?}",
                 event.id,
@@ -163,7 +164,9 @@ impl AnalysisService {
                     let link_type = match &event.kind {
                         crate::event::EventKind::HttpRequest { .. } => EdgeLinkType::HttpCall,
                         crate::event::EventKind::HttpResponse { .. } => EdgeLinkType::HttpCall,
-                        crate::event::EventKind::DatabaseQuery { .. } => EdgeLinkType::DatabaseQuery,
+                        crate::event::EventKind::DatabaseQuery { .. } => {
+                            EdgeLinkType::DatabaseQuery
+                        }
                         _ => EdgeLinkType::Custom,
                     };
 
@@ -323,7 +326,7 @@ impl AnalysisService {
     /// This fetches events from the primary trace and all related traces connected via distributed edges
     /// Uses BFS to recursively follow all edges through arbitrary-length service chains
     async fn get_merged_trace_events(&self, trace_id: Uuid) -> Result<Vec<Event>> {
-        use std::collections::{HashSet, VecDeque, HashMap};
+        use std::collections::{HashMap, HashSet, VecDeque};
 
         // Start with events from the primary trace
         let mut all_events = self.storage.get_trace_events(trace_id).await?;
@@ -375,7 +378,9 @@ impl AnalysisService {
                     for next_span_id in [&edge.from_span, &edge.to_span] {
                         if visited_spans.insert(next_span_id.clone()) {
                             // New span discovered - look it up to get its trace_id
-                            if let Some(span) = self.storage.get_distributed_span(next_span_id).await? {
+                            if let Some(span) =
+                                self.storage.get_distributed_span(next_span_id).await?
+                            {
                                 span_queue.push_back((span.span_id.clone(), span.trace_id));
 
                                 tracing::debug!(
@@ -553,10 +558,7 @@ impl AnalysisService {
             if !dist_edges.is_empty() {
                 let graph = self.graph.read().await;
                 graph.add_distributed_edges(dist_edges);
-                tracing::debug!(
-                    "Loaded distributed edges for trace {}",
-                    trace_id
-                );
+                tracing::debug!("Loaded distributed edges for trace {}", trace_id);
             }
         }
 

@@ -3,13 +3,15 @@ import { type Event } from '../types';
 import { EventsView } from './EventsView';
 import { TreeView } from './TreeView';
 import { TimelineView } from './TimelineView';
+import { TraceDAGView } from './TraceDAGView';
+import { LockContentionView } from './LockContentionView';
 import { DashboardStats } from './DashboardStats';
 import { SearchFilter } from './SearchFilter';
 import { type CriticalPathData, type AnomaliesData } from '../types';
 import { Button } from './ui/button';
-import { List, GitBranch, Activity } from 'lucide-react';
+import { List, GitBranch, Activity, Network, Lock } from 'lucide-react';
 
-type EventViewType = 'list' | 'tree' | 'timeline';
+type EventViewType = 'list' | 'tree' | 'timeline' | 'graph' | 'locks';
 
 interface EventsTabWithSwitcherProps {
   events: Event[];
@@ -18,6 +20,7 @@ interface EventsTabWithSwitcherProps {
   criticalPathData: CriticalPathData | null;
   anomaliesData: AnomaliesData | null;
   raceCount: number;
+  onNavigateToService?: (serviceName: string) => void;
 }
 
 export function EventsTabWithSwitcher({
@@ -27,6 +30,7 @@ export function EventsTabWithSwitcher({
   criticalPathData,
   anomaliesData,
   raceCount,
+  onNavigateToService,
 }: EventsTabWithSwitcherProps) {
   const [viewType, setViewType] = useState<EventViewType>('list');
   const [filteredEvents, setFilteredEvents] = useState<Event[]>(events);
@@ -78,6 +82,24 @@ export function EventsTabWithSwitcher({
             <Activity className="w-3.5 h-3.5" />
             Timeline
           </Button>
+          <Button
+            variant={viewType === 'graph' ? 'default' : 'ghost'}
+            size="sm"
+            className="h-7 text-xs gap-1.5"
+            onClick={() => setViewType('graph')}
+          >
+            <Network className="w-3.5 h-3.5" />
+            Causal Graph
+          </Button>
+          <Button
+            variant={viewType === 'locks' ? 'default' : 'ghost'}
+            size="sm"
+            className="h-7 text-xs gap-1.5"
+            onClick={() => setViewType('locks')}
+          >
+            <Lock className="w-3.5 h-3.5" />
+            Locks
+          </Button>
         </div>
       </div>
 
@@ -88,6 +110,7 @@ export function EventsTabWithSwitcher({
             events={filteredEvents}
             selectedEventId={selectedEventId}
             onEventSelect={onEventSelect}
+            onNavigateToService={onNavigateToService}
           />
         )}
         {viewType === 'tree' && (
@@ -99,6 +122,22 @@ export function EventsTabWithSwitcher({
         )}
         {viewType === 'timeline' && (
           <TimelineView
+            events={filteredEvents}
+            selectedEventId={selectedEventId}
+            onEventSelect={onEventSelect}
+          />
+        )}
+        {viewType === 'graph' && (
+          <div className="h-[600px]">
+            <TraceDAGView
+              events={filteredEvents}
+              selectedEventId={selectedEventId}
+              onEventSelect={onEventSelect}
+            />
+          </div>
+        )}
+        {viewType === 'locks' && (
+          <LockContentionView
             events={filteredEvents}
             selectedEventId={selectedEventId}
             onEventSelect={onEventSelect}

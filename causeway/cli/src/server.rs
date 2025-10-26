@@ -13,7 +13,7 @@ use governor::{clock::DefaultClock, state::keyed::DefaultKeyedStateStore, Quota,
 use raceway_core::analysis::{WarmupPhase, WarmupStatus};
 use raceway_core::engine::EngineConfig;
 use raceway_core::graph::{Anomaly, ServiceDependencies, VariableAccess};
-use raceway_core::storage::TraceAnalysisData;
+use raceway_core::storage::{TraceAnalysisData, TraceSummary};
 use raceway_core::{create_storage_backend, Config, Event, RacewayEngine};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -234,10 +234,34 @@ pub fn build_router(config: &Config, engine: Arc<RacewayEngine>) -> Router {
         .route("/status", get(status_handler))
         .route("/events", post(ingest_events_handler))
         .route("/api/traces", get(list_traces_handler))
-        .route("/api/traces/:trace_id", get(get_full_trace_analysis_handler))
+        .route(
+            "/api/traces/:trace_id",
+            get(get_full_trace_analysis_handler),
+        )
         .route("/api/analyze/global", get(analyze_global_handler))
         .route("/api/services", get(list_services_handler))
-        .route("/api/services/:service_name/dependencies", get(get_service_dependencies_handler))
+        .route("/api/services/health", get(get_service_health_handler))
+        .route(
+            "/api/services/:service_name/traces",
+            get(get_service_traces_handler),
+        )
+        .route(
+            "/api/services/:service_name/dependencies",
+            get(get_service_dependencies_handler),
+        )
+        .route(
+            "/api/performance/metrics",
+            get(get_performance_metrics_handler),
+        )
+        .route("/api/distributed/edges", get(get_distributed_edges_handler))
+        .route(
+            "/api/distributed/global-races",
+            get(get_global_races_handler),
+        )
+        .route(
+            "/api/distributed/hotspots",
+            get(get_system_hotspots_handler),
+        )
         .layer(middleware::from_fn_with_state(auth_state, auth_middleware))
         .layer(build_cors(config))
         .with_state(state)
@@ -534,7 +558,7 @@ async fn list_traces_handler(
         Ok((summaries, total_traces)) => {
             let total_pages = (total_traces + page_size - 1) / page_size;
 
-            // Build trace metadata - service info is optional for performance
+            // Build trace metadata with service information from distributed_spans
             let traces: Vec<TraceMetadata> = summaries
                 .into_iter()
                 .map(|summary| TraceMetadata {
@@ -542,8 +566,8 @@ async fn list_traces_handler(
                     event_count: summary.event_count as usize,
                     first_timestamp: summary.first_timestamp.to_rfc3339(),
                     last_timestamp: summary.last_timestamp.to_rfc3339(),
-                    service_count: 0, // Computed on-demand to avoid performance hit
-                    services: vec![], // Computed on-demand to avoid performance hit
+                    service_count: summary.service_count,
+                    services: summary.services,
                 })
                 .collect();
 
@@ -641,11 +665,19 @@ async fn analyze_global_handler(
                         continue;
                     }
 
-                    let severity_desc = match (
+                    use raceway_core::event::AccessType;
+
+                    let is_write1 = matches!(
                         access1,
+                        AccessType::Write | AccessType::AtomicWrite | AccessType::AtomicRMW
+                    );
+                    let is_write2 = matches!(
                         access2,
-                    ) {
-                        (raceway_core::event::AccessType::Write, raceway_core::event::AccessType::Write) => (
+                        AccessType::Write | AccessType::AtomicWrite | AccessType::AtomicRMW
+                    );
+
+                    let severity_desc = match (is_write1, is_write2) {
+                        (true, true) => (
                             "CRITICAL",
                             format!(
                                 "Cross-trace write-write race on {}. Trace {} (thread {}) wrote {:?}, Trace {} (thread {}) wrote {:?}",
@@ -658,14 +690,14 @@ async fn analyze_global_handler(
                                 new2
                             ),
                         ),
-                        (raceway_core::event::AccessType::Write, _) | (_, raceway_core::event::AccessType::Write) => (
+                        (true, false) | (false, true) => (
                             "WARNING",
                             format!(
                                 "Cross-trace read-write race on {}. One thread read while another wrote across different traces.",
                                 var1
                             ),
                         ),
-                        _ => (
+                        (false, false) => (
                             "INFO",
                             format!(
                                 "Concurrent reads on {} across traces. Generally safe but indicates potential race.",
@@ -832,8 +864,14 @@ async fn get_full_trace_analysis_handler(
                 continue;
             }
 
-            let is_write1 = *access1 == AccessType::Write;
-            let is_write2 = *access2 == AccessType::Write;
+            let is_write1 = matches!(
+                access1,
+                AccessType::Write | AccessType::AtomicWrite | AccessType::AtomicRMW
+            );
+            let is_write2 = matches!(
+                access2,
+                AccessType::Write | AccessType::AtomicWrite | AccessType::AtomicRMW
+            );
 
             let (severity, description) = if is_write1 && is_write2 {
                 (
@@ -1073,8 +1111,14 @@ async fn analyze_trace_handler(
                 continue;
             }
 
-            let is_write1 = *access1 == AccessType::Write;
-            let is_write2 = *access2 == AccessType::Write;
+            let is_write1 = matches!(
+                access1,
+                AccessType::Write | AccessType::AtomicWrite | AccessType::AtomicRMW
+            );
+            let is_write2 = matches!(
+                access2,
+                AccessType::Write | AccessType::AtomicWrite | AccessType::AtomicRMW
+            );
 
             let (severity, description) = if is_write1 && is_write2 {
                 (
@@ -1324,7 +1368,10 @@ async fn list_services_handler(
         .map_err(|e| {
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ApiResponse::error(format!("Failed to fetch services: {}", e))),
+                Json(ApiResponse::error(format!(
+                    "Failed to fetch services: {}",
+                    e
+                ))),
             )
         })?;
 
@@ -1404,6 +1451,111 @@ async fn get_service_dependencies_handler(
     };
 
     Ok((StatusCode::OK, Json(ApiResponse::success(response))))
+}
+
+async fn get_service_health_handler(
+    State(state): State<AppState>,
+    Query(params): Query<std::collections::HashMap<String, String>>,
+) -> Result<impl IntoResponse, (StatusCode, Json<ApiResponse<String>>)> {
+    let time_window_minutes = params
+        .get("time_window_minutes")
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(60); // Default to 60 minutes
+
+    let services = state
+        .engine
+        .storage()
+        .get_service_health(time_window_minutes)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiResponse::error(format!(
+                    "Failed to fetch service health: {}",
+                    e
+                ))),
+            )
+        })?;
+
+    Ok((StatusCode::OK, Json(ApiResponse::success(services))))
+}
+
+async fn get_service_traces_handler(
+    State(state): State<AppState>,
+    Path(service_name): Path<String>,
+    Query(params): Query<std::collections::HashMap<String, String>>,
+) -> Result<impl IntoResponse, (StatusCode, Json<ApiResponse<String>>)> {
+    let page = params
+        .get("page")
+        .and_then(|s| s.parse::<usize>().ok())
+        .unwrap_or(1);
+
+    let page_size = params
+        .get("page_size")
+        .and_then(|s| s.parse::<usize>().ok())
+        .unwrap_or(100);
+
+    #[derive(Serialize)]
+    struct ServiceTracesResponse {
+        service_name: String,
+        total_traces: usize,
+        page: usize,
+        page_size: usize,
+        total_pages: usize,
+        traces: Vec<TraceSummary>,
+    }
+
+    let (traces, total) = state
+        .engine
+        .storage()
+        .get_trace_summaries_by_service(&service_name, page, page_size)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiResponse::error(format!("Failed to fetch traces: {}", e))),
+            )
+        })?;
+
+    let total_pages = (total + page_size - 1) / page_size;
+
+    let response = ServiceTracesResponse {
+        service_name,
+        total_traces: total,
+        page,
+        page_size,
+        total_pages,
+        traces,
+    };
+
+    Ok((StatusCode::OK, Json(ApiResponse::success(response))))
+}
+
+async fn get_performance_metrics_handler(
+    State(state): State<AppState>,
+    Query(params): Query<std::collections::HashMap<String, String>>,
+) -> Result<impl IntoResponse, (StatusCode, Json<ApiResponse<String>>)> {
+    let limit = params
+        .get("limit")
+        .and_then(|s| s.parse::<usize>().ok())
+        .unwrap_or(50);
+
+    let metrics = state
+        .engine
+        .storage()
+        .get_performance_metrics(limit)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiResponse::error(format!(
+                    "Failed to fetch performance metrics: {}",
+                    e
+                ))),
+            )
+        })?;
+
+    Ok((StatusCode::OK, Json(ApiResponse::success(metrics))))
 }
 
 async fn get_distributed_trace_analysis_handler(
@@ -1554,8 +1706,14 @@ async fn get_distributed_trace_analysis_handler(
         ) = (&event1.kind, &event2.kind)
         {
             if var1 == var2 {
-                let is_write1 = *access1 == AccessType::Write;
-                let is_write2 = *access2 == AccessType::Write;
+                let is_write1 = matches!(
+                    access1,
+                    AccessType::Write | AccessType::AtomicWrite | AccessType::AtomicRMW
+                );
+                let is_write2 = matches!(
+                    access2,
+                    AccessType::Write | AccessType::AtomicWrite | AccessType::AtomicRMW
+                );
 
                 if is_write1 && is_write2 {
                     critical_races += 1;
@@ -1581,6 +1739,84 @@ async fn get_distributed_trace_analysis_handler(
         race_conditions,
         is_distributed,
     };
+
+    Ok((StatusCode::OK, Json(ApiResponse::success(response))))
+}
+
+async fn get_distributed_edges_handler(
+    State(state): State<AppState>,
+) -> Result<impl IntoResponse, (StatusCode, Json<ApiResponse<String>>)> {
+    let edges = state
+        .engine
+        .storage()
+        .get_all_distributed_edges()
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiResponse::error(format!(
+                    "Failed to fetch distributed edges: {}",
+                    e
+                ))),
+            )
+        })?;
+
+    let response = serde_json::json!({
+        "total_edges": edges.len(),
+        "edges": edges,
+    });
+
+    Ok((StatusCode::OK, Json(ApiResponse::success(response))))
+}
+
+async fn get_global_races_handler(
+    State(state): State<AppState>,
+) -> Result<impl IntoResponse, (StatusCode, Json<ApiResponse<String>>)> {
+    let races = state
+        .engine
+        .storage()
+        .get_global_race_candidates()
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiResponse::error(format!(
+                    "Failed to fetch global races: {}",
+                    e
+                ))),
+            )
+        })?;
+
+    let response = serde_json::json!({
+        "total_races": races.len(),
+        "races": races,
+    });
+
+    Ok((StatusCode::OK, Json(ApiResponse::success(response))))
+}
+
+async fn get_system_hotspots_handler(
+    State(state): State<AppState>,
+) -> Result<impl IntoResponse, (StatusCode, Json<ApiResponse<String>>)> {
+    let (top_variables, top_service_calls) = state
+        .engine
+        .storage()
+        .get_system_hotspots()
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiResponse::error(format!(
+                    "Failed to fetch system hotspots: {}",
+                    e
+                ))),
+            )
+        })?;
+
+    let response = serde_json::json!({
+        "top_variables": top_variables,
+        "top_service_calls": top_service_calls,
+    });
 
     Ok((StatusCode::OK, Json(ApiResponse::success(response))))
 }

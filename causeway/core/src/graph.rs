@@ -28,7 +28,7 @@ pub enum CausalEdge {
 pub struct CausalNode {
     pub event: Event,
     pub children: Vec<Uuid>,
-    pub anomaly_score: f64, // AI-computed anomaly score
+    pub anomaly_score: f64, // automated anomaly score
 }
 
 /// Hierarchical tree node for trace visualization
@@ -195,7 +195,10 @@ impl CausalGraph {
 
                 // Merge vector clocks: for each component in parent, take max with existing
                 for (parent_component, parent_clock) in &parent_event.causality_vector {
-                    if let Some(existing) = causality_vector.iter_mut().find(|(c, _)| c == parent_component) {
+                    if let Some(existing) = causality_vector
+                        .iter_mut()
+                        .find(|(c, _)| c == parent_component)
+                    {
                         // Component exists in both - take the maximum
                         existing.1 = existing.1.max(*parent_clock);
                     } else {
@@ -2259,7 +2262,14 @@ mod tests {
             })
             .unwrap();
 
-        let event_a = graph.nodes.get(&event_a_id).unwrap().value().1.event.clone();
+        let event_a = graph
+            .nodes
+            .get(&event_a_id)
+            .unwrap()
+            .value()
+            .1
+            .event
+            .clone();
         let clock_from_a = event_a.causality_vector.clone();
 
         // Event B: In service-b, receives clock from service-a via distributed propagation
@@ -2287,7 +2297,14 @@ mod tests {
             })
             .unwrap();
 
-        let event_b = graph.nodes.get(&event_b_id).unwrap().value().1.event.clone();
+        let event_b = graph
+            .nodes
+            .get(&event_b_id)
+            .unwrap()
+            .value()
+            .1
+            .event
+            .clone();
 
         // Verify that event B's clock contains BOTH service-a and service-b components
         // This validates the bug fix: incoming causality_vector is preserved AND merged
@@ -2835,7 +2852,7 @@ mod tests {
         let base = Utc.with_ymd_and_hms(2024, 1, 1, 12, 0, 0).unwrap();
 
         // Service A event (10ms)
-        let mut metadata_a = metadata("service-a", 10);  // 10 milliseconds
+        let mut metadata_a = metadata("service-a", 10); // 10 milliseconds
         metadata_a.distributed_span_id = Some("span-a".into());
 
         let event_a = Event {
@@ -2856,7 +2873,7 @@ mod tests {
         };
 
         // Service B event (20ms, downstream of A)
-        let mut metadata_b = metadata("service-b", 20);  // 20 milliseconds
+        let mut metadata_b = metadata("service-b", 20); // 20 milliseconds
         metadata_b.distributed_span_id = Some("span-b".into());
 
         let event_b = Event {

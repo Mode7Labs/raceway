@@ -4,12 +4,15 @@ Official Node.js/TypeScript SDK for [Raceway](https://github.com/mode-7/raceway)
 
 ## Features
 
-- Automatic context propagation using AsyncLocalStorage
-- Zero-code auto-tracking with JavaScript Proxies
-- Manual instrumentation API for fine-grained control
-- Distributed tracing across service boundaries (W3C Trace Context)
-- Race condition and concurrency bug detection
-- Express/Connect middleware support
+- **Three instrumentation approaches:** Proxy-based, Babel plugin, or manual tracking
+- **Automatic lock tracking helpers:** `withLock()` for easy lock instrumentation
+- **Automatic context propagation** using AsyncLocalStorage
+- **Zero-code auto-tracking** with JavaScript Proxies
+- **Build-time instrumentation** with Babel plugin (optional)
+- **Manual instrumentation API** for fine-grained control
+- **Distributed tracing** across service boundaries (W3C Trace Context)
+- **Race condition detection** and concurrency bug analysis
+- **Express/Connect middleware** support
 
 ## Installation
 
@@ -89,6 +92,85 @@ app.post('/transfer', async (req, res) => {
   res.json({ success: true });
 });
 ```
+
+**Option C: Babel Plugin (Automatic)**
+
+For fully automatic instrumentation with zero code changes:
+
+```bash
+npm install --save-dev babel-plugin-raceway
+```
+
+```javascript
+// babel.config.js
+module.exports = {
+  plugins: ['babel-plugin-raceway']
+};
+```
+
+```typescript
+// Initialize runtime once
+import { initializeRuntime } from '@mode-7/raceway-node/runtime';
+
+initializeRuntime({
+  serverUrl: 'http://localhost:8080',
+  serviceName: 'my-service'
+});
+
+app.use(raceway.middleware());
+
+// Your code - automatically instrumented!
+app.post('/transfer', async (req, res) => {
+  const { from, to, amount } = req.body;
+
+  // ✅ All reads/writes automatically tracked by Babel
+  const balance = accounts[from].balance;
+  if (balance < amount) {
+    return res.status(400).json({ error: 'Insufficient funds' });
+  }
+
+  accounts[from].balance -= amount;
+  accounts[to].balance += amount;
+
+  res.json({ success: true });
+});
+```
+
+### 3. Lock Tracking
+
+Track locks with automatic helpers to avoid manual acquire/release tracking:
+
+```typescript
+import { Mutex } from 'async-mutex';
+
+const accountLock = new Mutex();
+
+// Before: Manual (tedious)
+await accountLock.acquire();
+raceway.trackLockAcquire('account_lock', 'Mutex');
+try {
+  accounts.alice.balance -= 100;
+} finally {
+  raceway.trackLockRelease('account_lock', 'Mutex');
+  accountLock.release();
+}
+
+// After: withLock helper (automatic)
+await raceway.withLock(accountLock, 'account_lock', async () => {
+  accounts.alice.balance -= 100;
+  // Lock acquire/release automatically tracked!
+});
+```
+
+## Which Approach Should I Use?
+
+**Quick Decision Tree:**
+- **Have shared mutable objects?** → Use `raceway.track()` (Option A)
+- **Need to track local variables?** → Use Babel plugin (Option C)
+- **Want precise control?** → Use manual tracking (Option B)
+- **Need lock tracking?** → Use `withLock()` helpers
+
+📖 **See [INSTRUMENTATION-GUIDE.md](./INSTRUMENTATION-GUIDE.md) for detailed comparison and examples**
 
 ## Distributed Tracing
 
@@ -201,6 +283,48 @@ Track a function call.
 
 ```typescript
 raceway.trackFunctionCall('processPayment', { userId: 123, amount: 50 });
+```
+
+#### `raceway.trackLockAcquire(lockId, lockType?)`
+
+Manually track lock acquisition.
+
+```typescript
+raceway.trackLockAcquire('account_lock', 'Mutex');
+```
+
+#### `raceway.trackLockRelease(lockId, lockType?)`
+
+Manually track lock release.
+
+```typescript
+raceway.trackLockRelease('account_lock', 'Mutex');
+```
+
+#### `raceway.withLock(lock, lockId, lockType?, fn)`
+
+Execute a function with automatic lock tracking (async).
+
+```typescript
+await raceway.withLock(myLock, 'account_lock', 'Mutex', async () => {
+  // Lock automatically tracked
+  await updateAccount();
+});
+```
+
+**Lock object formats supported:**
+- `{ lock(): Promise<void>; unlock(): void }` (async-mutex)
+- `{ acquire(): void; release(): void }` (synchronous locks)
+
+#### `raceway.withLockSync(lock, lockId, lockType?, fn)`
+
+Execute a function with automatic lock tracking (sync).
+
+```typescript
+raceway.withLockSync(myLock, 'account_lock', 'Mutex', () => {
+  // Lock automatically tracked
+  updateAccountSync();
+});
 ```
 
 #### `raceway.trackHttpResponse(status, durationMs)`

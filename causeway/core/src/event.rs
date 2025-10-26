@@ -7,7 +7,7 @@ use uuid::Uuid;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DistributedSpan {
     pub trace_id: Uuid,
-    pub span_id: String,           // From W3C traceparent header
+    pub span_id: String, // From W3C traceparent header
     pub service: String,
     pub instance: String,
     pub first_event: DateTime<Utc>,
@@ -17,19 +17,19 @@ pub struct DistributedSpan {
 /// Represents an edge between spans in distributed trace (Phase 2)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DistributedEdge {
-    pub from_span: String,         // Upstream span ID
-    pub to_span: String,           // Downstream span ID
+    pub from_span: String, // Upstream span ID
+    pub to_span: String,   // Downstream span ID
     pub link_type: EdgeLinkType,
     pub metadata: serde_json::Value,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum EdgeLinkType {
-    HttpCall,       // HTTP request/response
-    GrpcCall,       // gRPC call
-    MessageQueue,   // Async messaging (Kafka, SQS, etc.)
-    DatabaseQuery,  // Database operation
-    Custom,         // User-defined edge type
+    HttpCall,      // HTTP request/response
+    GrpcCall,      // gRPC call
+    MessageQueue,  // Async messaging (Kafka, SQS, etc.)
+    DatabaseQuery, // Database operation
+    Custom,        // User-defined edge type
 }
 
 /// Type of memory access

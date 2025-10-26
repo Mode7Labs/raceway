@@ -350,6 +350,138 @@ export class Raceway {
   }
 
   /**
+   * Track lock acquisition
+   */
+  public trackLockAcquire(lockId: string, lockType: string = 'Mutex'): void {
+    const ctx = racewayContext.getStore();
+    if (!ctx) return;
+
+    const location = this.captureLocation();
+
+    const event = this.captureEvent(
+      ctx.traceId,
+      ctx.parentId,
+      ctx.rootId,
+      ctx.clock,
+      {
+        LockAcquire: {
+          lock_id: lockId,
+          lock_type: lockType,
+        },
+      },
+      location
+    );
+
+    if (ctx.rootId === null) {
+      ctx.rootId = event.id;
+    }
+    ctx.parentId = event.id;
+    ctx.clock += 1;
+  }
+
+  /**
+   * Track lock release
+   */
+  public trackLockRelease(lockId: string, lockType: string = 'Mutex'): void {
+    const ctx = racewayContext.getStore();
+    if (!ctx) return;
+
+    const location = this.captureLocation();
+
+    const event = this.captureEvent(
+      ctx.traceId,
+      ctx.parentId,
+      ctx.rootId,
+      ctx.clock,
+      {
+        LockRelease: {
+          lock_id: lockId,
+          lock_type: lockType,
+        },
+      },
+      location
+    );
+
+    if (ctx.rootId === null) {
+      ctx.rootId = event.id;
+    }
+    ctx.parentId = event.id;
+    ctx.clock += 1;
+  }
+
+  /**
+   * Execute a function with automatic lock tracking
+   *
+   * This is a convenience wrapper that automatically tracks lock acquisition
+   * and release, even in the presence of errors.
+   *
+   * @example
+   * ```typescript
+   * await raceway.withLock(myLock, 'account_lock', async () => {
+   *   // Lock is automatically tracked as acquired
+   *   await updateAccount();
+   *   // Lock is automatically tracked as released
+   * });
+   * ```
+   */
+  public async withLock<T>(
+    lock: { lock(): Promise<void>; unlock(): void } | { acquire(): void; release(): void },
+    lockId: string,
+    lockType: string = 'Mutex',
+    fn: () => Promise<T>
+  ): Promise<T> {
+    // Acquire the lock
+    if ('lock' in lock) {
+      await lock.lock();
+    } else {
+      lock.acquire();
+    }
+
+    this.trackLockAcquire(lockId, lockType);
+
+    try {
+      const result = await fn();
+      return result;
+    } finally {
+      this.trackLockRelease(lockId, lockType);
+      if ('unlock' in lock) {
+        lock.unlock();
+      } else {
+        lock.release();
+      }
+    }
+  }
+
+  /**
+   * Synchronous version of withLock for non-async locks
+   *
+   * @example
+   * ```typescript
+   * raceway.withLockSync(myLock, 'account_lock', () => {
+   *   // Lock is automatically tracked
+   *   updateAccountSync();
+   * });
+   * ```
+   */
+  public withLockSync<T>(
+    lock: { acquire(): void; release(): void },
+    lockId: string,
+    lockType: string = 'Mutex',
+    fn: () => T
+  ): T {
+    lock.acquire();
+    this.trackLockAcquire(lockId, lockType);
+
+    try {
+      const result = fn();
+      return result;
+    } finally {
+      this.trackLockRelease(lockId, lockType);
+      lock.release();
+    }
+  }
+
+  /**
    * Capture an event (internal method)
    */
   private captureEvent(
