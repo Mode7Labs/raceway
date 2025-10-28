@@ -19,6 +19,8 @@ pub struct MemoryBackend {
     // Distributed tracing (Phase 2)
     distributed_spans: DashMap<String, DistributedSpan>, // span_id -> span
     distributed_edges: DashMap<Uuid, RwLock<Vec<DistributedEdge>>>, // trace_id -> edges
+    pending_edges: DashMap<String, Vec<DistributedEdge>>, // from_span_id -> edges awaiting upstream span
+    pending_edges_targets: DashMap<String, Vec<DistributedEdge>>, // to_span_id -> edges awaiting downstream span
 }
 
 impl MemoryBackend {
@@ -29,7 +31,27 @@ impl MemoryBackend {
             baselines: DashMap::new(),
             distributed_spans: DashMap::new(),
             distributed_edges: DashMap::new(),
+            pending_edges: DashMap::new(),
+            pending_edges_targets: DashMap::new(),
         })
+    }
+
+    fn store_distributed_edge(&self, trace_id: Uuid, edge: DistributedEdge) {
+        let entry = self
+            .distributed_edges
+            .entry(trace_id)
+            .or_insert_with(|| RwLock::new(Vec::new()));
+
+        let mut edges = entry.write().unwrap();
+        let exists = edges.iter().any(|existing| {
+            existing.from_span == edge.from_span
+                && existing.to_span == edge.to_span
+                && existing.link_type == edge.link_type
+                && existing.metadata == edge.metadata
+        });
+        if !exists {
+            edges.push(edge);
+        }
     }
 }
 
@@ -118,8 +140,14 @@ impl StorageBackend for MemoryBackend {
             }
         }
 
-        // Sort by timestamp
-        events.sort_by_key(|e| e.timestamp);
+        // Sort by timestamp (primary), causality depth (secondary), id (tertiary)
+        // This ensures chronological ordering with stable sort for identical timestamps
+        events.sort_by(|a, b| {
+            a.timestamp
+                .cmp(&b.timestamp)
+                .then(a.causality_vector.len().cmp(&b.causality_vector.len()))
+                .then(a.id.cmp(&b.id))
+        });
 
         Ok(events)
     }
@@ -127,10 +155,23 @@ impl StorageBackend for MemoryBackend {
     async fn get_all_events(&self) -> Result<Vec<Event>> {
         let mut events: Vec<Event> = self.events.iter().map(|e| e.value().clone()).collect();
 
-        // Sort by timestamp for consistent ordering
-        events.sort_by_key(|e| e.timestamp);
+        // Sort by timestamp (primary), causality depth (secondary), id (tertiary)
+        events.sort_by(|a, b| {
+            a.timestamp
+                .cmp(&b.timestamp)
+                .then(a.causality_vector.len().cmp(&b.causality_vector.len()))
+                .then(a.id.cmp(&b.id))
+        });
 
         Ok(events)
+    }
+
+    async fn count_events(&self) -> Result<usize> {
+        Ok(self.events.len())
+    }
+
+    async fn count_traces(&self) -> Result<usize> {
+        Ok(self.trace_events.len())
     }
 
     async fn get_all_trace_ids(&self) -> Result<Vec<Uuid>> {
@@ -303,7 +344,22 @@ impl StorageBackend for MemoryBackend {
     }
 
     async fn save_distributed_span(&self, span: DistributedSpan) -> Result<()> {
-        self.distributed_spans.insert(span.span_id.clone(), span);
+        let trace_id = span.trace_id;
+        let span_id = span.span_id.clone();
+        self.distributed_spans.insert(span_id.clone(), span);
+
+        if let Some((_, pending)) = self.pending_edges.remove(&span_id) {
+            for edge in pending {
+                self.store_distributed_edge(trace_id, edge);
+            }
+        }
+
+        if let Some((_, pending)) = self.pending_edges_targets.remove(&span_id) {
+            for edge in pending {
+                self.store_distributed_edge(trace_id, edge);
+            }
+        }
+
         Ok(())
     }
 
@@ -322,18 +378,33 @@ impl StorageBackend for MemoryBackend {
     }
 
     async fn add_distributed_edge(&self, edge: DistributedEdge) -> Result<()> {
-        // Get the trace_id from the span (we need to look it up)
-        // For now, we'll need to find which trace this edge belongs to
-        // by looking up the from_span
+        let mut from_trace = None;
+
+        // Store immediately if we already know the upstream span (so we have the trace_id)
         if let Some(from_span) = self.distributed_spans.get(&edge.from_span) {
             let trace_id = from_span.trace_id;
-            self.distributed_edges
-                .entry(trace_id)
-                .or_insert_with(|| RwLock::new(Vec::new()))
-                .write()
-                .unwrap()
+            from_trace = Some(trace_id);
+            self.store_distributed_edge(trace_id, edge.clone());
+        } else {
+            // Otherwise cache the edge until the span arrives
+            self.pending_edges
+                .entry(edge.from_span.clone())
+                .or_insert_with(Vec::new)
+                .push(edge.clone());
+        }
+
+        if let Some(to_span) = self.distributed_spans.get(&edge.to_span) {
+            let trace_id = to_span.trace_id;
+            if Some(trace_id) != from_trace {
+                self.store_distributed_edge(trace_id, edge.clone());
+            }
+        } else {
+            self.pending_edges_targets
+                .entry(edge.to_span.clone())
+                .or_insert_with(Vec::new)
                 .push(edge);
         }
+
         Ok(())
     }
 

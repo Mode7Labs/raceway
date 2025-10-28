@@ -18,6 +18,8 @@ Example:
 from .client import RacewayClient
 from .types import Config, Event, EventKind, EventMetadata
 from .context import create_context, set_context, get_context
+from .lock_helpers import tracked_lock, track_lock_acquire, track_lock_release
+from .decorators import track_function, track_async, track_method
 
 __all__ = [
     "RacewayClient",
@@ -28,5 +30,11 @@ __all__ = [
     "create_context",
     "set_context",
     "get_context",
+    "tracked_lock",
+    "track_lock_acquire",
+    "track_lock_release",
+    "track_function",
+    "track_async",
+    "track_method",
 ]
 __version__ = "0.1.0"

@@ -83,13 +83,13 @@ export function DashboardStats({
     },
     {
       label: "Anomalies",
-      value: anomaliesData?.anomaly_count.toString() || "0",
+      value: (anomaliesData?.anomaly_count ?? 0).toString(),
       color:
-        (anomaliesData?.anomaly_count || 0) > 0
+        (anomaliesData?.anomaly_count ?? 0) > 0
           ? "text-orange-400"
           : "text-green-400",
       tooltip:
-        (anomaliesData?.anomaly_count || 0) > 0
+        (anomaliesData?.anomaly_count ?? 0) > 0
           ? "Operations taking longer than expected"
           : "No performance anomalies detected",
       navigateTo: "anomalies",

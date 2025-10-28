@@ -124,6 +124,7 @@ type LockAcquireData struct {
 // LockReleaseData represents releasing a lock.
 type LockReleaseData struct {
 	LockID   string `json:"lock_id"`
+	LockType string `json:"lock_type"`
 	Location string `json:"location"`
 }
 

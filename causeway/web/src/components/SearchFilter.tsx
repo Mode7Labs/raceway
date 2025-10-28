@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { type Event } from '../types';
 import { Input } from './ui/input';
 import { Button } from './ui/button';
@@ -112,7 +112,7 @@ export function SearchFilter({ events, onFilteredEventsChange }: SearchFilterPro
   }, [events, filters]);
 
   // Update parent component when filtered events change
-  useMemo(() => {
+  useEffect(() => {
     onFilteredEventsChange(filteredEvents);
   }, [filteredEvents, onFilteredEventsChange]);
 

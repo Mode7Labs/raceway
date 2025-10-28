@@ -3,6 +3,7 @@ import { type Event } from '../types';
 import { cn } from '@/lib/utils';
 import { Badge } from './ui/badge';
 import { getEventKindBackgroundColor } from '@/lib/event-colors';
+import { ServiceBadge } from './ServiceBadge';
 
 interface ServiceTimelineViewProps {
   events: Event[];
@@ -165,6 +166,21 @@ export function ServiceTimelineView({ events, selectedEventId, onEventSelect, zo
         if (key === 'StateChange' && value.access_type) {
           return value.access_type;
         }
+
+        // For LockAcquire, show lock type and lock ID
+        if (key === 'LockAcquire') {
+          const lockType = value.lock_type || 'Mutex';
+          const lockId = value.lock_id || 'unknown';
+          return `LockAcquire | ${lockType} | ${lockId}`;
+        }
+
+        // For LockRelease, show lock type and lock ID
+        if (key === 'LockRelease') {
+          const lockType = value.lock_type || 'Mutex';
+          const lockId = value.lock_id || 'unknown';
+          return `LockRelease | ${lockType} | ${lockId}`;
+        }
+
         const subKeys = Object.keys(value);
         if (subKeys.length > 0) {
           return `${key}::${subKeys[0]}`;
@@ -239,12 +255,16 @@ export function ServiceTimelineView({ events, selectedEventId, onEventSelect, zo
           const laneHeight = Math.max(48, rowCount * 32); // Minimum 48px, 32px per row
           const eventHeight = Math.min(24, laneHeight / rowCount - 4); // Event height with padding
 
+          // Get SDK language from the first event in this service
+          const firstServiceEvent = serviceEvents[0]?.event;
+
           return (
             <div key={service} className="space-y-1 mb-4">
               <div className="flex items-center gap-2 text-[11px]">
-                <Badge variant="outline" className="text-[10px] font-mono bg-cyan-500/10 text-cyan-400 border-cyan-500/30">
-                  {service}
-                </Badge>
+                <ServiceBadge
+                  serviceName={service}
+                  tags={firstServiceEvent?.metadata?.tags}
+                />
                 <Badge variant="outline" className="text-[10px]">
                   {serviceEvents.length} events
                 </Badge>

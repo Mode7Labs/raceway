@@ -201,7 +201,9 @@ impl StorageBackend for PostgresBackend {
             SELECT id, trace_id, parent_id, timestamp, kind, metadata, causality_vector, lock_set
             FROM events
             WHERE trace_id = $1
-            ORDER BY timestamp ASC
+            ORDER BY timestamp ASC,
+                     array_length(causality_vector, 1) ASC NULLS FIRST,
+                     id ASC
             "#,
         )
         .bind(trace_id)
@@ -234,7 +236,9 @@ impl StorageBackend for PostgresBackend {
             r#"
             SELECT id, trace_id, parent_id, timestamp, kind, metadata, causality_vector, lock_set
             FROM events
-            ORDER BY timestamp ASC
+            ORDER BY timestamp ASC,
+                     array_length(causality_vector, 1) ASC NULLS FIRST,
+                     id ASC
             "#,
         )
         .fetch_all(&self.pool)
@@ -259,6 +263,20 @@ impl StorageBackend for PostgresBackend {
                 })
             })
             .collect()
+    }
+
+    async fn count_events(&self) -> Result<usize> {
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM events")
+            .fetch_one(&self.pool)
+            .await?;
+        Ok(count as usize)
+    }
+
+    async fn count_traces(&self) -> Result<usize> {
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(DISTINCT trace_id) FROM events")
+            .fetch_one(&self.pool)
+            .await?;
+        Ok(count as usize)
     }
 
     async fn get_all_trace_ids(&self) -> Result<Vec<Uuid>> {
@@ -634,8 +652,9 @@ impl StorageBackend for PostgresBackend {
             r#"
             SELECT de.edge_data
             FROM distributed_edges de
-            JOIN distributed_spans ds ON de.from_span = ds.span_id
-            WHERE ds.trace_id = $1
+            LEFT JOIN distributed_spans ds_from ON de.from_span = ds_from.span_id
+            LEFT JOIN distributed_spans ds_to ON de.to_span = ds_to.span_id
+            WHERE (ds_from.trace_id = $1) OR (ds_to.trace_id = $1)
             "#,
         )
         .bind(trace_id)

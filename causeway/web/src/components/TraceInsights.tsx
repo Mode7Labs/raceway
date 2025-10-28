@@ -47,14 +47,14 @@ export function TraceInsights({
         description: `${raceCount} concurrent state modification${raceCount > 1 ? 's' : ''} detected. This can lead to data corruption and unpredictable behavior.`,
         action: {
           label: 'View Debugger',
-          tab: 'debugger',
+          tab: 'variables',
         },
         metric: `${raceCount}`,
       });
     }
 
     // Critical Anomalies
-    const criticalAnomalies = anomaliesData?.anomalies.filter(a => a.severity === 'Critical') || [];
+    const criticalAnomalies = anomaliesData?.anomalies?.filter(a => a.severity === 'Critical') ?? [];
     if (criticalAnomalies.length > 0) {
       results.push({
         id: 'critical-anomalies',
@@ -80,14 +80,14 @@ export function TraceInsights({
         description: `${criticalPathData.percentage_of_total.toFixed(1)}% of execution time is on the critical path. Limited parallelization opportunities.`,
         action: {
           label: 'View Critical Path',
-          tab: 'critical-path',
+          tab: 'performance',
         },
         metric: `${criticalPathData.percentage_of_total.toFixed(0)}%`,
       });
     }
 
     // Warning Level Anomalies
-    const warningAnomalies = anomaliesData?.anomalies.filter(a => a.severity === 'Warning') || [];
+    const warningAnomalies = anomaliesData?.anomalies?.filter(a => a.severity === 'Warning') ?? [];
     if (warningAnomalies.length > 0 && criticalAnomalies.length === 0) {
       results.push({
         id: 'warning-anomalies',
@@ -126,7 +126,7 @@ export function TraceInsights({
         description: `Only ${criticalPathData.percentage_of_total.toFixed(1)}% of time on critical path. System shows effective parallel execution.`,
         action: {
           label: 'View Critical Path',
-          tab: 'critical-path',
+          tab: 'performance',
         },
         metric: `${criticalPathData.percentage_of_total.toFixed(0)}%`,
       });

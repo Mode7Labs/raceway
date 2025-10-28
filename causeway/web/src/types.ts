@@ -88,6 +88,7 @@ export interface EventMetadata {
   environment: string;
   tags: Record<string, string>;
   duration_ns: number | null;
+  location?: string;
 }
 
 export interface RaceDetail {

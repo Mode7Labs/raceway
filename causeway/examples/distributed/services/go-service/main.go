@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -21,7 +22,11 @@ const (
 	SERVICE_NAME = "go-service"
 )
 
-var client *raceway.Client
+var (
+	client               *raceway.Client
+	globalRequestCounter int
+	counterLock          sync.Mutex
+)
 
 type ProcessRequest struct {
 	Downstream         string `json:"downstream,omitempty"`
@@ -106,7 +111,13 @@ func processHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Track some work
 	client.TrackFunctionCall(ctx, "processRequest", "", map[string]string{"payload": req.Payload}, "", 0)
-	client.TrackStateChange(ctx, "requestCount", nil, 1, "", "Write")
+
+	// Increment request counter with lock tracking (using new WithLock helper)
+	client.WithLock(ctx, &counterLock, "global_request_counter", "Mutex", func() {
+		oldCount := globalRequestCounter
+		globalRequestCounter++
+		client.TrackStateChange(ctx, "requestCount", oldCount, globalRequestCounter, "", "Write")
+	})
 
 	var downstreamResponse interface{}
 

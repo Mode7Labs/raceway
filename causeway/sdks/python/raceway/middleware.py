@@ -1,6 +1,7 @@
 """Middleware for automatic Raceway context management."""
 
 import time
+import uuid
 from functools import wraps
 from typing import Callable, Optional
 
@@ -62,7 +63,7 @@ def flask_middleware(client: RacewayClient):
                 tracestate=parsed.tracestate,
             )
             set_context(ctx)
-            request.raceway_context = ctx
+            request.racewayContext = ctx
 
             if self.client.config.debug:
                 print(f"[Raceway] Context set: trace_id={ctx.trace_id[:8]}, distributed={ctx.distributed}", flush=True)

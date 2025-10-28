@@ -225,6 +225,66 @@ class RacewayClient:
 
         update_context(event.id, False)
 
+    def track_lock_acquire(self, lock_id: str, lock_type: str = "Mutex"):
+        """
+        Track a lock acquisition event.
+
+        Args:
+            lock_id: Unique identifier for this lock
+            lock_type: Type of lock ("Mutex", "RWLock", "Semaphore", etc.)
+        """
+        ctx = get_context()
+        if ctx is None:
+            if self.config.debug:
+                print("[Raceway] track_lock_acquire called outside of context", flush=True)
+            return
+
+        location = self._capture_location()
+        is_first_event = ctx.root_id is None
+
+        event = self._capture_event(
+            ctx,
+            EventKind(
+                LockAcquire={
+                    "lock_id": lock_id,
+                    "lock_type": lock_type,
+                    "location": location,
+                }
+            )
+        )
+
+        update_context(event.id, is_first_event)
+
+    def track_lock_release(self, lock_id: str, lock_type: str = "Mutex"):
+        """
+        Track a lock release event.
+
+        Args:
+            lock_id: Unique identifier for this lock
+            lock_type: Type of lock ("Mutex", "RWLock", "Semaphore", etc.)
+        """
+        ctx = get_context()
+        if ctx is None:
+            if self.config.debug:
+                print("[Raceway] track_lock_release called outside of context", flush=True)
+            return
+
+        location = self._capture_location()
+        is_first_event = ctx.root_id is None
+
+        event = self._capture_event(
+            ctx,
+            EventKind(
+                LockRelease={
+                    "lock_id": lock_id,
+                    "lock_type": lock_type,
+                    "location": location,
+                }
+            )
+        )
+
+        update_context(event.id, is_first_event)
+
     def propagation_headers(self, extra_headers: Optional[Dict[str, str]] = None) -> Dict[str, str]:
         """Build outbound headers for propagating the current trace."""
         ctx = get_context()
@@ -324,7 +384,7 @@ class RacewayClient:
             process_id=os.getpid(),
             service_name=self.config.service_name,
             environment=self.config.environment,
-            tags={},
+            tags={"sdk_language": "python"},
             duration_ns=duration_ns,
             # Phase 2: Distributed tracing fields
             # Always set distributed metadata when we have a context (not gated by distributed flag)

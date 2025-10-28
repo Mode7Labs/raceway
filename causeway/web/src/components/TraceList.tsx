@@ -1,7 +1,7 @@
 import { cn } from '@/lib/utils';
 import { Loader2 } from 'lucide-react';
 import type { TraceMetadata } from '@/types';
-import { ServiceLink } from './ServiceLink';
+import { formatTimeAgo } from '@/lib/time-utils';
 
 interface TraceListProps {
   traces: TraceMetadata[];
@@ -10,24 +10,9 @@ interface TraceListProps {
   onLoadMore?: () => void;
   hasMore?: boolean;
   loadingMore?: boolean;
-  onNavigateToService?: (serviceName: string) => void;
 }
 
-function formatTimeAgo(timestamp: string): string {
-  const now = new Date();
-  const then = new Date(timestamp);
-  const seconds = Math.floor((now.getTime() - then.getTime()) / 1000);
-
-  if (seconds < 60) return `${seconds}s ago`;
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-  const days = Math.floor(hours / 24);
-  return `${days}d ago`;
-}
-
-export function TraceList({ traces, selectedTraceId, onSelect, onLoadMore, hasMore, loadingMore, onNavigateToService }: TraceListProps) {
+export function TraceList({ traces, selectedTraceId, onSelect, onLoadMore, hasMore, loadingMore }: TraceListProps) {
   return (
     <div className="space-y-1">
       {traces.map((trace) => {
@@ -35,10 +20,11 @@ export function TraceList({ traces, selectedTraceId, onSelect, onLoadMore, hasMo
         const isDistributed = trace.service_count > 1;
 
         return (
-          <div
+          <button
             key={trace.trace_id}
+            onClick={() => onSelect(trace.trace_id)}
             className={cn(
-              "w-full flex flex-col items-start gap-1 px-3 py-2.5 rounded-md text-xs transition-all border",
+              "w-full flex flex-col items-start gap-1 px-3 py-2.5 rounded-md text-xs transition-all border cursor-pointer text-left",
               "hover:bg-muted/50 hover:border-border",
               isSelected
                 ? "bg-muted border-border shadow-sm"
@@ -46,7 +32,7 @@ export function TraceList({ traces, selectedTraceId, onSelect, onLoadMore, hasMo
             )}
             title={trace.trace_id}
           >
-            <div className="flex items-center justify-between w-full cursor-pointer" onClick={() => onSelect(trace.trace_id)}>
+            <div className="flex items-center justify-between w-full">
               <span className="text-foreground/90 text-xs">
                 {trace.trace_id.substring(0, 8)}
               </span>
@@ -56,27 +42,12 @@ export function TraceList({ traces, selectedTraceId, onSelect, onLoadMore, hasMo
                 </span>
               )}
             </div>
-            <div className="flex items-center gap-2 text-[10px] text-muted-foreground cursor-pointer" onClick={() => onSelect(trace.trace_id)}>
+            <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
               <span>{trace.event_count} events</span>
               <span>•</span>
               <span>{formatTimeAgo(trace.last_timestamp)}</span>
             </div>
-            {trace.services && trace.services.length > 0 && onNavigateToService && (
-              <div className="flex gap-1 flex-wrap mt-0.5">
-                {trace.services.map((service) => (
-                  <ServiceLink
-                    key={service}
-                    serviceName={service}
-                    onClick={onNavigateToService}
-                  >
-                    <span className="text-[9px] px-1.5 py-0.5 rounded bg-muted font-mono hover:bg-muted/80">
-                      {service}
-                    </span>
-                  </ServiceLink>
-                ))}
-              </div>
-            )}
-          </div>
+          </button>
         );
       })}
 

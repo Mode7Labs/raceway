@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"runtime"
 	"sync"
 	"time"
@@ -228,8 +229,20 @@ func (c *Client) TrackAsyncAwait(ctx context.Context, futureID, location string)
 	})
 }
 
+// captureLocation captures the file:line of the caller.
+// skip parameter controls how many stack frames to skip (2 = caller's caller).
+func captureLocation(skip int) string {
+	_, file, line, ok := runtime.Caller(skip)
+	if !ok {
+		return "unknown:0"
+	}
+	return fmt.Sprintf("%s:%d", filepath.Base(file), line)
+}
+
 // TrackLockAcquire tracks acquiring a lock.
-func (c *Client) TrackLockAcquire(ctx context.Context, lockID, lockType, location string) {
+// Location is automatically captured from the call site.
+func (c *Client) TrackLockAcquire(ctx context.Context, lockID, lockType string) {
+	location := captureLocation(2)
 	c.captureEvent(ctx, EventKind{
 		LockAcquire: &LockAcquireData{
 			LockID:   lockID,
@@ -240,13 +253,69 @@ func (c *Client) TrackLockAcquire(ctx context.Context, lockID, lockType, locatio
 }
 
 // TrackLockRelease tracks releasing a lock.
-func (c *Client) TrackLockRelease(ctx context.Context, lockID, location string) {
+// Location is automatically captured from the call site.
+func (c *Client) TrackLockRelease(ctx context.Context, lockID, lockType string) {
+	location := captureLocation(2)
 	c.captureEvent(ctx, EventKind{
 		LockRelease: &LockReleaseData{
 			LockID:   lockID,
+			LockType: lockType,
 			Location: location,
 		},
 	})
+}
+
+// WithLock executes fn while holding the lock, automatically tracking acquire/release.
+// This is the recommended way to track locks as it ensures release is always tracked.
+//
+// Example:
+//
+//	client.WithLock(ctx, &accountLock, "account_lock", "Mutex", func() {
+//	    accounts["alice"].Balance -= 100
+//	})
+func (c *Client) WithLock(ctx context.Context, lock sync.Locker, lockID, lockType string, fn func()) {
+	c.TrackLockAcquire(ctx, lockID, lockType)
+	lock.Lock()
+	defer func() {
+		c.TrackLockRelease(ctx, lockID, lockType)
+		lock.Unlock()
+	}()
+	fn()
+}
+
+// WithRWLockRead executes fn while holding a read lock, automatically tracking acquire/release.
+//
+// Example:
+//
+//	client.WithRWLockRead(ctx, &accountLock, "account_lock", func() {
+//	    balance := accounts["alice"].Balance
+//	    fmt.Println(balance)
+//	})
+func (c *Client) WithRWLockRead(ctx context.Context, lock *sync.RWMutex, lockID string, fn func()) {
+	c.TrackLockAcquire(ctx, lockID, "RWLock-Read")
+	lock.RLock()
+	defer func() {
+		c.TrackLockRelease(ctx, lockID, "RWLock-Read")
+		lock.RUnlock()
+	}()
+	fn()
+}
+
+// WithRWLockWrite executes fn while holding a write lock, automatically tracking acquire/release.
+//
+// Example:
+//
+//	client.WithRWLockWrite(ctx, &accountLock, "account_lock", func() {
+//	    accounts["alice"].Balance -= 100
+//	})
+func (c *Client) WithRWLockWrite(ctx context.Context, lock *sync.RWMutex, lockID string, fn func()) {
+	c.TrackLockAcquire(ctx, lockID, "RWLock-Write")
+	lock.Lock()
+	defer func() {
+		c.TrackLockRelease(ctx, lockID, "RWLock-Write")
+		lock.Unlock()
+	}()
+	fn()
 }
 
 // TrackError tracks an error.
@@ -354,7 +423,7 @@ func (c *Client) buildMetadata(rctx *RacewayContext) Metadata {
 		ProcessID:   os.Getpid(),
 		ServiceName: c.config.ServiceName,
 		Environment: c.config.Environment,
-		Tags:        map[string]string{},
+		Tags:        map[string]string{"sdk_language": "go"},
 		DurationNs:  nil,
 		// Phase 2: Distributed tracing fields
 		InstanceID:        instanceID,

@@ -6,7 +6,8 @@ use axum::{
     routing::{get, post},
     Router,
 };
-use raceway_sdk::RacewayClient;
+use once_cell::sync::OnceCell;
+use raceway_sdk::{RacewayClient, TrackedMutex};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -14,6 +15,9 @@ use tokio::signal;
 
 const PORT: u16 = 6004;
 const SERVICE_NAME: &str = "rust-service";
+
+// Global request counter with tracked lock
+static GLOBAL_COUNTER: OnceCell<TrackedMutex<i32>> = OnceCell::new();
 
 #[derive(Deserialize)]
 struct ProcessRequest {
@@ -43,6 +47,10 @@ struct HealthResponse {
 #[tokio::main]
 async fn main() {
     let client = Arc::new(RacewayClient::new("http://localhost:8080", SERVICE_NAME));
+
+    // Initialize global counter with tracked lock
+    GLOBAL_COUNTER.set(TrackedMutex::new(0, client.clone(), "global_request_counter"))
+        .ok();
 
     // Clone client for shutdown handler before moving into app state
     let client_for_shutdown = client.clone();
@@ -118,7 +126,14 @@ async fn process_handler(
 ) -> (StatusCode, Json<ProcessResponse>) {
     // Track some work
     client.track_function_call("process_request", &req.payload);
-    client.track_state_change("request_count", Some(0), 1, "Write");
+
+    // Increment request counter with tracked lock (using new TrackedMutex)
+    if let Some(counter) = GLOBAL_COUNTER.get() {
+        let mut count = counter.lock("Mutex");
+        let old_value = *count;
+        *count += 1;
+        client.track_state_change("request_count", Some(old_value), *count, "Write");
+    }
 
     let mut downstream_response = None;
 

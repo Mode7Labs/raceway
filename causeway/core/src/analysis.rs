@@ -357,38 +357,37 @@ impl AnalysisService {
 
         // Keep track of which traces we've explored for edges (to avoid redundant queries)
         let mut explored_traces: HashSet<Uuid> = HashSet::new();
-        explored_traces.insert(trace_id);
 
         // BFS: recursively follow all edges to discover the entire distributed trace graph
         while let Some((current_span_id, current_trace_id)) = span_queue.pop_front() {
-            // Get all edges from this trace (if we haven't explored it yet)
-            if explored_traces.insert(current_trace_id) {
-                let edges = self.storage.get_distributed_edges(current_trace_id).await?;
+            // Skip traces we've already processed (prevents duplicate fetches)
+            if !explored_traces.insert(current_trace_id) {
+                continue;
+            }
 
-                tracing::debug!(
-                    "Found {} edges from trace {} (span {})",
-                    edges.len(),
-                    current_trace_id,
-                    current_span_id
-                );
+            let edges = self.storage.get_distributed_edges(current_trace_id).await?;
 
-                // Follow each edge to discover connected spans
-                for edge in edges {
-                    // Add both ends of the edge (from_span and to_span) to ensure we capture everything
-                    for next_span_id in [&edge.from_span, &edge.to_span] {
-                        if visited_spans.insert(next_span_id.clone()) {
-                            // New span discovered - look it up to get its trace_id
-                            if let Some(span) =
-                                self.storage.get_distributed_span(next_span_id).await?
-                            {
-                                span_queue.push_back((span.span_id.clone(), span.trace_id));
+            tracing::debug!(
+                "Found {} edges from trace {} (span {})",
+                edges.len(),
+                current_trace_id,
+                current_span_id
+            );
 
-                                tracing::debug!(
-                                    "Discovered span {} in trace {} via edge",
-                                    next_span_id,
-                                    span.trace_id
-                                );
-                            }
+            // Follow each edge to discover connected spans
+            for edge in edges {
+                // Add both ends of the edge (from_span and to_span) to ensure we capture everything
+                for next_span_id in [&edge.from_span, &edge.to_span] {
+                    if visited_spans.insert(next_span_id.clone()) {
+                        // New span discovered - look it up to get its trace_id
+                        if let Some(span) = self.storage.get_distributed_span(next_span_id).await? {
+                            span_queue.push_back((span.span_id.clone(), span.trace_id));
+
+                            tracing::debug!(
+                                "Discovered span {} in trace {} via edge",
+                                next_span_id,
+                                span.trace_id
+                            );
                         }
                     }
                 }
@@ -554,11 +553,19 @@ impl AnalysisService {
 
         // Load distributed edges if distributed tracing is enabled
         if self.config.distributed_tracing.enabled {
-            let dist_edges = self.storage.get_distributed_edges(trace_id).await?;
-            if !dist_edges.is_empty() {
-                let graph = self.graph.read().await;
-                graph.add_distributed_edges(dist_edges);
-                tracing::debug!("Loaded distributed edges for trace {}", trace_id);
+            let mut trace_ids: HashSet<Uuid> = HashSet::new();
+            trace_ids.insert(trace_id);
+            for event in events {
+                trace_ids.insert(event.trace_id);
+            }
+
+            for tid in trace_ids {
+                let dist_edges = self.storage.get_distributed_edges(tid).await?;
+                if !dist_edges.is_empty() {
+                    let graph = self.graph.read().await;
+                    graph.add_distributed_edges(dist_edges);
+                    tracing::debug!("Loaded distributed edges for trace {}", tid);
+                }
             }
         }
 

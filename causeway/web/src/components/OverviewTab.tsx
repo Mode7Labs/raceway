@@ -4,13 +4,13 @@ import { DashboardStats } from './DashboardStats';
 import { TraceInsights } from './TraceInsights';
 import { Button } from './ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
+import { cn } from '@/lib/utils';
 
 interface OverviewTabProps {
   events: Event[];
   criticalPathData: CriticalPathData | null;
   anomaliesData: AnomaliesData | null;
   raceCount: number;
-  onViewEvents: () => void;
   onNavigate?: (tab: string) => void;
 }
 
@@ -19,7 +19,6 @@ export function OverviewTab({
   criticalPathData,
   anomaliesData,
   raceCount,
-  onViewEvents,
   onNavigate,
 }: OverviewTabProps) {
   const criticalPathPercentage = criticalPathData?.percentage_of_total || 0;
@@ -56,7 +55,13 @@ export function OverviewTab({
       {/* Quick Actions */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
         {/* Race Conditions Card */}
-        <Card className={raceCount > 0 ? "border-red-500/50" : ""}>
+        <Card
+          className={cn(
+            raceCount > 0 ? "border-red-500/50" : "",
+            raceCount > 0 && onNavigate && "cursor-pointer hover:bg-muted/50 transition-colors"
+          )}
+          onClick={() => raceCount > 0 && onNavigate && onNavigate('variables')}
+        >
           <CardHeader className="pb-2">
             <CardTitle className="text-xs font-medium flex items-center gap-1.5">
               <span>Race Conditions</span>
@@ -68,7 +73,7 @@ export function OverviewTab({
               <div className="space-y-2">
                 <div className="text-2xl font-bold text-red-400 font-mono">{raceCount}</div>
                 <p className="text-xs text-muted-foreground leading-tight">
-                  Concurrent state modifications detected that may cause data corruption. View details in the Analysis panel.
+                  Concurrent state modifications detected that may cause data corruption. Click to view details.
                 </p>
               </div>
             ) : (
@@ -83,7 +88,13 @@ export function OverviewTab({
         </Card>
 
         {/* Anomalies Card */}
-        <Card className={anomalyCount > 0 ? "border-orange-500/50" : ""}>
+        <Card
+          className={cn(
+            anomalyCount > 0 ? "border-orange-500/50" : "",
+            anomalyCount > 0 && onNavigate && "cursor-pointer hover:bg-muted/50 transition-colors"
+          )}
+          onClick={() => anomalyCount > 0 && onNavigate && onNavigate('anomalies')}
+        >
           <CardHeader className="pb-2">
             <CardTitle className="text-xs font-medium flex items-center gap-1.5">
               <span>Performance Anomalies</span>
@@ -95,7 +106,7 @@ export function OverviewTab({
               <div className="space-y-2">
                 <div className="text-2xl font-bold text-orange-400 font-mono">{anomalyCount}</div>
                 <p className="text-xs text-muted-foreground leading-tight">
-                  Operations taking significantly longer than expected. View details in the Analysis panel.
+                  Operations taking significantly longer than expected. Click to view details.
                 </p>
               </div>
             ) : (
@@ -109,23 +120,6 @@ export function OverviewTab({
           </CardContent>
         </Card>
       </div>
-
-      {/* Quick Navigation */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-sm font-medium">Quick Navigation</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="grid grid-cols-2 md:grid-cols-2 gap-2">
-            <Button onClick={onViewEvents} variant="outline" size="sm" className="justify-start">
-              📋 View All Events
-            </Button>
-            <Button onClick={() => {}} variant="outline" size="sm" className="justify-start">
-              📊 Timeline View
-            </Button>
-          </div>
-        </CardContent>
-      </Card>
 
       {/* Helpful Tips */}
       {raceCount === 0 && anomalyCount === 0 && (

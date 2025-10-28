@@ -9,6 +9,7 @@ Lightweight SDK for race condition detection in Rust applications with automatic
 - **Zero Manual Context Management**: Uses tokio::task_local! for automatic async context propagation
 - **Simplified Tracking API**: No .await needed for tracking methods
 - **Proper Causality Tracking**: Root event ID + logical clock vector for accurate race detection
+- **RAII Lock Tracking**: Automatic lock tracking with TrackedMutex and TrackedRwLock
 
 ## Example
 
@@ -40,9 +41,11 @@ client.track_state_change("balance", Some(100), 50, "Write");
 
 mod client;
 mod context;
+mod lock_helpers;
 mod trace_context;
 mod types;
 
 pub use client::RacewayClient;
 pub use context::{RacewayContext, RACEWAY_CONTEXT};
+pub use lock_helpers::{TrackedMutex, TrackedMutexGuard, TrackedRwLock, TrackedRwLockReadGuard, TrackedRwLockWriteGuard};
 pub use types::*;

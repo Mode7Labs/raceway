@@ -184,14 +184,16 @@ run_test_suite() {
   local exit_code
 
   if [[ "$dir" != "." ]]; then
-    output=$(cd "$dir" && bash -c "$command" </dev/null 2>&1 || true)
+    set +e
+    output=$(cd "$dir" && bash -c "$command" </dev/null 2>&1)
     exit_code=$?
   else
-    output=$(bash -c "$command" </dev/null 2>&1 || true)
+    set +e
+    output=$(bash -c "$command" </dev/null 2>&1)
     exit_code=$?
   fi
 
-  # Parse test results
+  # Parse test results (keep set +e active during parsing to prevent grep failures from exiting)
   local passed=0
   local failed=0
   local total=0
@@ -218,14 +220,17 @@ run_test_suite() {
     failed=1
     total=1
   # pytest (Python) - must be last as "passed" is generic
-  elif echo "$output" | grep -q "pytest"; then
-    # pytest format: "23 passed in 0.04s" or "23 passed, 1 failed in 0.04s"
-    passed=$(echo "$output" | sed -n 's/.*\([0-9][0-9]*\) passed.*/\1/p' | head -1)
-    failed=$(echo "$output" | sed -n 's/.*\([0-9][0-9]*\) failed.*/\1/p' | head -1)
+  elif echo "$output" | grep -q "passed.*in.*s"; then
+    # pytest format: "80 passed in 0.04s" or "80 passed, 1 failed in 0.04s"
+    passed=$(echo "$output" | grep -o '[0-9]\+ passed' | grep -o '[0-9]\+' | head -1)
+    failed=$(echo "$output" | grep -o '[0-9]\+ failed' | grep -o '[0-9]\+' | head -1)
     [[ -z "$passed" ]] && passed=0
     [[ -z "$failed" ]] && failed=0
     total=$((passed + failed))
   fi
+
+  # Re-enable exit on error after parsing
+  set -e
 
   # Display result
   if [[ $exit_code -eq 0 && $failed -eq 0 ]]; then
@@ -268,7 +273,7 @@ action_tests_all() {
   fi
 
   if command -v python3 >/dev/null 2>&1 && python3 -c "import pytest" 2>/dev/null; then
-    run_test_suite "Python SDK" "python3 -m pytest tests/test_trace_context.py -q" "${SCRIPT_DIR}/sdks/python"
+    run_test_suite "Python SDK" "python3 -m pytest -q" "${SCRIPT_DIR}/sdks/python"
   fi
 
   if command -v cargo >/dev/null 2>&1; then
@@ -300,7 +305,7 @@ action_tests_sdk_all() {
 
   if command -v npm >/dev/null 2>&1; then
     run_step "${ICON_TEST} TypeScript SDK tests" \
-      "npm test" \
+      "./node_modules/.bin/jest --watchAll=false --forceExit" \
       "${SCRIPT_DIR}/sdks/typescript"
 
     run_step "${ICON_TEST} Babel Plugin tests" \
@@ -316,7 +321,7 @@ action_tests_sdk_all() {
 
   if command -v python3 >/dev/null 2>&1 && python3 -c "import pytest" 2>/dev/null; then
     run_step "${ICON_TEST} Python SDK tests" \
-      "python3 -m pytest tests/test_trace_context.py -v" \
+      "python3 -m pytest -v" \
       "${SCRIPT_DIR}/sdks/python"
   fi
 
@@ -343,7 +348,7 @@ action_tests_storage_backends() {
 action_test_sdk_typescript() {
   require_tool npm
   run_step "${ICON_TEST} TypeScript SDK tests" \
-    "npm test" \
+    "./node_modules/.bin/jest --watchAll=false --forceExit" \
     "${SCRIPT_DIR}/sdks/typescript"
 
   run_step "${ICON_TEST} Babel Plugin tests" \
@@ -364,8 +369,8 @@ action_test_sdk_python() {
     printf "${RED}Error:${RESET} pytest not installed. Run: pip install pytest\n"
     return 1
   fi
-  run_step "${ICON_TEST} Python SDK tests" \
-    "python3 -m pytest tests/test_trace_context.py -v" \
+  run_step "${ICON_TEST} Python SDK tests (80 tests)" \
+    "python3 -m pytest -v" \
     "${SCRIPT_DIR}/sdks/python"
 }
 
@@ -517,53 +522,108 @@ action_distributed_start_services() {
   printf "${CYAN}${BOLD}${ICON_DISTRIBUTED} Starting All Distributed Services${RESET}\n"
   printf "${DIM}Ports: TypeScript(6001), Python(6002), Go(6003), Rust(6004)${RESET}\n\n"
 
-  cd "${SCRIPT_DIR}/examples/distributed"
+  if ! cd "${SCRIPT_DIR}/examples/distributed" 2>/dev/null; then
+    printf "${RED}Error: Could not find examples/distributed directory${RESET}\n"
+    return 1
+  fi
+
+  # Kill any existing services first
+  printf "${DIM}Cleaning up any existing services...${RESET}\n"
+  kill_processes_on_port 6001 || true
+  kill_processes_on_port 6002 || true
+  kill_processes_on_port 6003 || true
+  kill_processes_on_port 6004 || true
+  printf "\n"
 
   # TypeScript service
   printf "${GREEN}Starting TypeScript service (port 6001)...${RESET}\n"
-  (cd services/typescript-service && npm start) &
+  (cd services/typescript-service && npm start > /tmp/raceway-ts.log 2>&1) &
   TS_PID=$!
 
   # Python service
   printf "${GREEN}Starting Python service (port 6002)...${RESET}\n"
-  (cd services/python-service && python3 server.py) &
+  (cd services/python-service && python3 server.py > /tmp/raceway-py.log 2>&1) &
   PY_PID=$!
 
   # Go service
   printf "${GREEN}Starting Go service (port 6003)...${RESET}\n"
-  (cd services/go-service && go run main.go) &
+  (cd services/go-service && go run main.go > /tmp/raceway-go.log 2>&1) &
   GO_PID=$!
 
   # Rust service
   printf "${GREEN}Starting Rust service (port 6004)...${RESET}\n"
-  (cd services/rust-service && cargo run --release) &
+  (cd services/rust-service && cargo run --release > /tmp/raceway-rust.log 2>&1) &
   RUST_PID=$!
-
-  printf "\n${GREEN}${BOLD}✓ All services started!${RESET}\n"
-  printf "${DIM}TypeScript PID: ${TS_PID}${RESET}\n"
-  printf "${DIM}Python PID: ${PY_PID}${RESET}\n"
-  printf "${DIM}Go PID: ${GO_PID}${RESET}\n"
-  printf "${DIM}Rust PID: ${RUST_PID}${RESET}\n"
-  printf "\n${YELLOW}Press Ctrl+C to stop all services${RESET}\n"
 
   # Save PIDs to file for stop action
   echo "${TS_PID} ${PY_PID} ${GO_PID} ${RUST_PID}" > /tmp/raceway-distributed-pids
 
-  wait
+  printf "\n${YELLOW}Waiting for services to initialize...${RESET}\n"
+  sleep 3
+
+  # Check if services are responding
+  printf "\n${CYAN}Checking service health...${RESET}\n"
+
+  SERVICES_OK=1
+  for port in 6001 6002 6003 6004; do
+    if curl -s -f "http://localhost:${port}/health" > /dev/null 2>&1; then
+      printf "${GREEN}✓ Service on port ${port} is healthy${RESET}\n"
+    else
+      printf "${RED}✗ Service on port ${port} is not responding${RESET}\n"
+      SERVICES_OK=0
+    fi
+  done
+
+  if [[ $SERVICES_OK -eq 1 ]]; then
+    printf "\n${GREEN}${BOLD}✓ All services started successfully!${RESET}\n"
+  else
+    printf "\n${YELLOW}⚠️  Some services may need more time to start${RESET}\n"
+    printf "${DIM}Check logs: /tmp/raceway-{ts,py,go,rust}.log${RESET}\n"
+  fi
+
+  printf "\n${DIM}TypeScript PID: ${TS_PID} (log: /tmp/raceway-ts.log)${RESET}\n"
+  printf "${DIM}Python PID: ${PY_PID} (log: /tmp/raceway-py.log)${RESET}\n"
+  printf "${DIM}Go PID: ${GO_PID} (log: /tmp/raceway-go.log)${RESET}\n"
+  printf "${DIM}Rust PID: ${RUST_PID} (log: /tmp/raceway-rust.log)${RESET}\n"
+  printf "\n${CYAN}${BOLD}Services running in background${RESET}\n"
+  printf "${DIM}Use 'Stop All Services' option to stop them${RESET}\n"
 }
 
 action_distributed_stop_services() {
+  printf "${YELLOW}Stopping distributed services...${RESET}\n\n"
+
+  # First try to kill by PIDs
   if [[ -f /tmp/raceway-distributed-pids ]]; then
-    printf "${YELLOW}Stopping distributed services...${RESET}\n"
-    read -r TS_PID PY_PID GO_PID RUST_PID < /tmp/raceway-distributed-pids
+    if read -r TS_PID PY_PID GO_PID RUST_PID < /tmp/raceway-distributed-pids 2>/dev/null; then
+      # Send SIGTERM for graceful shutdown (allows event flushing)
+      printf "${DIM}Sending SIGTERM to services for graceful shutdown...${RESET}\n"
 
-    kill "${TS_PID}" "${PY_PID}" "${GO_PID}" "${RUST_PID}" 2>/dev/null || true
-    rm /tmp/raceway-distributed-pids
+      [[ -n "${TS_PID:-}" ]] && kill -TERM "${TS_PID}" 2>/dev/null || true
+      [[ -n "${PY_PID:-}" ]] && kill -TERM "${PY_PID}" 2>/dev/null || true
+      [[ -n "${GO_PID:-}" ]] && kill -TERM "${GO_PID}" 2>/dev/null || true
+      [[ -n "${RUST_PID:-}" ]] && kill -TERM "${RUST_PID}" 2>/dev/null || true
 
-    printf "${GREEN}✓ All services stopped${RESET}\n"
-  else
-    printf "${YELLOW}No running services found${RESET}\n"
+      sleep 2
+
+      # Force kill if still running
+      printf "${DIM}Force killing any remaining processes...${RESET}\n"
+      [[ -n "${TS_PID:-}" ]] && kill -9 "${TS_PID}" 2>/dev/null || true
+      [[ -n "${PY_PID:-}" ]] && kill -9 "${PY_PID}" 2>/dev/null || true
+      [[ -n "${GO_PID:-}" ]] && kill -9 "${GO_PID}" 2>/dev/null || true
+      [[ -n "${RUST_PID:-}" ]] && kill -9 "${RUST_PID}" 2>/dev/null || true
+    fi
+
+    rm -f /tmp/raceway-distributed-pids
   fi
+
+  # Also kill by port to ensure cleanup
+  printf "${DIM}Cleaning up ports...${RESET}\n"
+  kill_processes_on_port 6001 || true
+  kill_processes_on_port 6002 || true
+  kill_processes_on_port 6003 || true
+  kill_processes_on_port 6004 || true
+
+  printf "\n${GREEN}✓ All services stopped${RESET}\n"
 }
 
 # SDK Tools

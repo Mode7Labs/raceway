@@ -20,10 +20,19 @@ pub trait StorageBackend: Send + Sync {
     async fn get_event(&self, id: Uuid) -> Result<Option<Event>>;
 
     /// Get all events for a specific trace
+    /// Events are ordered by: timestamp (primary), causality_vector.len() (secondary), id (tertiary)
+    /// This ensures chronological ordering with stable sort for identical timestamps
     async fn get_trace_events(&self, trace_id: Uuid) -> Result<Vec<Event>>;
 
     /// Get all events across all traces (for AnalysisService initialization)
+    /// Events are ordered by: timestamp (primary), causality_vector.len() (secondary), id (tertiary)
     async fn get_all_events(&self) -> Result<Vec<Event>>;
+
+    /// Get total number of events in the system
+    async fn count_events(&self) -> Result<usize>;
+
+    /// Get total number of traces in the system
+    async fn count_traces(&self) -> Result<usize>;
 
     // ========================================================================
     // Trace Operations

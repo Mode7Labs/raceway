@@ -89,6 +89,7 @@ class LockAcquireData:
 class LockReleaseData:
     """Lock release event data."""
     lock_id: str
+    lock_type: str
     location: str
 
 

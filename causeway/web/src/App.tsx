@@ -17,7 +17,6 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from './components/ui/tabs';
 import { Badge } from './components/ui/badge';
 import { OverviewTab } from './components/OverviewTab';
 import { AnomaliesTab } from './components/AnomaliesTab';
-import { Services } from './components/Services';
 import { ServiceOverview } from './components/ServiceOverview';
 import { ServiceDependencies } from './components/ServiceDependencies';
 import { ServiceTraces } from './components/ServiceTraces';
@@ -49,6 +48,7 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [status, setStatus] = useState('Connecting...');
+  const [error, setError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
   const [hasMoreTraces, setHasMoreTraces] = useState(false);
@@ -127,8 +127,14 @@ export default function App() {
 
 
   // Fetch trace details (optimized to use single /full endpoint)
-  const fetchTraceDetails = useCallback(async (traceId: string) => {
-    setLoading(true);
+  const fetchTraceDetails = useCallback(async (traceId: string, options: { silent?: boolean } = {}) => {
+    const silent = options.silent ?? false;
+
+    if (!silent) {
+      setLoading(true);
+      setError(null);
+    }
+
     try {
       // Single API call to fetch all trace data
       const fullAnalysis = await RacewayAPI.getFullTraceAnalysis(traceId);
@@ -165,10 +171,15 @@ export default function App() {
           setAuditTrails(fullAnalysis.data.audit_trails);
         }
       }
+      setError(null);
     } catch (error) {
       console.error('Error fetching trace details:', error);
+      const errorMessage = error instanceof Error ? error.message : 'Failed to fetch trace details';
+      setError(errorMessage);
     } finally {
-      setLoading(false);
+      if (!silent) {
+        setLoading(false);
+      }
     }
   }, []);
 
@@ -178,14 +189,22 @@ export default function App() {
   useEffect(() => {
     fetchTraces();
     fetchServices();
+    if (selectedTraceId) {
+      fetchTraceDetails(selectedTraceId, { silent: true });
+    }
+
     const interval = autoRefresh ? setInterval(() => {
       fetchTraces();
       fetchServices();
+      if (selectedTraceId) {
+        fetchTraceDetails(selectedTraceId, { silent: true });
+      }
     }, 20000) : null;
+
     return () => {
       if (interval) clearInterval(interval);
     };
-  }, [autoRefresh, fetchTraces, fetchServices]);
+  }, [autoRefresh, fetchTraces, fetchServices, fetchTraceDetails, selectedTraceId]);
 
   // Handle trace selection
   useEffect(() => {
@@ -203,10 +222,19 @@ export default function App() {
   const handleTraceSelect = (traceId: string) => {
     setSelectedTraceId(traceId);
     setSelectedEventId(null);
+    navigateToTrace(traceId);
   };
 
   const handleEventSelect = (eventId: string) => {
     setSelectedEventId(eventId);
+    if (selectedTraceId) {
+      const basePath =
+        viewMode === 'overview'
+          ? `/traces/${selectedTraceId}`
+          : `/traces/${selectedTraceId}/${viewMode}`;
+      const path = viewMode === 'events' ? `${basePath}/${eventId}` : basePath;
+      navigate(path);
+    }
   };
 
   const handleServiceSelect = (serviceName: string | null) => {
@@ -508,7 +536,6 @@ export default function App() {
                     onLoadMore={loadMoreTraces}
                     hasMore={hasMoreTraces && !searchQuery}
                     loadingMore={loadingMore}
-                    onNavigateToService={navigateToService}
                   />
                 </div>
               </>
@@ -706,6 +733,21 @@ export default function App() {
                 <div className="flex items-center justify-center h-full">
                   <div className="text-muted-foreground text-sm">Loading...</div>
                 </div>
+              ) : error ? (
+                <div className="flex flex-col items-center justify-center h-full text-center p-8">
+                  <div className="rounded-lg border border-red-500/50 bg-red-500/10 p-4 max-w-md">
+                    <h3 className="text-base font-medium mb-1.5 text-red-400">Error Loading Trace</h3>
+                    <p className="text-sm text-muted-foreground">{error}</p>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="mt-3"
+                      onClick={() => selectedTraceId && fetchTraceDetails(selectedTraceId)}
+                    >
+                      Retry
+                    </Button>
+                  </div>
+                </div>
               ) : !selectedTraceId ? (
                 <div className="flex flex-col items-center justify-center h-full text-center p-8">
                   <h3 className="text-base font-medium mb-1.5">No trace selected</h3>
@@ -719,8 +761,7 @@ export default function App() {
                       criticalPathData={criticalPathData}
                       anomaliesData={anomaliesData}
                       raceCount={raceCount}
-                      onViewEvents={() => setViewMode('events')}
-                      onNavigate={(tab) => setViewMode(tab as ViewMode)}
+                      onNavigate={(tab) => navigate(selectedTraceId ? (tab === 'overview' ? `/traces/${selectedTraceId}` : `/traces/${selectedTraceId}/${tab}`) : '/')}
                     />
                   </TabsContent>
                   <TabsContent value="events" className="h-full m-0 p-0">

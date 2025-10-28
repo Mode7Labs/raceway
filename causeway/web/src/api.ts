@@ -50,7 +50,7 @@ export class RacewayAPI {
   }
 
   static async getServiceDependencies(serviceName: string): Promise<ServiceDependenciesResponse> {
-    return this.fetchJSON<ServiceDependenciesResponse>(`${API_BASE}/api/services/${serviceName}/dependencies`);
+    return this.fetchJSON<ServiceDependenciesResponse>(`${API_BASE}/api/services/${encodeURIComponent(serviceName)}/dependencies`);
   }
 
   static async getDistributedEdges(): Promise<DistributedEdgesResponse> {

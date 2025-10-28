@@ -163,6 +163,20 @@ export function TimelineView({ events, selectedEventId, onEventSelect }: Timelin
           return funcName;
         }
 
+        // For LockAcquire, show lock type and lock ID
+        if (key === 'LockAcquire') {
+          const lockType = value.lock_type || 'Mutex';
+          const lockId = value.lock_id || 'unknown';
+          return `LockAcquire | ${lockType} | ${lockId}`;
+        }
+
+        // For LockRelease, show lock type and lock ID
+        if (key === 'LockRelease') {
+          const lockType = value.lock_type || 'Mutex';
+          const lockId = value.lock_id || 'unknown';
+          return `LockRelease | ${lockType} | ${lockId}`;
+        }
+
         // Default: show key::subkey
         const subKeys = Object.keys(value);
         if (subKeys.length > 0) {

@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { type Event } from '../types';
 import { cn } from '@/lib/utils';
 import { getThreadIdColor, getEventKindColor } from '@/lib/event-colors';
+import { getSDKLanguage, getSDKDisplayName, SDK_COLORS } from '@/lib/sdk-colors';
 import { Badge } from './ui/badge';
 import { Button } from './ui/button';
 import { Copy, Check } from 'lucide-react';
@@ -46,6 +47,8 @@ export function EventDetails({ event }: EventDetailsProps) {
 
   const kindDisplay = getEventKindDisplay(event.kind);
   const kindDetails = getEventKindDetails(event.kind);
+  const sdkLanguage = getSDKLanguage(event.metadata.tags);
+  const SDKIcon = sdkLanguage ? SDK_COLORS[sdkLanguage].Icon : null;
 
   const formatTimestamp = (timestamp: string): string => {
     try {
@@ -119,6 +122,18 @@ export function EventDetails({ event }: EventDetailsProps) {
             <span className="text-[10px] text-muted-foreground">Environment:</span>
             <span className="font-mono text-xs text-green-400">{event.metadata.environment}</span>
           </div>
+          {sdkLanguage && SDKIcon && (
+            <div className="flex justify-between items-center">
+              <span className="text-[10px] text-muted-foreground">SDK:</span>
+              <span
+                className="font-mono text-xs font-semibold flex items-center gap-1.5"
+                style={{ color: sdkLanguage === 'python' ? '#FFD43B' : SDK_COLORS[sdkLanguage].primary }}
+              >
+                <SDKIcon className="w-3 h-3" />
+                {getSDKDisplayName(sdkLanguage)}
+              </span>
+            </div>
+          )}
         </div>
       </div>
 

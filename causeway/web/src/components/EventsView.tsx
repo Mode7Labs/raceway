@@ -1,8 +1,10 @@
 import { type Event } from '../types';
 import { cn } from '@/lib/utils';
 import { Badge } from './ui/badge';
-import { getEventKindBadgeColor, getThreadIdColor } from '@/lib/event-colors';
+import { getThreadIdColor } from '@/lib/event-colors';
 import { ServiceLink } from './ServiceLink';
+import { ServiceBadge } from './ServiceBadge';
+import { EventKindBadge } from './EventKindBadge';
 
 interface EventsViewProps {
   events: Event[];
@@ -12,48 +14,6 @@ interface EventsViewProps {
 }
 
 export function EventsView({ events, selectedEventId, onEventSelect, onNavigateToService }: EventsViewProps) {
-  const getEventKind = (kind: Record<string, any>): string => {
-    if (typeof kind === 'string') return kind;
-    const keys = Object.keys(kind);
-    if (keys.length > 0) {
-      const key = keys[0];
-      const value = kind[key];
-      if (typeof value === 'object' && value !== null) {
-        // For StateChange, extract the access_type value
-        if (key === 'StateChange' && value.access_type) {
-          return `StateChange | ${value.access_type}`;
-        }
-
-        // For HttpRequest, show method and URL
-        if (key === 'HttpRequest') {
-          const method = value.method || 'GET';
-          const url = value.url || value.path || 'unknown';
-          return `HttpRequest | ${method} ${url}`;
-        }
-
-        // For HttpResponse, show status code
-        if (key === 'HttpResponse') {
-          const status = value.status || value.status_code || '200';
-          return `HttpResponse | ${status}`;
-        }
-
-        // For FunctionCall, show function name
-        if (key === 'FunctionCall') {
-          const funcName = value.function_name || value.name || 'unknown';
-          return `FunctionCall | ${funcName}`;
-        }
-
-        // Default: show key::subkey if there are nested keys
-        const subKeys = Object.keys(value);
-        if (subKeys.length > 0) {
-          return `${key}::${subKeys[0]}`;
-        }
-      }
-      return key;
-    }
-    return 'Unknown';
-  };
-
   const formatTimestamp = (timestamp: string): string => {
     try {
       const date = new Date(timestamp);
@@ -67,7 +27,6 @@ export function EventsView({ events, selectedEventId, onEventSelect, onNavigateT
     <div className="space-y-1.5">
       {events.map((event) => {
         const isSelected = event.id === selectedEventId;
-        const eventKind = getEventKind(event.kind);
         const timestamp = formatTimestamp(event.timestamp);
 
         return (
@@ -89,19 +48,20 @@ export function EventsView({ events, selectedEventId, onEventSelect, onNavigateT
                   serviceName={event.metadata.service_name}
                   onClick={onNavigateToService}
                 >
-                  <Badge variant="outline" className="text-[10px] font-mono bg-cyan-500/10 text-cyan-400 border-cyan-500/30 hover:bg-cyan-500/20 cursor-pointer">
-                    {event.metadata.service_name}
-                  </Badge>
+                  <ServiceBadge
+                    serviceName={event.metadata.service_name}
+                    tags={event.metadata.tags}
+                    onClick={() => {}}
+                  />
                 </ServiceLink>
               )}
               {event.metadata.service_name && !onNavigateToService && (
-                <Badge variant="outline" className="text-[10px] font-mono bg-cyan-500/10 text-cyan-400 border-cyan-500/30">
-                  {event.metadata.service_name}
-                </Badge>
+                <ServiceBadge
+                  serviceName={event.metadata.service_name}
+                  tags={event.metadata.tags}
+                />
               )}
-              <Badge className={cn("font-mono text-[10px] border", getEventKindBadgeColor(eventKind))}>
-                {eventKind}
-              </Badge>
+              <EventKindBadge eventKind={event.kind} />
               <span className="text-[11px]">
                 <span className="text-muted-foreground">Thread </span>
                 <span className={cn("font-mono", getThreadIdColor(event.metadata.thread_id))}>

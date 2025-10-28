@@ -24,6 +24,8 @@ pub enum EventKind {
     FunctionCall(FunctionCallData),
     HttpRequest(HttpRequestData),
     HttpResponse(HttpResponseData),
+    LockAcquire(LockAcquireData),
+    LockRelease(LockReleaseData),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -58,6 +60,20 @@ pub struct HttpResponseData {
     pub headers: HashMap<String, String>,
     pub body: Option<serde_json::Value>,
     pub duration_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LockAcquireData {
+    pub lock_id: String,
+    pub lock_type: String,
+    pub location: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LockReleaseData {
+    pub lock_id: String,
+    pub lock_type: String,
+    pub location: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

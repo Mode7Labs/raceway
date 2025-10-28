@@ -15,9 +15,10 @@ export function ServiceLink({ serviceName, onClick, className, children }: Servi
         onClick(serviceName);
       }}
       className={cn(
-        "font-mono text-xs hover:underline hover:text-primary transition-colors cursor-pointer",
+        "font-mono text-xs transition-all cursor-pointer no-underline",
         className
       )}
+      style={{ textDecoration: 'none' }}
       title={`View ${serviceName} service`}
     >
       {children || serviceName}

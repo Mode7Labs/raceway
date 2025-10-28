@@ -31,6 +31,32 @@ const safeHostname = (): string => {
 };
 
 /**
+ * Generate high-resolution timestamp with microsecond precision
+ * Format: 2025-10-27T04:28:42.836234Z
+ */
+const getHighResolutionTimestamp = (): string => {
+  const now = Date.now(); // milliseconds since epoch
+  const hrtime = process.hrtime(); // [seconds, nanoseconds] since arbitrary time
+
+  // Get microseconds from nanoseconds (3 additional digits of precision)
+  const microseconds = Math.floor(hrtime[1] / 1000);
+
+  // Create date with millisecond precision
+  const date = new Date(now);
+
+  // Get ISO string and inject microseconds
+  // ISO format: 2025-10-27T04:28:42.836Z
+  // We want:    2025-10-27T04:28:42.836234Z
+  const isoString = date.toISOString();
+  const dotIndex = isoString.indexOf('.');
+  const beforeDot = isoString.substring(0, dotIndex + 1);
+  const millisStr = isoString.substring(dotIndex + 1, dotIndex + 4);
+  const microsStr = String(microseconds).padStart(6, '0').substring(3, 6);
+
+  return `${beforeDot}${millisStr}${microsStr}Z`;
+};
+
+/**
  * Main Raceway SDK class with plug-and-play architecture
  */
 export class Raceway {
@@ -367,6 +393,7 @@ export class Raceway {
         LockAcquire: {
           lock_id: lockId,
           lock_type: lockType,
+          location: location,
         },
       },
       location
@@ -397,6 +424,7 @@ export class Raceway {
         LockRelease: {
           lock_id: lockId,
           lock_type: lockType,
+          location: location,
         },
       },
       location
@@ -515,7 +543,7 @@ export class Raceway {
       id: uuidv4(),
       trace_id: traceId,
       parent_id: parentId,
-      timestamp: new Date().toISOString(),
+      timestamp: getHighResolutionTimestamp(),
       kind,
       metadata: this.buildMetadata(durationNs),
       causality_vector: causalityVector,
@@ -578,7 +606,7 @@ export class Raceway {
       process_id: process.pid,
       service_name: this.config.serviceName,
       environment: this.config.environment,
-      tags: { ...this.config.tags },
+      tags: { sdk_language: 'typescript', ...this.config.tags },
       duration_ns: durationNs !== undefined ? durationNs : null,
       // Phase 2: Distributed tracing fields
       // Always set distributed metadata when we have a context (not gated by distributed flag)
@@ -669,7 +697,7 @@ export class Raceway {
       id: uuidv4(),
       trace_id: uuidv4(),
       parent_id: null,
-      timestamp: new Date().toISOString(),
+      timestamp: getHighResolutionTimestamp(),
       kind: { Custom: { name: 'dummy', data: {} } },
       metadata: {
         thread_id: '',

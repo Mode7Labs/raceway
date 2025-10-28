@@ -117,6 +117,7 @@ export interface CustomEvent {
 export interface LockAcquireEvent {
   lock_id: string;
   lock_type: string;
+  location: string;
 }
 
 /**
@@ -125,6 +126,7 @@ export interface LockAcquireEvent {
 export interface LockReleaseEvent {
   lock_id: string;
   lock_type: string;
+  location: string;
 }
 
 /**

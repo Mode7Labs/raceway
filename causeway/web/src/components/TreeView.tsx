@@ -2,8 +2,9 @@ import { useState, useMemo } from 'react';
 import { type Event } from '../types';
 import { cn } from '@/lib/utils';
 import { Badge } from './ui/badge';
-import { getEventKindColor } from '@/lib/event-colors';
 import { ChevronDown, ChevronRight, Clock, Layers } from 'lucide-react';
+import { ServiceBadge } from './ServiceBadge';
+import { EventKindBadge } from './EventKindBadge';
 
 interface TreeViewProps {
   events: Event[];
@@ -62,6 +63,20 @@ export function TreeView({ events, selectedEventId, onEventSelect }: TreeViewPro
         if (key === 'FunctionCall') {
           const funcName = value.function_name || value.name || 'unknown';
           return `FunctionCall | ${funcName}`;
+        }
+
+        // For LockAcquire, show lock type and lock ID
+        if (key === 'LockAcquire') {
+          const lockType = value.lock_type || 'Mutex';
+          const lockId = value.lock_id || 'unknown';
+          return `LockAcquire | ${lockType} | ${lockId}`;
+        }
+
+        // For LockRelease, show lock type and lock ID
+        if (key === 'LockRelease') {
+          const lockType = value.lock_type || 'Mutex';
+          const lockId = value.lock_id || 'unknown';
+          return `LockRelease | ${lockType} | ${lockId}`;
         }
 
         // Default: show key::subkey if there are nested keys
@@ -280,7 +295,6 @@ export function TreeView({ events, selectedEventId, onEventSelect }: TreeViewPro
     const isSelected = node.event.id === selectedEventId;
     const isCollapsed = collapsed.has(node.event.id);
     const hasChildren = node.children.length > 0;
-    const eventKind = getEventKind(node.event.kind);
     const timestamp = formatTimestamp(node.event.timestamp);
 
     const elements: JSX.Element[] = [
@@ -320,7 +334,7 @@ export function TreeView({ events, selectedEventId, onEventSelect }: TreeViewPro
             </span>
           )}
           <span className="text-muted-foreground text-[11px]">{timestamp}</span>
-          <span className={cn(getEventKindColor(eventKind))}>{eventKind}</span>
+          <EventKindBadge eventKind={node.event.kind} />
           {hasChildren && (
             <Badge variant="outline" className="text-[10px] text-yellow-400/90 border-yellow-500/20 bg-yellow-500/5">
               {node.children.length}
@@ -384,9 +398,10 @@ export function TreeView({ events, selectedEventId, onEventSelect }: TreeViewPro
                 {/* Metadata */}
                 <div className="flex items-center gap-2 flex-shrink-0">
                   {/* Service Badge */}
-                  <Badge variant="outline" className="text-[10px] font-mono bg-cyan-500/10 text-cyan-400 border-cyan-500/30">
-                    {group.service}
-                  </Badge>
+                  <ServiceBadge
+                    serviceName={group.service}
+                    tags={group.rootEvent.metadata.tags}
+                  />
 
                   {/* Event Count */}
                   <Badge variant="outline" className="text-[10px] text-muted-foreground">

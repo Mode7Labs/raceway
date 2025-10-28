@@ -324,6 +324,87 @@ impl RacewayClient {
             .ok();
     }
 
+    /// Track acquiring a lock.
+    /// Location is automatically captured from the call site.
+    pub fn track_lock_acquire(&self, lock_id: &str, lock_type: &str) {
+        RACEWAY_CONTEXT
+            .try_with(|ctx_cell| {
+                let ctx = ctx_cell.borrow().clone();
+                let location = format!("{}:{}", file!(), line!());
+
+                let updated_vector =
+                    increment_clock_vector(&ctx.clock_vector, &ctx.service_name, &ctx.instance_id);
+
+                let distributed_metadata = Some((
+                    ctx.instance_id.clone(),
+                    ctx.span_id.clone(),
+                    ctx.parent_span_id.clone(),
+                ));
+
+                let event_id = self.capture_event(
+                    &ctx.trace_id,
+                    ctx.parent_id.clone(),
+                    updated_vector.clone(),
+                    EventKind::LockAcquire(crate::types::LockAcquireData {
+                        lock_id: lock_id.to_string(),
+                        lock_type: lock_type.to_string(),
+                        location,
+                    }),
+                    None,
+                    distributed_metadata,
+                );
+
+                // Update context
+                let mut ctx_mut = ctx_cell.borrow_mut();
+                if ctx_mut.root_id.is_none() {
+                    ctx_mut.root_id = Some(event_id.clone());
+                }
+                ctx_mut.parent_id = Some(event_id);
+                ctx_mut.clock += 1;
+                ctx_mut.clock_vector = updated_vector;
+            })
+            .ok();
+    }
+
+    /// Track releasing a lock.
+    /// Location is automatically captured from the call site.
+    pub fn track_lock_release(&self, lock_id: &str, lock_type: &str) {
+        RACEWAY_CONTEXT
+            .try_with(|ctx_cell| {
+                let ctx = ctx_cell.borrow().clone();
+                let location = format!("{}:{}", file!(), line!());
+
+                let updated_vector =
+                    increment_clock_vector(&ctx.clock_vector, &ctx.service_name, &ctx.instance_id);
+
+                let distributed_metadata = Some((
+                    ctx.instance_id.clone(),
+                    ctx.span_id.clone(),
+                    ctx.parent_span_id.clone(),
+                ));
+
+                let event_id = self.capture_event(
+                    &ctx.trace_id,
+                    ctx.parent_id.clone(),
+                    updated_vector.clone(),
+                    EventKind::LockRelease(crate::types::LockReleaseData {
+                        lock_id: lock_id.to_string(),
+                        lock_type: lock_type.to_string(),
+                        location,
+                    }),
+                    None,
+                    distributed_metadata,
+                );
+
+                // Update context
+                let mut ctx_mut = ctx_cell.borrow_mut();
+                ctx_mut.parent_id = Some(event_id);
+                ctx_mut.clock += 1;
+                ctx_mut.clock_vector = updated_vector;
+            })
+            .ok();
+    }
+
     pub fn propagation_headers(
         &self,
         extra: Option<HashMap<String, String>>,
@@ -406,7 +487,11 @@ impl RacewayClient {
                 process_id: std::process::id(),
                 service_name: self.service_name.clone(),
                 environment: "development".to_string(),
-                tags: HashMap::new(),
+                tags: {
+                    let mut tags = HashMap::new();
+                    tags.insert("sdk_language".to_string(), "rust".to_string());
+                    tags
+                },
                 duration_ns,
                 // Phase 2: Distributed tracing fields
                 instance_id,

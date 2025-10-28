@@ -1,0 +1,28 @@
+# Include documentation
+include README.md
+include LICENSE
+include CONTRIBUTING.md
+include DECORATOR-GUIDE.md
+
+# Include configuration files
+include pyproject.toml
+include setup.py
+include setup.cfg
+
+# Exclude development files
+exclude .gitignore
+exclude pytest.ini
+exclude .coverage
+exclude tox.ini
+exclude .python-version
+
+# Exclude tests
+recursive-exclude tests *
+recursive-exclude tests .*
+
+# Exclude build artifacts
+global-exclude __pycache__
+global-exclude *.py[co]
+global-exclude *.so
+global-exclude .DS_Store
+global-exclude *.egg-info

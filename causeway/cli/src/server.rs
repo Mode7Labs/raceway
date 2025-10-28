@@ -2,7 +2,7 @@ use anyhow::Result;
 use axum::{
     body::Body,
     extract::{ConnectInfo, Path, Query, State},
-    http::{HeaderMap, Method, Request, StatusCode},
+    http::{HeaderMap, HeaderValue, Method, Request, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Json, Response},
     routing::{get, post},
@@ -20,7 +20,7 @@ use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::num::NonZeroU32;
 use std::sync::Arc;
-use tower_http::cors::{Any, CorsLayer};
+use tower_http::cors::{AllowOrigin, Any, CorsLayer};
 use uuid::Uuid;
 #[derive(Clone)]
 struct AppState {
@@ -228,7 +228,7 @@ pub fn build_router(config: &Config, engine: Arc<RacewayEngine>) -> Router {
     };
     let auth_state = state.clone();
 
-    Router::new()
+    let router = Router::new()
         .route("/", get(root_handler))
         .route("/health", get(health_handler))
         .route("/status", get(status_handler))
@@ -237,6 +237,22 @@ pub fn build_router(config: &Config, engine: Arc<RacewayEngine>) -> Router {
         .route(
             "/api/traces/:trace_id",
             get(get_full_trace_analysis_handler),
+        )
+        .route(
+            "/api/traces/:trace_id/audit-trail/:variable",
+            get(get_audit_trail_handler),
+        )
+        .route(
+            "/api/traces/:trace_id/critical-path",
+            get(get_critical_path_handler),
+        )
+        .route(
+            "/api/traces/:trace_id/anomalies",
+            get(get_anomalies_handler),
+        )
+        .route(
+            "/api/traces/:trace_id/dependencies",
+            get(get_dependencies_handler),
         )
         .route("/api/analyze/global", get(analyze_global_handler))
         .route("/api/services", get(list_services_handler))
@@ -263,8 +279,13 @@ pub fn build_router(config: &Config, engine: Arc<RacewayEngine>) -> Router {
             get(get_system_hotspots_handler),
         )
         .layer(middleware::from_fn_with_state(auth_state, auth_middleware))
-        .layer(build_cors(config))
-        .with_state(state)
+        .with_state(state);
+
+    if let Some(cors_layer) = build_cors_layer(config) {
+        router.layer(cors_layer)
+    } else {
+        router
+    }
 }
 
 async fn auth_middleware(
@@ -341,27 +362,50 @@ fn extract_client_identifier(
     "anonymous".to_string()
 }
 
-fn build_cors(config: &Config) -> CorsLayer {
-    if config.server.cors_enabled {
-        if config.development.cors_allow_all
-            || config.server.cors_origins.contains(&"*".to_string())
-        {
-            CorsLayer::new()
-                .allow_origin(Any)
-                .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
-                .allow_headers(Any)
-        } else {
-            CorsLayer::new()
-                .allow_origin(Any)
-                .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
-                .allow_headers(Any)
-        }
-    } else {
-        CorsLayer::new()
-            .allow_origin(Any)
-            .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
-            .allow_headers(Any)
+fn build_cors_layer(config: &Config) -> Option<CorsLayer> {
+    if !config.server.cors_enabled {
+        return None;
     }
+
+    if config.development.cors_allow_all
+        || config
+            .server
+            .cors_origins
+            .iter()
+            .any(|origin| origin == "*")
+    {
+        return Some(
+            CorsLayer::new()
+                .allow_origin(Any)
+                .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
+                .allow_headers(Any),
+        );
+    }
+
+    let allowed_origins: Vec<HeaderValue> = config
+        .server
+        .cors_origins
+        .iter()
+        .filter_map(|origin| match HeaderValue::from_str(origin) {
+            Ok(value) => Some(value),
+            Err(err) => {
+                tracing::warn!("Ignoring invalid CORS origin '{}': {}", origin, err);
+                None
+            }
+        })
+        .collect();
+
+    if allowed_origins.is_empty() {
+        tracing::warn!("CORS enabled but no valid origins configured; skipping CORS layer");
+        return None;
+    }
+
+    Some(
+        CorsLayer::new()
+            .allow_origin(AllowOrigin::list(allowed_origins))
+            .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
+            .allow_headers(Any),
+    )
 }
 
 async fn root_handler() -> impl IntoResponse {
@@ -626,24 +670,15 @@ async fn analyze_global_handler(
         .await
     {
         Ok(concurrent) => {
-            // Get counts directly from storage
-            let all_events = state
-                .engine
-                .storage()
-                .get_all_events()
-                .await
-                .unwrap_or_default();
-            let all_traces = state
-                .engine
-                .storage()
-                .get_all_trace_ids()
-                .await
-                .unwrap_or_default();
-
             let mut anomalies = Vec::new();
             let mut race_details = Vec::new();
+            const MAX_RACE_DETAILS: usize = 100;
 
             for (event1, event2) in &concurrent {
+                if race_details.len() >= MAX_RACE_DETAILS {
+                    break;
+                }
+
                 if let (
                     raceway_core::event::EventKind::StateChange {
                         variable: var1,
@@ -725,13 +760,24 @@ async fn analyze_global_handler(
             if !race_details.is_empty() {
                 anomalies.push(format!(
                     "🌐 GLOBAL: Found {} pairs of concurrent events across all traces",
-                    race_details.len()
+                    concurrent.len()
                 ));
+                if concurrent.len() > race_details.len() {
+                    anomalies.push(format!(
+                        "   Showing first {} race pairs ({} total)",
+                        race_details.len(),
+                        concurrent.len()
+                    ));
+                }
             }
 
+            // Fetch aggregate counts without loading entire datasets
+            let total_events = state.engine.storage().count_events().await.unwrap_or(0);
+            let total_traces = state.engine.storage().count_traces().await.unwrap_or(0);
+
             let analysis = GlobalAnalysis {
-                total_traces: all_traces.len(),
-                total_events: all_events.len(),
+                total_traces,
+                total_events,
                 concurrent_events: concurrent.len(),
                 potential_races: concurrent.len(),
                 anomalies,
@@ -1043,139 +1089,6 @@ async fn get_full_trace_analysis_handler(
     };
 
     Ok((StatusCode::OK, Json(ApiResponse::success(response))))
-}
-
-async fn analyze_trace_handler(
-    State(state): State<AppState>,
-    Path(trace_id): Path<String>,
-) -> Result<impl IntoResponse, (StatusCode, Json<ApiResponse<String>>)> {
-    let trace_uuid = Uuid::parse_str(&trace_id).map_err(|_| {
-        (
-            StatusCode::BAD_REQUEST,
-            Json(ApiResponse::error("Invalid trace ID format".to_string())),
-        )
-    })?;
-
-    // Use storage backend directly
-    let concurrent = state
-        .engine
-        .analysis()
-        .find_concurrent_events(trace_uuid)
-        .await
-        .unwrap_or_default();
-
-    #[derive(Serialize)]
-    struct RaceDetail {
-        severity: String,
-        variable: String,
-        event1_thread: String,
-        event2_thread: String,
-        event1_location: String,
-        event2_location: String,
-        description: String,
-    }
-
-    #[derive(Serialize)]
-    struct Analysis {
-        trace_id: String,
-        concurrent_events: usize,
-        potential_races: usize,
-        anomalies: Vec<String>,
-        race_details: Vec<RaceDetail>,
-    }
-
-    let mut anomalies = Vec::new();
-    let mut race_details = Vec::new();
-
-    for (event1, event2) in &concurrent {
-        use raceway_core::event::{AccessType, EventKind};
-
-        if let (
-            EventKind::StateChange {
-                variable: var1,
-                old_value: _old1,
-                new_value: _new1,
-                location: loc1,
-                access_type: access1,
-            },
-            EventKind::StateChange {
-                variable: var2,
-                old_value: _old2,
-                new_value: _new2,
-                location: loc2,
-                access_type: access2,
-            },
-        ) = (&event1.kind, &event2.kind)
-        {
-            if var1 != var2 {
-                continue;
-            }
-
-            let is_write1 = matches!(
-                access1,
-                AccessType::Write | AccessType::AtomicWrite | AccessType::AtomicRMW
-            );
-            let is_write2 = matches!(
-                access2,
-                AccessType::Write | AccessType::AtomicWrite | AccessType::AtomicRMW
-            );
-
-            let (severity, description) = if is_write1 && is_write2 {
-                (
-                    "CRITICAL",
-                    format!(
-                        "Write-Write race on {}. Both threads modified the same variable without synchronization.",
-                        var1
-                    ),
-                )
-            } else if is_write1 || is_write2 {
-                (
-                    "WARNING",
-                    format!(
-                        "Read-Write race on {}. One thread read while another wrote.",
-                        var1
-                    ),
-                )
-            } else {
-                (
-                    "INFO",
-                    format!(
-                        "Concurrent reads on {}. Generally safe but indicates potential race.",
-                        var1
-                    ),
-                )
-            };
-
-            race_details.push(RaceDetail {
-                severity: severity.to_string(),
-                variable: var1.clone(),
-                event1_thread: event1.metadata.thread_id.clone(),
-                event2_thread: event2.metadata.thread_id.clone(),
-                event1_location: loc1.clone(),
-                event2_location: loc2.clone(),
-                description,
-            });
-        }
-    }
-
-    if race_details.is_empty() {
-        anomalies.push("No evident race conditions for this trace".to_string());
-    } else {
-        anomalies.push(format!(
-            "Found {} pairs of concurrent events - potential race conditions",
-            race_details.len()
-        ));
-    }
-
-    let analysis = Analysis {
-        trace_id,
-        concurrent_events: concurrent.len(),
-        potential_races: race_details.len(),
-        anomalies,
-        race_details,
-    };
-
-    Ok((StatusCode::OK, Json(ApiResponse::success(analysis))))
 }
 
 async fn get_critical_path_handler(
@@ -1556,191 +1469,6 @@ async fn get_performance_metrics_handler(
         })?;
 
     Ok((StatusCode::OK, Json(ApiResponse::success(metrics))))
-}
-
-async fn get_distributed_trace_analysis_handler(
-    State(state): State<AppState>,
-    Path(trace_id): Path<String>,
-) -> Result<impl IntoResponse, (StatusCode, Json<ApiResponse<String>>)> {
-    let trace_uuid = Uuid::parse_str(&trace_id).map_err(|_| {
-        (
-            StatusCode::BAD_REQUEST,
-            Json(ApiResponse::error("Invalid trace ID format".to_string())),
-        )
-    })?;
-
-    #[derive(Serialize)]
-    struct ServiceStats {
-        name: String,
-        event_count: usize,
-        total_duration_ms: f64,
-    }
-
-    #[derive(Serialize)]
-    struct ServiceBreakdown {
-        services: Vec<ServiceStats>,
-        cross_service_calls: usize,
-        total_services: usize,
-    }
-
-    #[derive(Serialize)]
-    struct CriticalPathSummary {
-        total_duration_ms: f64,
-        trace_total_duration_ms: f64,
-        percentage_of_total: f64,
-        path_events: usize,
-    }
-
-    #[derive(Serialize)]
-    struct RaceConditionSummary {
-        total_races: usize,
-        critical_races: usize,
-        warning_races: usize,
-    }
-
-    #[derive(Serialize)]
-    struct DistributedTraceAnalysis {
-        trace_id: String,
-        service_breakdown: ServiceBreakdown,
-        critical_path: Option<CriticalPathSummary>,
-        race_conditions: RaceConditionSummary,
-        is_distributed: bool,
-    }
-
-    // Get service dependencies
-    let dependencies = state
-        .engine
-        .analysis()
-        .get_service_dependencies(trace_uuid)
-        .await
-        .map_err(|e| {
-            (
-                StatusCode::NOT_FOUND,
-                Json(ApiResponse::error(format!(
-                    "Failed to analyze trace: {}",
-                    e
-                ))),
-            )
-        })?;
-
-    // Get all events for the trace to calculate durations
-    let events = state
-        .engine
-        .storage()
-        .get_trace_events(trace_uuid)
-        .await
-        .unwrap_or_default();
-
-    // Calculate total duration per service
-    let mut service_durations: HashMap<String, f64> = HashMap::new();
-    for event in &events {
-        let service_name = &event.metadata.service_name;
-        if !service_name.is_empty() {
-            let duration_ms = event.metadata.duration_ns.unwrap_or(0) as f64 / 1_000_000.0;
-            *service_durations.entry(service_name.clone()).or_insert(0.0) += duration_ms;
-        }
-    }
-
-    // Build service stats
-    let mut service_stats: Vec<ServiceStats> = dependencies
-        .services
-        .iter()
-        .map(|s| ServiceStats {
-            name: s.name.clone(),
-            event_count: s.event_count,
-            total_duration_ms: *service_durations.get(&s.name).unwrap_or(&0.0),
-        })
-        .collect();
-
-    // Sort by duration for useful ordering
-    service_stats.sort_by(|a, b| {
-        b.total_duration_ms
-            .partial_cmp(&a.total_duration_ms)
-            .unwrap_or(std::cmp::Ordering::Equal)
-    });
-
-    let service_breakdown = ServiceBreakdown {
-        total_services: dependencies.services.len(),
-        cross_service_calls: dependencies.dependencies.len(),
-        services: service_stats,
-    };
-
-    // Get critical path
-    let critical_path = if let Ok(cp) = state.engine.analysis().get_critical_path(trace_uuid).await
-    {
-        Some(CriticalPathSummary {
-            total_duration_ms: cp.total_duration_ms,
-            trace_total_duration_ms: cp.trace_total_duration_ms,
-            percentage_of_total: cp.percentage_of_total,
-            path_events: cp.path.len(),
-        })
-    } else {
-        None
-    };
-
-    // Analyze race conditions
-    let concurrent = state
-        .engine
-        .analysis()
-        .find_concurrent_events(trace_uuid)
-        .await
-        .unwrap_or_default();
-
-    let mut critical_races = 0;
-    let mut warning_races = 0;
-
-    for (event1, event2) in &concurrent {
-        use raceway_core::event::{AccessType, EventKind};
-
-        if let (
-            EventKind::StateChange {
-                variable: var1,
-                access_type: access1,
-                ..
-            },
-            EventKind::StateChange {
-                variable: var2,
-                access_type: access2,
-                ..
-            },
-        ) = (&event1.kind, &event2.kind)
-        {
-            if var1 == var2 {
-                let is_write1 = matches!(
-                    access1,
-                    AccessType::Write | AccessType::AtomicWrite | AccessType::AtomicRMW
-                );
-                let is_write2 = matches!(
-                    access2,
-                    AccessType::Write | AccessType::AtomicWrite | AccessType::AtomicRMW
-                );
-
-                if is_write1 && is_write2 {
-                    critical_races += 1;
-                } else if is_write1 || is_write2 {
-                    warning_races += 1;
-                }
-            }
-        }
-    }
-
-    let race_conditions = RaceConditionSummary {
-        total_races: concurrent.len(),
-        critical_races,
-        warning_races,
-    };
-
-    let is_distributed = dependencies.services.len() > 1;
-
-    let response = DistributedTraceAnalysis {
-        trace_id,
-        service_breakdown,
-        critical_path,
-        race_conditions,
-        is_distributed,
-    };
-
-    Ok((StatusCode::OK, Json(ApiResponse::success(response))))
 }
 
 async fn get_distributed_edges_handler(
