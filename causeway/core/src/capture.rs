@@ -41,23 +41,6 @@ impl EventCapture {
     }
 }
 
-/// Macro for easy event capture
-#[macro_export]
-macro_rules! capture_event {
-    ($capture:expr, $kind:expr, $trace:expr) => {{
-        let metadata = EventMetadata {
-            thread_id: format!("{:?}", std::thread::current().id()),
-            process_id: std::process::id(),
-            service_name: env!("CARGO_PKG_NAME").to_string(),
-            environment: std::env::var("ENV").unwrap_or_else(|_| "development".to_string()),
-            tags: std::collections::HashMap::new(),
-            duration_ns: None,
-        };
-        let event = Event::new($kind, metadata, $trace.trace_id, $trace.current_span_id);
-        $capture.capture(event)
-    }};
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

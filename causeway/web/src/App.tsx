@@ -6,6 +6,7 @@ import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts';
 import { TraceList } from './components/TraceList';
 import { ServiceList } from './components/ServiceList';
 import { EventsTabWithSwitcher } from './components/EventsTabWithSwitcher';
+import { CausalDebuggerView } from './components/features/debugger/CausalDebuggerView';
 import { CriticalPathView } from './components/CriticalPathView';
 import { DependenciesView } from './components/DependenciesView';
 import { AuditTrailView } from './components/AuditTrailView';
@@ -704,6 +705,9 @@ export default function App() {
                 <TabsTrigger value="overview" className="rounded-none border-b border-transparent px-4 py-2.5 text-xs">
                   Overview
                 </TabsTrigger>
+                <TabsTrigger value="debugger" className="rounded-none border-b border-transparent px-4 py-2.5 text-xs">
+                  Debugger
+                </TabsTrigger>
                 <TabsTrigger value="events" className="rounded-none border-b border-transparent px-4 py-2.5 text-xs flex items-center gap-1.5">
                   Events
                   {events.length > 0 && (
@@ -763,6 +767,11 @@ export default function App() {
                       raceCount={raceCount}
                       onNavigate={(tab) => navigate(selectedTraceId ? (tab === 'overview' ? `/traces/${selectedTraceId}` : `/traces/${selectedTraceId}/${tab}`) : '/')}
                     />
+                  </TabsContent>
+                  <TabsContent value="debugger" className="h-full m-0 p-0">
+                    <div className="h-[calc(100dvh-5.5rem)] p-6">
+                      <CausalDebuggerView events={events} />
+                    </div>
                   </TabsContent>
                   <TabsContent value="events" className="h-full m-0 p-0">
                     <EventsTabWithSwitcher

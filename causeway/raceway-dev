@@ -150,9 +150,9 @@ action_start_dev_env() {
   (
     cd "${SCRIPT_DIR}/web"
     if [[ "${pkg_manager}" == "pnpm" ]]; then
-      pnpm run dev -- --port 3005 &
+      pnpm run dev -- --host 127.0.0.1 --port 3005 &
     else
-      npm run dev -- -- --port 3005 &
+      npm run dev -- --host 127.0.0.1 --port 3005 &
     fi
   )
   WEB_PID=$!
@@ -433,7 +433,12 @@ action_tui() {
 }
 
 action_web() {
-  kill_processes_on_port 3005
+  printf "${DIM}Cleaning up port 3005...${RESET}\n"
+  kill_processes_on_port 3005 || true
+
+  # Small delay to ensure process is fully stopped
+  sleep 1
+
   local pkg_manager
   if command -v pnpm >/dev/null 2>&1; then
     pkg_manager="pnpm"
@@ -442,16 +447,51 @@ action_web() {
     pkg_manager="npm"
   fi
 
-  local command
-  if [[ "${pkg_manager}" == "pnpm" ]]; then
-    command="pnpm run dev -- --port 3005"
-  else
-    command="npm run dev -- -- --port 3005"
-  fi
+  local log_file="${SCRIPT_DIR}/web/.devserver.log"
 
-  run_step "${ICON_WEB} Starting Web UI (${pkg_manager} on port 3005)" \
-    "${command}" \
-    "${SCRIPT_DIR}/web"
+  printf "\n${CYAN}${BOLD}${ICON_WEB} Starting Web UI${RESET}\n"
+  printf "${DIM}→ cd ${SCRIPT_DIR}/web && ${pkg_manager} run dev -- --host 127.0.0.1 --port 3005 &${RESET}\n\n"
+
+  # Start web UI in background
+  (
+    cd "${SCRIPT_DIR}/web"
+    if [[ "${pkg_manager}" == "pnpm" ]]; then
+      pnpm run dev -- --host 127.0.0.1 --port 3005 >"${log_file}" 2>&1 &
+    else
+      npm run dev -- --host 127.0.0.1 --port 3005 >"${log_file}" 2>&1 &
+    fi
+    WEB_PID=$!
+    echo "${WEB_PID}" > "${SCRIPT_DIR}/web/.devserver.pid"
+  )
+
+  sleep 2
+
+  # Check if web UI started successfully
+  if command -v lsof >/dev/null 2>&1; then
+    if lsof -i :3005 >/dev/null 2>&1; then
+      printf "${GREEN}${BOLD}✓ Web UI started successfully!${RESET}\n"
+      if [[ -f "${SCRIPT_DIR}/web/.devserver.pid" ]]; then
+        local saved_pid
+        saved_pid=$(cat "${SCRIPT_DIR}/web/.devserver.pid")
+        printf "${DIM}PID: ${saved_pid}${RESET}\n"
+      fi
+      printf "${DIM}Listening on: http://localhost:3005${RESET}\n"
+      printf "${DIM}Logs: ${log_file}${RESET}\n\n"
+      printf "${YELLOW}To view logs: tail -f ${log_file}${RESET}\n"
+      printf "${YELLOW}To stop: pkill -f 'vite'${RESET}\n"
+    else
+      printf "${RED}${BOLD}✗ Web UI failed to start${RESET}\n"
+      printf "${YELLOW}Check logs: tail ${log_file}${RESET}\n"
+      if [[ -f "${log_file}" ]]; then
+        printf "\n${YELLOW}${BOLD}Last 20 lines of log:${RESET}\n"
+        tail -n 20 "${log_file}" 2>/dev/null || true
+      fi
+      return 1
+    fi
+  else
+    printf "${YELLOW}⚠️  Unable to verify Web UI status (lsof not installed).${RESET}\n"
+    printf "${DIM}Check ${log_file} for startup output.${RESET}\n"
+  fi
 }
 
 action_restart_server() {

@@ -288,7 +288,7 @@ export interface ServiceDependencyInfo {
 export type SidebarMode = 'system' | 'traces';
 export type SystemViewMode = 'insights' | 'services';
 export type InsightsViewMode = 'dashboard' | 'dependency-graph' | 'performance' | 'health' | 'hotspots' | 'races';
-export type ViewMode = 'overview' | 'events' | 'performance' | 'variables' | 'anomalies';
+export type ViewMode = 'overview' | 'debugger' | 'events' | 'performance' | 'variables' | 'anomalies';
 export type ServiceViewMode = 'overview' | 'traces' | 'dependencies' | 'performance';
 
 export interface AppState {

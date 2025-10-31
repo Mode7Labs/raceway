@@ -497,24 +497,24 @@ async fn health_handler(State(state): State<AppState>) -> impl IntoResponse {
 
 async fn status_handler(State(state): State<AppState>) -> impl IntoResponse {
     // Get counts directly from storage
-    let all_events = state
+    let event_count = state
         .engine
         .storage()
-        .get_all_events()
+        .count_events()
         .await
-        .unwrap_or_default();
-    let all_traces = state
+        .unwrap_or(0);
+    let trace_count = state
         .engine
         .storage()
-        .get_all_trace_ids()
+        .count_traces()
         .await
-        .unwrap_or_default();
+        .unwrap_or(0);
 
     let status = ServerStatus {
         version: env!("CARGO_PKG_VERSION").to_string(),
         uptime_seconds: 0,
-        events_captured: all_events.len(),
-        traces_active: all_traces.len(),
+        events_captured: event_count,
+        traces_active: trace_count,
         warmup: state.engine.analysis().warmup_status().await.into(),
     };
 
