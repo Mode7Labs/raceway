@@ -28,7 +28,6 @@ interface TimelineEvent {
 
 export function TimelineView({ events, selectedEventId, onEventSelect }: TimelineViewProps) {
   const [zoomLevel, setZoomLevel] = useState(2);
-  const [scrollPosition, setScrollPosition] = useState(0);
   const [mode, setMode] = useState<TimelineMode>('threads');
 
   // Assign events to rows to avoid visual overlap
@@ -68,9 +67,9 @@ export function TimelineView({ events, selectedEventId, onEventSelect }: Timelin
     });
   };
 
-  const { timelineData, threads, minTime, maxTime, totalDuration, threadRowCounts } = useMemo(() => {
+  const { timelineData, threads, minTime, maxTime, threadRowCounts } = useMemo(() => {
     if (events.length === 0) {
-      return { timelineData: [], threads: [], minTime: 0, maxTime: 0, totalDuration: 0, threadRowCounts: new Map<string, number>() };
+      return { timelineData: [], threads: [], minTime: 0, maxTime: 0, threadRowCounts: new Map<string, number>() };
     }
 
     // Parse timestamps and extract threads
@@ -129,7 +128,7 @@ export function TimelineView({ events, selectedEventId, onEventSelect }: Timelin
       threadRowCounts.set(thread, maxRow + 1);
     });
 
-    return { timelineData, threads, minTime, maxTime, totalDuration, threadRowCounts };
+    return { timelineData, threads, minTime, maxTime, threadRowCounts };
   }, [events]);
 
   const getEventKind = (kind: Record<string, any>): string => {
@@ -223,7 +222,7 @@ export function TimelineView({ events, selectedEventId, onEventSelect }: Timelin
     return overlaps;
   };
 
-  const hasOverlaps = threads.some(thread => getOverlappingEvents(thread).length > 0);
+  // const hasOverlaps = threads.some(thread => getOverlappingEvents(thread).length > 0);
 
   if (events.length === 0) {
     return (

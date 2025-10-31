@@ -278,14 +278,15 @@ export function ServiceDependencyGraph({ services }: ServiceDependencyGraphProps
     g.attr('transform', `translate(100, 50)`);
 
     // Create links
+    const linkGenerator = d3.linkHorizontal<any, any>()
+      .x((d: any) => d.y)
+      .y((d: any) => d.x);
+
     g.selectAll('.link')
       .data(root.links())
       .join('path')
       .attr('class', 'link')
-      .attr('d', d3.linkHorizontal()
-        .x((d: any) => d.y)
-        .y((d: any) => d.x)
-      )
+      .attr('d', (d: any) => linkGenerator(d))
       .attr('fill', 'none')
       .attr('stroke', '#64748b')
       .attr('stroke-width', 2);

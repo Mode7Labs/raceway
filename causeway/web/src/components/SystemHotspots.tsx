@@ -116,7 +116,7 @@ export function SystemHotspots({ onNavigateToService, onNavigateToVariable }: Sy
                           className="text-sm font-mono font-medium text-foreground/90"
                         />
                         {index === 0 && (
-                          <Flame className="w-3.5 h-3.5 text-orange-400" title="Hottest" />
+                          <Flame className="w-3.5 h-3.5 text-orange-400" aria-label="Hottest" />
                         )}
                       </div>
                       <span className="text-xs px-2 py-0.5 rounded bg-orange-500/10 text-orange-400 border border-orange-500/20 font-mono">
@@ -196,7 +196,7 @@ export function SystemHotspots({ onNavigateToService, onNavigateToVariable }: Sy
                           />
                         </div>
                         {index === 0 && (
-                          <Flame className="w-3.5 h-3.5 text-cyan-400" title="Busiest path" />
+                          <Flame className="w-3.5 h-3.5 text-cyan-400" aria-label="Busiest path" />
                         )}
                       </div>
                       <span className="text-xs px-2 py-0.5 rounded bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 font-mono">

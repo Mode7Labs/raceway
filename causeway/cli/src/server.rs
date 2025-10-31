@@ -11,6 +11,7 @@ use axum::{
 use chrono::Local;
 use governor::{clock::DefaultClock, state::keyed::DefaultKeyedStateStore, Quota, RateLimiter};
 use raceway_core::analysis::{WarmupPhase, WarmupStatus};
+use raceway_core::cache::QueryCache;
 use raceway_core::engine::EngineConfig;
 use raceway_core::graph::{Anomaly, ServiceDependencies, VariableAccess};
 use raceway_core::storage::{TraceAnalysisData, TraceSummary};
@@ -20,6 +21,7 @@ use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::num::NonZeroU32;
 use std::sync::Arc;
+use std::time::Duration;
 use tower_http::cors::{AllowOrigin, Any, CorsLayer};
 use uuid::Uuid;
 #[derive(Clone)]
@@ -27,6 +29,7 @@ struct AppState {
     engine: Arc<RacewayEngine>,
     verbose: bool,
     auth: AuthConfig,
+    perf_metrics_cache: Arc<QueryCache<serde_json::Value>>,
 }
 
 #[derive(Clone)]
@@ -221,10 +224,15 @@ pub async fn init_engine(config: &Config) -> Result<Arc<RacewayEngine>> {
 
 pub fn build_router(config: &Config, engine: Arc<RacewayEngine>) -> Router {
     let auth = AuthConfig::from_server_config(&config.server);
+
+    // Create cache for performance metrics with 60 second TTL
+    let perf_metrics_cache = Arc::new(QueryCache::new(Duration::from_secs(60)));
+
     let state = AppState {
         engine,
         verbose: config.server.verbose,
         auth,
+        perf_metrics_cache,
     };
     let auth_state = state.clone();
 
@@ -1453,10 +1461,18 @@ async fn get_performance_metrics_handler(
         .and_then(|s| s.parse::<usize>().ok())
         .unwrap_or(50);
 
+    // Use cache to avoid expensive queries
     let metrics = state
-        .engine
-        .storage()
-        .get_performance_metrics(limit)
+        .perf_metrics_cache
+        .get_or_fetch(|| {
+            let storage = state.engine.storage().clone();
+            async move {
+                storage
+                    .get_performance_metrics(limit)
+                    .await
+                    .map(|metrics| serde_json::to_value(&metrics).unwrap_or(serde_json::Value::Null))
+            }
+        })
         .await
         .map_err(|e| {
             (

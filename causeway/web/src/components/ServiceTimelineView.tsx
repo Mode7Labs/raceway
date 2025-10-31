@@ -61,9 +61,9 @@ export function ServiceTimelineView({ events, selectedEventId, onEventSelect, zo
     });
   };
 
-  const { timelineData, services, minTime, maxTime, totalDuration, connections, serviceRowCounts } = useMemo(() => {
+  const { timelineData, services, minTime, maxTime, connections, serviceRowCounts } = useMemo(() => {
     if (events.length === 0) {
-      return { timelineData: [], services: [], minTime: 0, maxTime: 0, totalDuration: 0, connections: [], serviceRowCounts: new Map<string, number>() };
+      return { timelineData: [], services: [], minTime: 0, maxTime: 0, connections: [], serviceRowCounts: new Map<string, number>() };
     }
 
     // Parse timestamps and extract services
@@ -152,7 +152,7 @@ export function ServiceTimelineView({ events, selectedEventId, onEventSelect, zo
       serviceRowCounts.set(service, maxRow + 1);
     });
 
-    return { timelineData, services, minTime, maxTime, totalDuration, connections, serviceRowCounts };
+    return { timelineData, services, minTime, maxTime, connections, serviceRowCounts };
   }, [events]);
 
   const getEventKind = (kind: Record<string, any>): string => {
@@ -201,19 +201,19 @@ export function ServiceTimelineView({ events, selectedEventId, onEventSelect, zo
   };
 
   // Count cross-service calls
-  const crossServiceCalls = useMemo(() => {
-    const eventMap = new Map(events.map(e => [e.id, e]));
-    let count = 0;
-    events.forEach(event => {
-      if (event.parent_id) {
-        const parent = eventMap.get(event.parent_id);
-        if (parent && parent.metadata.service_name !== event.metadata.service_name) {
-          count++;
-        }
-      }
-    });
-    return count;
-  }, [events]);
+  // const crossServiceCalls = useMemo(() => {
+  //   const eventMap = new Map(events.map(e => [e.id, e]));
+  //   let count = 0;
+  //   events.forEach(event => {
+  //     if (event.parent_id) {
+  //       const parent = eventMap.get(event.parent_id);
+  //       if (parent && parent.metadata.service_name !== event.metadata.service_name) {
+  //         count++;
+  //       }
+  //     }
+  //   });
+  //   return count;
+  // }, [events]);
 
   // Identify bottlenecks (events with longest duration)
   const bottleneckThreshold = useMemo(() => {

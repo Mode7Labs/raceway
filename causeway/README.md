@@ -101,7 +101,7 @@ rate_limit_rpm = 600
 ### 1. Start the Server
 
 ```bash
-git clone https://github.com/yourusername/raceway
+git clone https://github.com/mode7labs/raceway
 cd raceway
 cargo build --release
 
@@ -199,7 +199,7 @@ raceway.trackStateChange('user.balance', oldValue, newValue, 'Write');
 
 **Go (Gin):**
 ```go
-import "github.com/mode-7/raceway-go"
+import "github.com/mode7labs/raceway/sdks/go"
 
 client := raceway.NewClient(raceway.Config{
     Endpoint:    "http://localhost:4242",
@@ -317,7 +317,7 @@ cargo test -p raceway-test
 ### SDKs
 - ✅ **Python** - `raceway` package, Flask/FastAPI middleware
 - ✅ **TypeScript/Node** - `@mode-7/raceway-node` package, Express middleware
-- ✅ **Go** - `github.com/mode-7/raceway-go`, Gin/net/http middleware
+- ✅ **Go** - `github.com/mode7labs/raceway/sdks/go`, Gin/net/http middleware
 - ✅ **Rust** - `raceway-sdk` crate, Axum/Actix support
 
 ### Event Types Supported
@@ -631,7 +631,7 @@ MIT License - see [LICENSE](LICENSE) for details.
 
 ## Community
 
-- **Issues**: https://github.com/yourusername/raceway/issues
+- **Issues**: https://github.com/mode7labs/raceway/issues
 - **Discussions**: Questions and ideas welcome
 - **Contributing**: See [CONTRIBUTING.md](CONTRIBUTING.md)
 

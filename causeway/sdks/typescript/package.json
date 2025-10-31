@@ -45,14 +45,13 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/mode-7/raceway"
+    "url": "https://github.com/mode7labs/raceway"
   },
   "files": [
     "dist/**/*",
     "LICENSE",
     "README.md",
     "INSTRUMENTATION-GUIDE.md",
-    "CONTRIBUTING.md",
-    "RELEASE-NOTES.md"
+    "CONTRIBUTING.md"
   ]
 }

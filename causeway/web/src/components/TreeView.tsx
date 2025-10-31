@@ -99,32 +99,33 @@ export function TreeView({ events, selectedEventId, onEventSelect }: TreeViewPro
     }
   };
 
-  const buildTree = (): TreeNode[] => {
-    const childrenMap = new Map<string, Event[]>();
-    const roots: Event[] = [];
+  // Unused - transactionGroups builds its own tree structure
+  // const buildTree = (): TreeNode[] => {
+  //   const childrenMap = new Map<string, Event[]>();
+  //   const roots: Event[] = [];
 
-    // Build parent-child relationships
-    for (const event of events) {
-      if (event.parent_id) {
-        const siblings = childrenMap.get(event.parent_id) || [];
-        siblings.push(event);
-        childrenMap.set(event.parent_id, siblings);
-      } else {
-        roots.push(event);
-      }
-    }
+  //   // Build parent-child relationships
+  //   for (const event of events) {
+  //     if (event.parent_id) {
+  //       const siblings = childrenMap.get(event.parent_id) || [];
+  //       siblings.push(event);
+  //       childrenMap.set(event.parent_id, siblings);
+  //     } else {
+  //       roots.push(event);
+  //     }
+  //   }
 
-    const buildNode = (event: Event, depth: number): TreeNode => {
-      const children = childrenMap.get(event.id) || [];
-      return {
-        event,
-        depth,
-        children: children.map((child) => buildNode(child, depth + 1)),
-      };
-    };
+  //   const buildNode = (event: Event, depth: number): TreeNode => {
+  //     const children = childrenMap.get(event.id) || [];
+  //     return {
+  //       event,
+  //       depth,
+  //       children: children.map((child) => buildNode(child, depth + 1)),
+  //     };
+  //   };
 
-    return roots.map((root) => buildNode(root, 0));
-  };
+  //   return roots.map((root) => buildNode(root, 0));
+  // };
 
   // Check if an event is an HTTP request (transaction root candidate)
   const isHttpRequest = (event: Event): boolean => {
@@ -358,8 +359,6 @@ export function TreeView({ events, selectedEventId, onEventSelect }: TreeViewPro
 
     return elements;
   };
-
-  const tree = buildTree();
 
   return (
     <div className="space-y-2">

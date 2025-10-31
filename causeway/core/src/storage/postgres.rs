@@ -310,7 +310,8 @@ impl StorageBackend for PostgresBackend {
 
         let total_count: i64 = count_row.get("total");
 
-        // Get paginated summaries
+        // Get paginated summaries with optimized query
+        // Pre-aggregate services in a subquery to avoid expensive ARRAY_AGG in main query
         let offset = (page.saturating_sub(1)) * page_size;
 
         let rows = sqlx::query(
@@ -320,14 +321,18 @@ impl StorageBackend for PostgresBackend {
                 COUNT(DISTINCT e.id) as event_count,
                 MIN(e.timestamp) as first_timestamp,
                 MAX(e.timestamp) as last_timestamp,
-                COALESCE(
-                    ARRAY_AGG(DISTINCT s.service ORDER BY s.service)
-                    FILTER (WHERE s.service IS NOT NULL),
-                    ARRAY[]::TEXT[]
-                ) as services
+                COALESCE(ds.services, ARRAY[]::TEXT[]) as services,
+                COALESCE(ds.service_count, 0) as service_count
             FROM events e
-            LEFT JOIN distributed_spans s ON e.trace_id = s.trace_id
-            GROUP BY e.trace_id
+            LEFT JOIN (
+                SELECT
+                    trace_id,
+                    ARRAY_AGG(DISTINCT service ORDER BY service) as services,
+                    COUNT(DISTINCT service) as service_count
+                FROM distributed_spans
+                GROUP BY trace_id
+            ) ds ON e.trace_id = ds.trace_id
+            GROUP BY e.trace_id, ds.services, ds.service_count
             ORDER BY MAX(e.timestamp) DESC
             LIMIT $1 OFFSET $2
             "#,
@@ -341,14 +346,14 @@ impl StorageBackend for PostgresBackend {
             .into_iter()
             .map(|row| {
                 let services: Vec<String> = row.get("services");
-                let service_count = services.len();
+                let service_count: i64 = row.get("service_count");
                 TraceSummary {
                     trace_id: row.get("trace_id"),
                     event_count: row.get("event_count"),
                     first_timestamp: row.get("first_timestamp"),
                     last_timestamp: row.get("last_timestamp"),
                     services,
-                    service_count,
+                    service_count: service_count as usize,
                 }
             })
             .collect();
@@ -377,7 +382,8 @@ impl StorageBackend for PostgresBackend {
 
         let total_count: i64 = count_row.get("total");
 
-        // Get paginated summaries filtered by service
+        // Get paginated summaries filtered by service with optimized query
+        // Pre-aggregate services in a subquery to avoid expensive ARRAY_AGG in main query
         let offset = (page.saturating_sub(1)) * page_size;
 
         let rows = sqlx::query(
@@ -387,16 +393,20 @@ impl StorageBackend for PostgresBackend {
                 COUNT(DISTINCT e.id) as event_count,
                 MIN(e.timestamp) as first_timestamp,
                 MAX(e.timestamp) as last_timestamp,
-                COALESCE(
-                    ARRAY_AGG(DISTINCT s2.service ORDER BY s2.service)
-                    FILTER (WHERE s2.service IS NOT NULL),
-                    ARRAY[]::TEXT[]
-                ) as services
+                COALESCE(ds.services, ARRAY[]::TEXT[]) as services,
+                COALESCE(ds.service_count, 0) as service_count
             FROM events e
             JOIN distributed_spans s ON e.trace_id = s.trace_id
-            LEFT JOIN distributed_spans s2 ON e.trace_id = s2.trace_id
+            LEFT JOIN (
+                SELECT
+                    trace_id,
+                    ARRAY_AGG(DISTINCT service ORDER BY service) as services,
+                    COUNT(DISTINCT service) as service_count
+                FROM distributed_spans
+                GROUP BY trace_id
+            ) ds ON e.trace_id = ds.trace_id
             WHERE s.service = $1
-            GROUP BY e.trace_id
+            GROUP BY e.trace_id, ds.services, ds.service_count
             ORDER BY MAX(e.timestamp) DESC
             LIMIT $2 OFFSET $3
             "#,
@@ -411,14 +421,14 @@ impl StorageBackend for PostgresBackend {
             .into_iter()
             .map(|row| {
                 let services: Vec<String> = row.get("services");
-                let service_count = services.len();
+                let service_count: i64 = row.get("service_count");
                 TraceSummary {
                     trace_id: row.get("trace_id"),
                     event_count: row.get("event_count"),
                     first_timestamp: row.get("first_timestamp"),
                     last_timestamp: row.get("last_timestamp"),
                     services,
-                    service_count,
+                    service_count: service_count as usize,
                 }
             })
             .collect();

@@ -13,7 +13,7 @@ Thank you for your interest in contributing to Raceway! This document outlines t
 
 ```bash
 # Clone the repository
-git clone https://github.com/mode-7/raceway.git
+git clone https://github.com/mode7labs/raceway.git
 cd raceway/sdks/go
 
 # Download dependencies
@@ -480,10 +480,10 @@ Each goroutine gets a unique ID: `go-<pid>-<counter>`
 
 ## 📚 Resources
 
-- [Main Raceway Repository](https://github.com/mode-7/raceway)
+- [Main Raceway Repository](https://github.com/mode7labs/raceway)
 - [Documentation](https://docs.raceway.dev)
-- [Issue Tracker](https://github.com/mode-7/raceway/issues)
-- [Discussions](https://github.com/mode-7/raceway/discussions)
+- [Issue Tracker](https://github.com/mode7labs/raceway/issues)
+- [Discussions](https://github.com/mode7labs/raceway/discussions)
 - [Effective Go](https://golang.org/doc/effective_go)
 - [Uber Go Style Guide](https://github.com/uber-go/guide/blob/master/style.md)
 
@@ -493,7 +493,7 @@ By contributing, you agree that your contributions will be licensed under the MI
 
 ## ❓ Questions?
 
-- Open a [Discussion](https://github.com/mode-7/raceway/discussions)
+- Open a [Discussion](https://github.com/mode7labs/raceway/discussions)
 - Join our community (if available)
 - Email: dev@raceway.dev (if available)
 

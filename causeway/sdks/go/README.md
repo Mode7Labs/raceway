@@ -1,6 +1,6 @@
 # raceway-go
 
-Official Go SDK for [Raceway](https://github.com/mode-7/raceway) - Race condition detection and distributed tracing for Go applications.
+Official Go SDK for [Raceway](https://github.com/mode7labs/raceway) - Race condition detection and distributed tracing for Go applications.
 
 ## Features
 
@@ -14,7 +14,7 @@ Official Go SDK for [Raceway](https://github.com/mode-7/raceway) - Race conditio
 ## Installation
 
 ```bash
-go get github.com/mode-7/raceway-go
+go get github.com/mode7labs/raceway/sdks/go
 ```
 
 ## Quick Start
@@ -27,7 +27,7 @@ package main
 import (
     "net/http"
     "time"
-    raceway "github.com/mode-7/raceway-go"
+    raceway "github.com/mode7labs/raceway/sdks/go"
 )
 
 func main() {
@@ -91,7 +91,7 @@ import (
     "net/http"
     "bytes"
     "encoding/json"
-    raceway "github.com/mode-7/raceway-go"
+    raceway "github.com/mode7labs/raceway/sdks/go"
 )
 
 func checkoutHandler(client *raceway.Client) http.HandlerFunc {
@@ -358,7 +358,7 @@ import (
     "bytes"
     "encoding/json"
     "net/http"
-    raceway "github.com/mode-7/raceway-go"
+    raceway "github.com/mode7labs/raceway/sdks/go"
 )
 
 func main() {
@@ -453,6 +453,6 @@ MIT
 
 ## Links
 
-- [GitHub Repository](https://github.com/mode-7/raceway)
+- [GitHub Repository](https://github.com/mode7labs/raceway)
 - [Documentation](https://docs.raceway.dev)
-- [Issue Tracker](https://github.com/mode-7/raceway/issues)
+- [Issue Tracker](https://github.com/mode7labs/raceway/issues)

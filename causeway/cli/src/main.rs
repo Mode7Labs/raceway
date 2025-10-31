@@ -14,6 +14,7 @@ const DEFAULT_PAGE_SIZE: usize = 20;
 
 #[derive(Parser)]
 #[command(name = "raceway")]
+#[command(version)]
 #[command(about = "Causal debugging for distributed systems", long_about = None)]
 struct Cli {
     /// Path to configuration file

@@ -1,4 +1,4 @@
-module github.com/mode-7/raceway-go
+module github.com/mode7labs/raceway/sdks/go
 
 go 1.21
 

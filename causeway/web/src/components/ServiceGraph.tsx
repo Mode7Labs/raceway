@@ -199,12 +199,12 @@ export function ServiceGraph({ data }: ServiceGraphProps) {
       });
 
       // Update label background width based on text
-      labelBg.attr('width', function(d) {
+      labelBg.attr('width', function() {
         const textNode = this.parentNode?.querySelector('.node-label') as SVGTextElement;
         if (!textNode) return 0;
         const textLength = textNode.getComputedTextLength();
         return textLength + 8;
-      }).attr('x', function(d) {
+      }).attr('x', function() {
         const textNode = this.parentNode?.querySelector('.node-label') as SVGTextElement;
         if (!textNode) return 0;
         const textLength = textNode.getComputedTextLength();
@@ -224,14 +224,14 @@ export function ServiceGraph({ data }: ServiceGraphProps) {
     // Update positions on each tick
     simulation.on('tick', () => {
       link.selectAll('line')
-        .attr('x1', d => (d.source as GraphNode).x!)
-        .attr('y1', d => (d.source as GraphNode).y!)
-        .attr('x2', d => (d.target as GraphNode).x!)
-        .attr('y2', d => (d.target as GraphNode).y!);
+        .attr('x1', (d: any) => (d.source as GraphNode).x!)
+        .attr('y1', (d: any) => (d.source as GraphNode).y!)
+        .attr('x2', (d: any) => (d.target as GraphNode).x!)
+        .attr('y2', (d: any) => (d.target as GraphNode).y!);
 
       linkLabels
-        .attr('x', d => ((d.source as GraphNode).x! + (d.target as GraphNode).x!) / 2)
-        .attr('y', d => ((d.source as GraphNode).y! + (d.target as GraphNode).y!) / 2);
+        .attr('x', (d: any) => ((d.source as GraphNode).x! + (d.target as GraphNode).x!) / 2)
+        .attr('y', (d: any) => ((d.source as GraphNode).y! + (d.target as GraphNode).y!) / 2);
 
       node
         .attr('transform', d => `translate(${d.x},${d.y})`);

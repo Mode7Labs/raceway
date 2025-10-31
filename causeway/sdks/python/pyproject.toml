@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "raceway"
-version = "0.2.0"
+version = "0.1.0"
 description = "Python SDK for Raceway - race condition detection and distributed tracing"
 readme = "README.md"
 authors = [
@@ -60,11 +60,11 @@ all = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/anthropics/raceway"
-Documentation = "https://github.com/anthropics/raceway/tree/main/sdks/python"
-Repository = "https://github.com/anthropics/raceway"
-"Bug Tracker" = "https://github.com/anthropics/raceway/issues"
-Changelog = "https://github.com/anthropics/raceway/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/mode7labs/raceway"
+Documentation = "https://github.com/mode7labs/raceway/tree/main/sdks/python"
+Repository = "https://github.com/mode7labs/raceway"
+"Bug Tracker" = "https://github.com/mode7labs/raceway/issues"
+Changelog = "https://github.com/mode7labs/raceway/blob/main/CHANGELOG.md"
 
 [tool.setuptools.packages.find]
 where = ["."]

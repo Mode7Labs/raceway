@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useMemo, useCallback } from 'react';
+import { useEffect, useRef, useState, useMemo } from 'react';
 import * as d3 from 'd3';
 import type { Event } from '@/types';
 import { Card, CardContent } from './ui/card';
@@ -239,10 +239,10 @@ export function TraceDAGView({
       .attr('stroke-width', 1.5);
 
     // Create force simulation
-    const simulation = d3.forceSimulation(nodes as d3.SimulationNodeDatum[])
-      .force('link', d3.forceLink(links).id((d: any) => d.id).distance(80))
+    const simulation = d3.forceSimulation(nodes)
+      .force('link', d3.forceLink<DAGNode, DAGLink>(links).id((d: DAGNode) => d.id).distance(80))
       .force('charge', d3.forceManyBody().strength(-300))
-      .force('x', d3.forceX((d: any) => {
+      .force('x', d3.forceX((d: DAGNode) => {
         // Spread horizontally by level, centered around 0
         const maxLevel = Math.max(...nodes.map(n => n.level));
         const offset = (maxLevel * 150) / 2;
@@ -328,17 +328,17 @@ export function TraceDAGView({
         event.stopPropagation();
         onEventSelect(d.id);
       })
-      .call(d3.drag<SVGGElement, DAGNode>()
-        .on('start', (event, d: any) => {
+      .call(d3.drag<any, DAGNode>()
+        .on('start', (event, d: DAGNode) => {
           if (!event.active) simulation.alphaTarget(0.3).restart();
           d.fx = d.x;
           d.fy = d.y;
         })
-        .on('drag', (event, d: any) => {
+        .on('drag', (event, d: DAGNode) => {
           d.fx = event.x;
           d.fy = event.y;
         })
-        .on('end', (event, d: any) => {
+        .on('end', (event, d: DAGNode) => {
           if (!event.active) simulation.alphaTarget(0);
           d.fx = null;
           d.fy = null;

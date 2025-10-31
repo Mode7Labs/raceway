@@ -8,7 +8,7 @@ version = "0.1.0"
 edition = "2021"
 authors = ["Raceway Contributors"]
 license = "MIT"
-repository = "https://github.com/raceway/raceway"
+repository = "https://github.com/mode7labs/raceway"
 
 [workspace.dependencies]
 tokio = { version = "1.40", features = ["full"] }

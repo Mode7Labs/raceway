@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"sync"
 
-	raceway "github.com/mode-7/raceway/raceway"
+	raceway "github.com/mode7labs/raceway/sdks/go/raceway"
 )
 
 // Example demonstrating the lock helper improvements

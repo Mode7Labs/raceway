@@ -5,7 +5,7 @@ edition = "2021"
 authors = ["Raceway Contributors"]
 description = "Lightweight SDK for race condition detection in Rust applications"
 license = "MIT"
-repository = "https://github.com/mode-7/raceway"
+repository = "https://github.com/mode7labs/raceway"
 keywords = ["tracing", "instrumentation", "race-detection", "concurrency", "debugging"]
 categories = ["development-tools::debugging", "development-tools::profiling"]
 
