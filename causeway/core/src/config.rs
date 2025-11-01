@@ -1,9 +1,11 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
+use std::str::FromStr;
 
 /// Main configuration structure for Raceway.
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Default)]
 pub struct Config {
     #[serde(default)]
     pub server: ServerConfig,
@@ -56,12 +58,6 @@ impl Config {
         }
     }
 
-    /// Load configuration from a TOML string.
-    pub fn from_str(s: &str) -> Result<Self> {
-        let config: Config = toml::from_str(s).context("Failed to parse config")?;
-        Ok(config)
-    }
-
     /// Get the default configuration as a TOML string.
     pub fn default_toml() -> Result<String> {
         let config = Self::default();
@@ -75,11 +71,10 @@ impl Config {
             other => anyhow::bail!("Invalid storage backend: {}", other),
         }
 
-        if matches!(self.storage.backend.as_str(), "postgres" | "supabase") {
-            if self.storage.postgres.connection_string.is_none() {
+        if matches!(self.storage.backend.as_str(), "postgres" | "supabase")
+            && self.storage.postgres.connection_string.is_none() {
                 anyhow::bail!("PostgreSQL/Supabase backend requires connection_string");
             }
-        }
 
         if self.server.port == 0 {
             anyhow::bail!("Server port cannot be 0");
@@ -98,18 +93,12 @@ impl Config {
     }
 }
 
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            server: ServerConfig::default(),
-            storage: StorageConfig::default(),
-            engine: EngineConfig::default(),
-            race_detection: RaceDetectionConfig::default(),
-            anomaly_detection: AnomalyDetectionConfig::default(),
-            distributed_tracing: DistributedTracingConfig::default(),
-            logging: LoggingConfig::default(),
-            development: DevelopmentConfig::default(),
-        }
+impl FromStr for Config {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self> {
+        let config: Config = toml::from_str(s).context("Failed to parse config")?;
+        Ok(config)
     }
 }
 
@@ -271,16 +260,12 @@ impl Default for AnomalyDetectionConfig {
 /// - Distributed metadata ignored (backward compatible)
 /// - Single-service behavior unchanged
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Default)]
 pub struct DistributedTracingConfig {
     #[serde(default = "default_false")]
     pub enabled: bool,
 }
 
-impl Default for DistributedTracingConfig {
-    fn default() -> Self {
-        Self { enabled: false }
-    }
-}
 
 /// Logging configuration.
 #[derive(Debug, Clone, Deserialize, Serialize)]

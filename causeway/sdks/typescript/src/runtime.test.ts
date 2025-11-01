@@ -10,6 +10,7 @@ import { AsyncLocalStorage } from 'async_hooks';
 
 describe('Runtime Module', () => {
   let originalEnv: NodeJS.ProcessEnv;
+  let runtimeInstances: any[] = [];
 
   beforeEach(() => {
     // Save original environment
@@ -17,9 +18,23 @@ describe('Runtime Module', () => {
 
     // Clear any cached runtime instance
     jest.resetModules();
+    runtimeInstances = [];
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    // Clean up all runtime instances to prevent hanging timers
+    for (const runtime of runtimeInstances) {
+      try {
+        const instance = runtime.getInstance();
+        if (instance && typeof instance.stop === 'function') {
+          await instance.stop();
+        }
+      } catch (e) {
+        // Ignore cleanup errors
+      }
+    }
+    runtimeInstances = [];
+
     // Restore environment
     process.env = originalEnv;
   });
@@ -27,9 +42,10 @@ describe('Runtime Module', () => {
   describe('initializeRuntime', () => {
     it('should initialize runtime with provided config', () => {
       // Import fresh runtime module
-      const { initializeRuntime } = require('./runtime');
+      const runtimeModule = require('./runtime');
+      runtimeInstances.push(runtimeModule.default);
 
-      const instance = initializeRuntime({
+      const instance = runtimeModule.initializeRuntime({
         serverUrl: 'http://test-server:8080',
         serviceName: 'test-service',
         enabled: true,
@@ -41,16 +57,17 @@ describe('Runtime Module', () => {
     });
 
     it('should warn on re-initialization', () => {
-      const { initializeRuntime } = require('./runtime');
+      const runtimeModule = require('./runtime');
+      runtimeInstances.push(runtimeModule.default);
 
       const consoleWarnSpy = jest.spyOn(console, 'warn').mockImplementation();
 
-      const instance1 = initializeRuntime({
+      const instance1 = runtimeModule.initializeRuntime({
         serverUrl: 'http://test-server:8080',
         serviceName: 'test-service',
       });
 
-      const instance2 = initializeRuntime({
+      const instance2 = runtimeModule.initializeRuntime({
         serverUrl: 'http://different-server:8080',
         serviceName: 'different-service',
       });
@@ -67,9 +84,10 @@ describe('Runtime Module', () => {
     });
 
     it('should accept all config options', () => {
-      const { initializeRuntime } = require('./runtime');
+      const runtimeModule = require('./runtime');
+      runtimeInstances.push(runtimeModule.default);
 
-      const instance = initializeRuntime({
+      const instance = runtimeModule.initializeRuntime({
         serverUrl: 'http://test:8080',
         serviceName: 'my-service',
         instanceId: 'instance-123',
@@ -97,6 +115,7 @@ describe('Runtime Module', () => {
 
       // Import fresh runtime module
       const runtime = require('./runtime').default;
+      runtimeInstances.push(runtime);
 
       const instance = runtime.getInstance();
 
@@ -112,6 +131,8 @@ describe('Runtime Module', () => {
       delete process.env.RACEWAY_ENABLED;
 
       const runtime = require('./runtime').default;
+      runtimeInstances.push(runtime);
+
       const instance = runtime.getInstance();
 
       expect(instance).toBeDefined();
@@ -123,6 +144,8 @@ describe('Runtime Module', () => {
       process.env.RACEWAY_ENABLED = 'false';
 
       const runtime = require('./runtime').default;
+      runtimeInstances.push(runtime);
+
       const instance = runtime.getInstance();
 
       // Should still create instance, just disabled
@@ -138,6 +161,8 @@ describe('Runtime Module', () => {
       const consoleLogSpy = jest.spyOn(console, 'log').mockImplementation();
 
       const runtime = require('./runtime').default;
+      runtimeInstances.push(runtime);
+
       runtime.getInstance();
 
       expect(consoleLogSpy).toHaveBeenCalledWith(
@@ -152,6 +177,7 @@ describe('Runtime Module', () => {
     let runtime: any;
     let mockClient: any;
     let capturedEvents: any[];
+    let realClient: any;
 
     beforeEach(() => {
       capturedEvents = [];
@@ -167,6 +193,7 @@ describe('Runtime Module', () => {
       // Import fresh runtime
       const runtimeModule = require('./runtime');
       runtime = runtimeModule.default;
+      runtimeInstances.push(runtime);
 
       // Initialize with test config
       runtimeModule.initializeRuntime({
@@ -177,7 +204,15 @@ describe('Runtime Module', () => {
 
       // Replace client with mock
       const instance = runtime.getInstance();
+      realClient = (instance as any).client;
       (instance as any).client = mockClient;
+    });
+
+    afterEach(() => {
+      // Stop the real client to clean up timers
+      if (realClient && typeof realClient.stop === 'function') {
+        realClient.stop();
+      }
     });
 
     describe('trackStateChange', () => {
@@ -299,6 +334,8 @@ describe('Runtime Module', () => {
 
       // Import and initialize runtime
       const runtimeModule = require('./runtime');
+      runtimeInstances.push(runtimeModule.default);
+
       runtimeModule.initializeRuntime({
         serverUrl: 'http://localhost:8080',
         serviceName: 'babel-test',
@@ -307,6 +344,7 @@ describe('Runtime Module', () => {
 
       const runtime = runtimeModule.default;
       const instance = runtime.getInstance();
+      const realClient = (instance as any).client;
       (instance as any).client = mockClient;
 
       // Simulate Babel-transformed code
@@ -328,6 +366,11 @@ describe('Runtime Module', () => {
         expect(capturedEvents[0].kind.StateChange.old_value).toBe(1000);
         expect(capturedEvents[0].kind.StateChange.new_value).toBe(900);
       });
+
+      // Clean up the real client
+      if (realClient && typeof realClient.stop === 'function') {
+        realClient.stop();
+      }
     });
   });
 });

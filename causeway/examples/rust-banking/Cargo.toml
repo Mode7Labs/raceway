@@ -20,7 +20,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
 # Raceway SDK (use local path for now, would be crates.io in production)
-raceway-sdk = { path = "../../sdks/rust" }
+raceway = { path = "../../sdks/rust" }
 
 # Other
 parking_lot = "0.12"

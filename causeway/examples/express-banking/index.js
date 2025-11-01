@@ -4,6 +4,10 @@
  * This demonstrates how Raceway can detect race conditions in a banking API
  * using the plug-and-play SDK architecture.
  *
+ * NOTE: This example uses localhost URLs for local development and demonstration.
+ *       In production, set the RACEWAY_URL environment variable:
+ *       RACEWAY_URL=https://your-raceway-server.com node index.js
+ *
  * To run:
  * 1. Start Raceway server: cd ../.. && cargo run --release -- serve
  * 2. Install deps: npm install
@@ -15,7 +19,7 @@
 
 const express = require('express');
 const path = require('path');
-const { Raceway } = require('@mode-7/raceway-node');
+const { Raceway } = require('@mode-7/raceway');
 
 // ============================================================
 // Application Setup

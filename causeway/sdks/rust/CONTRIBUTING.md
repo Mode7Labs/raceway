@@ -518,7 +518,7 @@ Thread panics with "Context not available"
 
 ## Environment
 - Rust: 1.75.0
-- SDK: raceway-sdk 0.1.0
+- SDK: raceway 0.1.0
 - Tokio: 1.35.0
 - OS: macOS 14.0
 ```

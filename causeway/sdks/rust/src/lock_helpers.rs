@@ -9,7 +9,7 @@ that automatically track lock operations with Raceway.
 ## Mutex
 
 ```rust,no_run
-use raceway_sdk::{RacewayClient, TrackedMutex};
+use raceway::{RacewayClient, TrackedMutex};
 use std::sync::Arc;
 
 let raceway = Arc::new(RacewayClient::new("http://localhost:8080", "my-service"));
@@ -24,7 +24,7 @@ let mut balance = mutex.lock("Mutex");
 ## RwLock
 
 ```rust,no_run
-use raceway_sdk::{RacewayClient, TrackedRwLock};
+use raceway::{RacewayClient, TrackedRwLock};
 use std::sync::Arc;
 
 let raceway = Arc::new(RacewayClient::new("http://localhost:8080", "my-service"));

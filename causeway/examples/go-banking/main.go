@@ -2,6 +2,10 @@
 //
 // This demonstrates how Raceway can detect race conditions in a Go/Gin banking API.
 //
+// NOTE: This example uses localhost URLs for local development and demonstration.
+//       In production, pass the Raceway server URL to NewClient():
+//       client := raceway.NewClient(os.Getenv("RACEWAY_URL"), "banking-api")
+//
 // To run:
 // 1. Start Raceway server: cd ../.. && cargo run --release -- serve
 // 2. Start this server: go run main.go

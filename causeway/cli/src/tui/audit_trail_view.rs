@@ -88,11 +88,11 @@ pub fn render_audit_trail_view(
             if let Some(ref old_val) = access.old_value {
                 lines.push(format!(
                     "   Value: {} → {}",
-                    old_val.to_string(),
-                    access.new_value.to_string()
+                    old_val,
+                    access.new_value
                 ));
             } else {
-                lines.push(format!("   Value: {}", access.new_value.to_string()));
+                lines.push(format!("   Value: {}", access.new_value));
             }
 
             // Causal link info

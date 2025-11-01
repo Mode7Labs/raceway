@@ -42,7 +42,7 @@ Start here: Do you have shared mutable objects (like a global state/cache)?
 
 **Setup:**
 ```typescript
-import { Raceway } from '@mode-7/raceway-node';
+import { Raceway } from '@mode-7/raceway';
 
 const raceway = new Raceway({
   serverUrl: 'http://localhost:8080',
@@ -114,7 +114,7 @@ app.post('/transfer', async (req, res) => {
 1. Install dependencies:
 ```bash
 npm install --save-dev babel-plugin-raceway
-npm install @mode-7/raceway-node
+npm install @mode-7/raceway
 ```
 
 2. Configure Babel (`babel.config.js`):
@@ -133,7 +133,7 @@ module.exports = {
 
 3. Initialize runtime (in your app entry point):
 ```typescript
-import { initializeRuntime } from '@mode-7/raceway-node/runtime';
+import { initializeRuntime } from '@mode-7/raceway/runtime';
 
 initializeRuntime({
   serverUrl: 'http://localhost:8080',
@@ -156,7 +156,7 @@ function transfer(from, to, amount) {
 }
 
 // After Babel transform:
-import __raceway from '@mode-7/raceway-node/runtime';
+import __raceway from '@mode-7/raceway/runtime';
 
 function transfer(from, to, amount) {
   __raceway.captureFunctionCall('transfer', { from, to, amount });
@@ -206,7 +206,7 @@ function transfer(from, to, amount) {
 
 **Setup:**
 ```typescript
-import { Raceway } from '@mode-7/raceway-node';
+import { Raceway } from '@mode-7/raceway';
 
 const raceway = new Raceway({
   serverUrl: 'http://localhost:8080',

@@ -160,7 +160,7 @@ describe('Feature Name', () => {
 Add decorator-based instrumentation as a fourth approach:
 
 ```typescript
-import { Track, TrackLock, TraceFunction } from '@mode-7/raceway-node/decorators';
+import { Track, TrackLock, TraceFunction } from '@mode-7/raceway/decorators';
 
 class BankAccount {
   @Track() // Auto-track property access
@@ -261,11 +261,11 @@ Add helpers for popular ORMs:
 
 ```typescript
 // Prisma
-import { trackPrisma } from '@mode-7/raceway-node/prisma';
+import { trackPrisma } from '@mode-7/raceway/prisma';
 const prisma = trackPrisma(new PrismaClient());
 
 // TypeORM
-import { trackTypeORM } from '@mode-7/raceway-node/typeorm';
+import { trackTypeORM } from '@mode-7/raceway/typeorm';
 ```
 
 **Tasks**:
@@ -279,7 +279,7 @@ import { trackTypeORM } from '@mode-7/raceway-node/typeorm';
 Auto-track GraphQL resolver execution:
 
 ```typescript
-import { RacewayGraphQLExtension } from '@mode-7/raceway-node/graphql';
+import { RacewayGraphQLExtension } from '@mode-7/raceway/graphql';
 
 const server = new ApolloServer({
   extensions: [() => new RacewayGraphQLExtension()],

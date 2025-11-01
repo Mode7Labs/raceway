@@ -17,7 +17,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-raceway-sdk = "0.1"
+raceway = "0.1"
 tokio = { version = "1.35", features = ["full", "macros"] }
 ```
 

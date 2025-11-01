@@ -608,7 +608,7 @@ async fn list_traces_handler(
         .await
     {
         Ok((summaries, total_traces)) => {
-            let total_pages = (total_traces + page_size - 1) / page_size;
+            let total_pages = total_traces.div_ceil(page_size);
 
             // Build trace metadata with service information from distributed_spans
             let traces: Vec<TraceMetadata> = summaries
@@ -1438,7 +1438,7 @@ async fn get_service_traces_handler(
             )
         })?;
 
-    let total_pages = (total + page_size - 1) / page_size;
+    let total_pages = total.div_ceil(page_size);
 
     let response = ServiceTracesResponse {
         service_name,

@@ -138,6 +138,10 @@ Keyboard shortcuts:
 ```bash
 # Start web UI server
 cd web
+
+# Copy environment template (first time only)
+cp .env.example .env
+
 npm install
 npm run dev
 # Open http://localhost:5173
@@ -262,6 +266,7 @@ cargo test -p raceway-test
 
 ### Core Analysis Features
 - ✅ **Vector clock causality tracking** - Trace-local clocks, async-aware, follows tasks across threads
+- ✅ **Distributed tracing** - W3C Trace Context propagation, cross-service trace merging, vector clock sync
 - ✅ **Critical path analysis** - Async-aware longest path computation showing execution bottlenecks
 - ✅ **Variable audit trails** - Complete access history per variable with causal ordering
 - ✅ **Service dependency extraction** - Cross-service call graph from trace data
@@ -316,9 +321,9 @@ cargo test -p raceway-test
 
 ### SDKs
 - ✅ **Python** - `raceway` package, Flask/FastAPI middleware
-- ✅ **TypeScript/Node** - `@mode-7/raceway-node` package, Express middleware
+- ✅ **TypeScript/Node** - `@mode-7/raceway` package, Express middleware
 - ✅ **Go** - `github.com/mode7labs/raceway/sdks/go`, Gin/net/http middleware
-- ✅ **Rust** - `raceway-sdk` crate, Axum/Actix support
+- ✅ **Rust** - `raceway` crate, Axum/Actix support
 
 ### Event Types Supported
 16 event kinds tracked:
@@ -413,46 +418,39 @@ We're looking for contributors to help with:
 
 ### High Priority
 
-**1. Auto-Instrumentation**
-- Currently requires manual `track_state_change()` calls
-- **Python**: AST transformation or bytecode instrumentation
-- **JavaScript**: Babel/SWC plugin (started but incomplete)
-- **Rust**: Procedural macros for automatic tracking
-- **Go**: Compiler plugin or code generation
+**1. Auto-Instrumentation (Partial)**
+- ✅ **JavaScript/TypeScript**: Babel plugin fully implemented (`babel-plugin-raceway`)
+- ⏳ **Python**: AST transformation or bytecode instrumentation (planned)
+- ⏳ **Rust**: Procedural macros for automatic tracking (planned)
+- ⏳ **Go**: Compiler plugin or code generation (planned)
 
-**2. Distributed Tracing**
-- Works within single service
-- Need trace context propagation across HTTP/gRPC
-- Cross-service causality tracking
-- Distributed vector clock synchronization
-
-**3. Performance Optimization**
+**2. Performance Optimization**
 - Benchmark suite (missing)
-- Connection pooling for database
-- Event batching improvements
+- Connection pooling for database (basic implementation exists)
+- Event batching improvements (batching implemented, can be optimized)
 - Graph construction parallelization
 
 ### Medium Priority
 
-**4. UI Enhancements**
+**3. UI Enhancements**
 - Web UI search/filter improvements
-- Timeline zoom/pan in TUI
-- Export formats (protobuf, MessagePack)
+- Timeline zoom/pan in TUI (basic pan implemented)
+- Export formats (JSON implemented, protobuf/MessagePack planned)
 - Trace comparison view
 
-**5. Testing**
-- Unit test coverage (currently sparse)
-- Integration tests for race detection
+**4. Testing**
+- Expand unit test coverage (38 tests in core, ~80 in Python SDK)
+- Integration tests for race detection (basic tests exist)
 - Property-based tests for vector clock invariants
 - Performance regression tests
 
-**6. Documentation**
-- API reference (incomplete)
+**5. Documentation**
+- API reference documentation
 - Architecture deep dive
-- Troubleshooting guide
-- Tutorial for each SDK
+- Troubleshooting guide (basic guide exists)
+- Comprehensive tutorials for each SDK
 
-**7. Production Readiness**
+**6. Production Readiness**
 - Harden authentication & rate limiting policies
 - Sampling and backpressure strategies
 - Prometheus/metrics endpoint
@@ -460,12 +458,12 @@ We're looking for contributors to help with:
 
 ### Nice to Have
 
-**8. Additional Storage Backends**
+**7. Additional Storage Backends**
 - MySQL (stubbed)
 - SQLite (stubbed)
 - ClickHouse for analytics
 
-**9. Advanced Features**
+**8. Advanced Features**
 - Deadlock detection (algorithm designed, not implemented)
 - Machine learning-based anomaly detection
 - Real-time alerting (Slack, Discord, PagerDuty)
@@ -625,6 +623,170 @@ For each event:
       >5σ:  Critical
 ```
 
+## Production Deployment
+
+While Raceway is alpha quality and the examples use localhost for demonstration, you can deploy it to production environments with proper configuration.
+
+### Server Configuration
+
+**1. Create Production Config** (`raceway.toml`):
+
+```toml
+[server]
+host = "0.0.0.0"  # Accept external connections
+port = 8080
+verbose = false
+
+cors_enabled = true
+cors_origins = ["https://your-app.com", "https://your-dashboard.com"]
+
+# Enable rate limiting
+rate_limit_enabled = true
+rate_limit_rpm = 1000
+
+# Enable API authentication
+auth_enabled = true
+api_keys = ["your-secret-api-key-here"]
+
+[storage]
+backend = "postgres"
+
+[storage.postgres]
+connection_string = "postgresql://user:password@db-host:5432/raceway"
+max_connections = 20
+auto_migrate = true
+
+[engine]
+buffer_size = 10000
+batch_size = 100
+flush_interval_ms = 100
+
+[race_detection]
+enabled = true
+
+[anomaly_detection]
+enabled = true
+
+[distributed_tracing]
+enabled = true
+
+[logging]
+level = "info"
+```
+
+**2. Start the Server**:
+
+```bash
+raceway serve --config raceway.toml
+```
+
+### SDK Configuration
+
+Configure SDKs to point to your production Raceway server using environment variables:
+
+**TypeScript/Node.js**:
+```typescript
+import { Raceway } from '@mode-7/raceway';
+
+const raceway = new Raceway({
+  serverUrl: process.env.RACEWAY_URL || 'http://localhost:8080',
+  serviceName: 'your-service',
+  apiKey: process.env.RACEWAY_KEY,
+});
+```
+
+**Python**:
+```python
+from raceway import RacewayClient, Config
+
+raceway = RacewayClient(Config(
+    endpoint=os.getenv("RACEWAY_URL", "http://localhost:8080"),
+    service_name="your-service",
+    api_key=os.getenv("RACEWAY_KEY"),
+))
+```
+
+**Go**:
+```go
+racewayClient := raceway.NewClient(raceway.Config{
+    ServerURL:   os.Getenv("RACEWAY_URL"),
+    ServiceName: "your-service",
+    APIKey:      getAPIKey(), // Helper to read from env
+})
+```
+
+**Rust**:
+```rust
+let api_key = std::env::var("RACEWAY_KEY").ok();
+let endpoint = std::env::var("RACEWAY_URL")
+    .unwrap_or_else(|_| "http://localhost:8080".to_string());
+
+let raceway = Arc::new(RacewayClient::new_with_api_key(
+    &endpoint,
+    "your-service",
+    api_key.as_deref(),
+));
+```
+
+### Environment Variables
+
+Set these in your production environment:
+
+```bash
+# Raceway server endpoint
+export RACEWAY_URL=https://raceway.your-domain.com
+
+# API authentication key (if auth_enabled = true)
+export RACEWAY_KEY=your-secret-api-key-here
+```
+
+### Database Setup
+
+**PostgreSQL** (Recommended):
+
+```bash
+# Create database
+createdb raceway
+
+# Connection string format
+postgresql://user:password@host:5432/raceway
+```
+
+Raceway will automatically create tables on first run when `auto_migrate = true`.
+
+### Security Considerations
+
+1. **Authentication**: Always enable `auth_enabled = true` in production
+2. **CORS**: Set specific origins instead of `["*"]`
+3. **Rate Limiting**: Enable rate limiting to prevent abuse
+4. **Network**: Use HTTPS/TLS for all connections
+5. **Database**: Use strong credentials and encrypted connections
+6. **API Keys**: Store keys securely (environment variables, secrets managers)
+
+### Docker Deployment
+
+```dockerfile
+FROM rust:1.75 AS builder
+WORKDIR /app
+COPY . .
+RUN cargo build --release --bin raceway
+
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y ca-certificates libssl3 && rm -rf /var/lib/apt/lists/*
+COPY --from=builder /app/target/release/raceway /usr/local/bin/
+COPY raceway.toml /etc/raceway/raceway.toml
+EXPOSE 8080
+CMD ["raceway", "serve", "--config", "/etc/raceway/raceway.toml"]
+```
+
+```bash
+docker build -t raceway:latest .
+docker run -p 8080:8080 \
+  -e RACEWAY_KEY=your-api-key \
+  -e DATABASE_URL=postgresql://... \
+  raceway:latest
+```
+
 ## License
 
 MIT License - see [LICENSE](LICENSE) for details.
@@ -637,4 +799,4 @@ MIT License - see [LICENSE](LICENSE) for details.
 
 ---
 
-**Project Status**: Alpha quality, actively developed. Core analysis features work well (causality tracking, critical path analysis, race detection, anomaly detection, TUI, Web UI, PostgreSQL persistence). Not yet recommended for production use - expect breaking changes. Great for debugging concurrent applications in development/testing environments and for concurrency research.
+**Project Status**: Alpha quality, actively developed. Core analysis features work well (causality tracking, distributed tracing, critical path analysis, race detection, anomaly detection, TUI, Web UI, PostgreSQL persistence). Not yet recommended for production use - expect breaking changes. Great for debugging concurrent applications in development/testing environments and for concurrency research.

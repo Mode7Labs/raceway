@@ -28,7 +28,7 @@ pub fn build_tree(events: &[serde_json::Value]) -> Vec<TreeNode> {
         if let Some(parent_id) = event.get("parent_id").and_then(|p| p.as_str()) {
             children_map
                 .entry(parent_id.to_string())
-                .or_insert_with(Vec::new)
+                .or_default()
                 .push(idx);
         } else {
             roots.push(idx);

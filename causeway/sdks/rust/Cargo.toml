@@ -1,9 +1,9 @@
 [package]
-name = "raceway-sdk"
+name = "raceway"
 version = "0.1.0"
 edition = "2021"
 authors = ["Raceway Contributors"]
-description = "Lightweight SDK for race condition detection in Rust applications"
+description = "Official Rust SDK for Raceway - race condition detection and distributed tracing"
 license = "MIT"
 repository = "https://github.com/mode7labs/raceway"
 keywords = ["tracing", "instrumentation", "race-detection", "concurrency", "debugging"]

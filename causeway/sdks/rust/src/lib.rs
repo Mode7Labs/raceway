@@ -14,7 +14,7 @@ Lightweight SDK for race condition detection in Rust applications with automatic
 ## Example
 
 ```rust,no_run
-use raceway_sdk::RacewayClient;
+use raceway::RacewayClient;
 use serde::Serialize;
 
 #[derive(Serialize)]

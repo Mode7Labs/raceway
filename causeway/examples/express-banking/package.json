@@ -8,7 +8,7 @@
     "dev": "nodemon index.js"
   },
   "dependencies": {
-    "@mode-7/raceway-node": "file:../../sdks/typescript",
+    "@mode-7/raceway": "file:../../sdks/typescript",
     "express": "^4.18.2"
   },
   "devDependencies": {

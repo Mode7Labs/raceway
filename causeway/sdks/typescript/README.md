@@ -1,4 +1,4 @@
-# @mode-7/raceway-node
+# @mode-7/raceway
 
 Official Node.js/TypeScript SDK for [Raceway](https://github.com/mode-7/raceway) - Race condition detection and distributed tracing for Node.js applications.
 
@@ -17,7 +17,7 @@ Official Node.js/TypeScript SDK for [Raceway](https://github.com/mode-7/raceway)
 ## Installation
 
 ```bash
-npm install @mode-7/raceway-node
+npm install @mode-7/raceway
 ```
 
 ## Quick Start
@@ -26,7 +26,7 @@ npm install @mode-7/raceway-node
 
 ```typescript
 import express from 'express';
-import { Raceway } from '@mode-7/raceway-node';
+import { Raceway } from '@mode-7/raceway';
 
 const raceway = new Raceway({
   serverUrl: 'http://localhost:8080',
@@ -110,7 +110,7 @@ module.exports = {
 
 ```typescript
 // Initialize runtime once
-import { initializeRuntime } from '@mode-7/raceway-node/runtime';
+import { initializeRuntime } from '@mode-7/raceway/runtime';
 
 initializeRuntime({
   serverUrl: 'http://localhost:8080',
@@ -407,7 +407,7 @@ Complete example with TypeScript → Python → Go chain:
 ```typescript
 import express from 'express';
 import axios from 'axios';
-import { Raceway } from '@mode-7/raceway-node';
+import { Raceway } from '@mode-7/raceway';
 
 const raceway = new Raceway({
   serverUrl: 'http://localhost:8080',
@@ -453,7 +453,7 @@ All services in the chain will share the same trace ID, and Raceway will merge t
 Full TypeScript support with complete type definitions:
 
 ```typescript
-import { Raceway, RacewayConfig, Event } from '@mode-7/raceway-node';
+import { Raceway, RacewayConfig, Event } from '@mode-7/raceway';
 
 const config: RacewayConfig = {
   serverUrl: 'http://localhost:8080',

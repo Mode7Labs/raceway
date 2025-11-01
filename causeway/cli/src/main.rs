@@ -648,8 +648,8 @@ async fn handle_traces(
         data.page, data.total_pages, data.total_traces
     );
     println!(
-        "{:<38} {:>8} {:>8} {:<24} {}",
-        "TRACE ID", "EVENTS", "SVCS", "LAST SEEN", "SERVICES"
+        "{:<38} {:>8} {:>8} {:<24} SERVICES",
+        "TRACE ID", "EVENTS", "SVCS", "LAST SEEN"
     );
 
     for trace in data.traces {
@@ -883,8 +883,8 @@ async fn handle_service_traces(
         data.service_name, data.page, data.total_pages, data.total_traces
     );
     println!(
-        "{:<12} {:>8} {:>8} {}",
-        "TRACE", "EVENTS", "SVCS", "LAST SEEN"
+        "{:<12} {:>8} {:>8} LAST SEEN",
+        "TRACE", "EVENTS", "SVCS"
     );
     for trace in data.traces {
         println!(

@@ -399,12 +399,39 @@ The SDK is designed for minimal overhead:
 - Automatic retry on network failures
 - Thread-safe operations
 
+## Development
+
+### Building from Source
+
+To build the Python SDK package:
+
+```bash
+# Install build tools
+python3 -m pip install build
+
+# Build the package
+python3 -m build
+
+# Output in dist/:
+# - raceway-0.1.0.tar.gz
+# - raceway-0.1.0-py3-none-any.whl
+```
+
+### Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for:
+- Development setup
+- Running tests
+- Build instructions
+- Code style guidelines
+- Enhancement opportunities
+
 ## License
 
 MIT
 
 ## Links
 
-- [GitHub Repository](https://github.com/mode-7/raceway)
+- [GitHub Repository](https://github.com/mode7labs/raceway)
 - [Documentation](https://docs.raceway.dev)
-- [Issue Tracker](https://github.com/mode-7/raceway/issues)
+- [Issue Tracker](https://github.com/mode7labs/raceway/issues)

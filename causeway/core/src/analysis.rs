@@ -408,7 +408,7 @@ impl AnalysisService {
             if let Some(span) = self.storage.get_distributed_span(span_id).await? {
                 trace_to_spans
                     .entry(span.trace_id)
-                    .or_insert_with(Vec::new)
+                    .or_default()
                     .push(span_id.clone());
             }
         }
@@ -427,7 +427,7 @@ impl AnalysisService {
                         e.metadata
                             .distributed_span_id
                             .as_ref()
-                            .map_or(false, |sid| span_set.contains(sid))
+                            .is_some_and(|sid| span_set.contains(sid))
                     })
                     .collect();
 
@@ -590,6 +590,12 @@ pub struct WarmupStatus {
     pub started_at: Option<DateTime<Utc>>,
     pub completed_at: Option<DateTime<Utc>>,
     pub last_error: Option<String>,
+}
+
+impl Default for WarmupStatus {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl WarmupStatus {

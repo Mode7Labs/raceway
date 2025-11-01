@@ -235,7 +235,7 @@ impl CausalGraph {
             .lock_sets
             .get(&thread_id)
             .map(|locks| locks.value().iter().cloned().collect())
-            .unwrap_or_else(Vec::new);
+            .unwrap_or_default();
 
         event.lock_set = current_locks;
 
@@ -244,7 +244,7 @@ impl CausalGraph {
             EventKind::LockAcquire { lock_id, .. } => {
                 self.lock_sets
                     .entry(thread_id.clone())
-                    .or_insert_with(HashSet::new)
+                    .or_default()
                     .insert(lock_id.clone());
             }
             EventKind::LockRelease { lock_id, .. } => {
@@ -275,7 +275,7 @@ impl CausalGraph {
             // This is a root event
             self.trace_roots
                 .entry(event.trace_id)
-                .or_insert_with(Vec::new)
+                .or_default()
                 .push(event.id);
         }
 
@@ -286,7 +286,7 @@ impl CausalGraph {
         if let EventKind::StateChange { variable, .. } = &event.kind {
             self.variable_index
                 .entry(variable.clone())
-                .or_insert_with(Vec::new)
+                .or_default()
                 .push(event.id);
         }
 
@@ -379,7 +379,7 @@ impl CausalGraph {
                 // Add to distributed_edges map
                 self.distributed_edges
                     .entry(down_id)
-                    .or_insert_with(Vec::new)
+                    .or_default()
                     .push(up_id);
 
                 tracing::debug!(
@@ -475,7 +475,7 @@ impl CausalGraph {
             if let EventKind::StateChange { variable, .. } = &event.kind {
                 per_variable
                     .entry(variable.clone())
-                    .or_insert_with(Vec::new)
+                    .or_default()
                     .push(event);
             }
         }
@@ -1056,7 +1056,7 @@ impl CausalGraph {
                 let kind = self.event_kind_name(&event.kind);
                 new_durations_by_kind
                     .entry(kind)
-                    .or_insert_with(Vec::new)
+                    .or_default()
                     .push(duration_ms);
             }
         }
@@ -1066,7 +1066,7 @@ impl CausalGraph {
             let mut entry = self
                 .baseline_durations
                 .entry(kind.clone())
-                .or_insert_with(Vec::new);
+                .or_default();
             entry.extend(new_durations);
         }
 
@@ -1428,7 +1428,7 @@ impl CausalGraph {
                 if variables.contains(variable) {
                     grouped
                         .entry(variable.clone())
-                        .or_insert_with(Vec::new)
+                        .or_default()
                         .push(event);
                 }
             }
@@ -1515,6 +1515,7 @@ impl CausalGraph {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct GraphStats {
     pub total_events: usize,
     pub total_traces: usize,
@@ -1522,16 +1523,6 @@ pub struct GraphStats {
     pub has_cycles: bool,
 }
 
-impl Default for GraphStats {
-    fn default() -> Self {
-        Self {
-            total_events: 0,
-            total_traces: 0,
-            total_edges: 0,
-            has_cycles: false,
-        }
-    }
-}
 
 impl Default for CausalGraph {
     fn default() -> Self {
@@ -2629,8 +2620,8 @@ mod tests {
             lock_set: Vec::new(),
         };
 
-        graph.add_event(event_a.clone());
-        graph.add_event(event_b.clone());
+        graph.add_event(event_a.clone()).unwrap();
+        graph.add_event(event_b.clone()).unwrap();
 
         // Create distributed edge
         let dist_edge = crate::event::DistributedEdge {
@@ -2676,7 +2667,7 @@ mod tests {
         };
 
         let event_id = event_a.id;
-        graph.add_event(event_a);
+        graph.add_event(event_a).unwrap();
 
         // Should find event by span ID
         let found = graph.find_event_by_span("unique-span-123");
@@ -2735,8 +2726,8 @@ mod tests {
             lock_set: Vec::new(),
         };
 
-        graph.add_event(event_a.clone());
-        graph.add_event(event_b.clone());
+        graph.add_event(event_a.clone()).unwrap();
+        graph.add_event(event_b.clone()).unwrap();
 
         // Add distributed edge A -> B
         let dist_edge = crate::event::DistributedEdge {
@@ -2769,7 +2760,7 @@ mod tests {
 
         // Create 4-service chain: A -> B -> C -> D
         let mut events = Vec::new();
-        let spans = vec!["span-a", "span-b", "span-c", "span-d"];
+        let spans = ["span-a", "span-b", "span-c", "span-d"];
 
         for (i, span) in spans.iter().enumerate() {
             let mut md = metadata(&format!("service-{}-thread", i), 5);
@@ -2792,7 +2783,7 @@ mod tests {
                 lock_set: Vec::new(),
             };
 
-            graph.add_event(event.clone());
+            graph.add_event(event.clone()).unwrap();
             events.push(event);
         }
 
@@ -2893,8 +2884,8 @@ mod tests {
             lock_set: Vec::new(),
         };
 
-        graph.add_event(event_a.clone());
-        graph.add_event(event_b.clone());
+        graph.add_event(event_a.clone()).unwrap();
+        graph.add_event(event_b.clone()).unwrap();
 
         // Add distributed edge
         let dist_edge = crate::event::DistributedEdge {
@@ -2954,7 +2945,7 @@ mod tests {
             lock_set: Vec::new(),
         };
 
-        graph.add_event(event);
+        graph.add_event(event).unwrap();
 
         // Try to create edge with non-existent span-b
         let dist_edge = crate::event::DistributedEdge {

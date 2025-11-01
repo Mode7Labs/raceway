@@ -60,6 +60,10 @@ Enhancement suggestions are tracked as GitHub issues. When creating an enhanceme
 git clone https://github.com/YOUR_USERNAME/raceway.git
 cd raceway
 
+# Set up environment files (first time only)
+cp .env.example .env
+cp web/.env.example web/.env
+
 # Build Rust core and CLI
 cargo build --release
 

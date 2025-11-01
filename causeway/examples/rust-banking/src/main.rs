@@ -3,6 +3,10 @@
 
 This demonstrates how Raceway can detect race conditions in a Rust/Axum banking API.
 
+NOTE: This example uses localhost URLs for local development and demonstration.
+      In production, configure the Raceway client endpoint via environment:
+      let endpoint = std::env::var("RACEWAY_URL").unwrap_or_else(|_| "http://localhost:8080".to_string());
+
 To run:
 1. Start Raceway server: cd ../.. && cargo run --release -- serve
 2. Start this server: cargo run --release
@@ -30,7 +34,7 @@ use tower_http::services::ServeDir;
 
 
 // Use actual Raceway SDK
-use raceway_sdk::RacewayClient;
+use raceway::RacewayClient;
 
 
 // Application state

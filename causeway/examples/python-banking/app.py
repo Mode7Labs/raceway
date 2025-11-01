@@ -3,6 +3,10 @@ Python Banking API - Raceway Demo
 
 This demonstrates how Raceway can detect race conditions in a Python/Flask banking API.
 
+NOTE: This example uses localhost URLs for local development and demonstration purposes.
+      In production, configure the Raceway endpoint via environment variable:
+      RACEWAY_URL=https://your-raceway-server.com python app.py
+
 To run:
 1. Start Raceway server: cd ../.. && cargo run --release -- serve
 2. Install deps: pip3 install --break-system-packages -r requirements.txt

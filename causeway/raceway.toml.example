@@ -1,9 +1,17 @@
 # Raceway Configuration File
 # Minimal settings for Raceway 0.1.0
+#
+# NOTE: This configuration uses localhost (127.0.0.1) for local development.
+# For production deployment:
+#   - Set host = "0.0.0.0" to accept connections from all interfaces
+#   - Enable auth_enabled = true and configure api_keys
+#   - Use a persistent storage backend (postgres or supabase)
+#   - Enable rate_limit_enabled = true
+#   - Configure CORS origins to your specific domains
 
 # Server runtime configuration
 [server]
-host = "127.0.0.1"
+host = "127.0.0.1"  # Use "0.0.0.0" for production to accept external connections
 port = 8080
 verbose = false
 
@@ -24,7 +32,7 @@ auth_enabled = false
 backend = "memory"
 
 [storage.postgres]
-# connection_string = "postgresql://user:pass@localhost/raceway"
+# connection_string = "postgresql://user:pass@localhost/raceway"  # Use your production DB host in production
 max_connections = 10
 min_connections = 2
 connection_timeout_seconds = 30

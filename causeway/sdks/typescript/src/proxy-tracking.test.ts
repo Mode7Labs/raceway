@@ -9,6 +9,7 @@ describe('Proxy Auto-Tracking', () => {
   let raceway: Raceway;
   let mockClient: any;
   let capturedEvents: any[];
+  let realClient: any;
 
   beforeEach(() => {
     capturedEvents = [];
@@ -28,8 +29,18 @@ describe('Proxy Auto-Tracking', () => {
       enabled: true,
     });
 
+    // Store real client before replacing
+    realClient = (raceway as any).client;
+
     // Replace client with mock
     (raceway as any).client = mockClient;
+  });
+
+  afterEach(() => {
+    // Stop the real client to clean up timers
+    if (realClient && typeof realClient.stop === 'function') {
+      realClient.stop();
+    }
   });
 
   describe('track()', () => {

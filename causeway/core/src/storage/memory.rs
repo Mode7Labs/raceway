@@ -389,7 +389,7 @@ impl StorageBackend for MemoryBackend {
             // Otherwise cache the edge until the span arrives
             self.pending_edges
                 .entry(edge.from_span.clone())
-                .or_insert_with(Vec::new)
+                .or_default()
                 .push(edge.clone());
         }
 
@@ -401,7 +401,7 @@ impl StorageBackend for MemoryBackend {
         } else {
             self.pending_edges_targets
                 .entry(edge.to_span.clone())
-                .or_insert_with(Vec::new)
+                .or_default()
                 .push(edge);
         }
 

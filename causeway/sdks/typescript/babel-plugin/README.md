@@ -14,7 +14,7 @@ Automatic instrumentation for Raceway - causal debugging and race condition dete
 
 ```bash
 npm install --save-dev babel-plugin-raceway
-npm install @mode-7/raceway-node
+npm install @mode-7/raceway
 ```
 
 ## Quick Start
@@ -57,7 +57,7 @@ function transferMoney(from, to, amount) {
 
 **After:**
 ```javascript
-import __raceway from '@mode-7/raceway-node/runtime';
+import __raceway from '@mode-7/raceway/runtime';
 
 function transferMoney(from, to, amount) {
   __raceway.captureFunctionCall('transferMoney', { from, to, amount }, {
@@ -152,7 +152,7 @@ Initialize the Raceway runtime in your application entry point:
 
 ```javascript
 // app.js or server.js
-import { initializeRuntime } from '@mode-7/raceway-node/runtime';
+import { initializeRuntime } from '@mode-7/raceway/runtime';
 import express from 'express';
 
 // Initialize Raceway runtime before any instrumented code runs

@@ -71,7 +71,7 @@ The banking API uses the Raceway SDK to track:
 Example instrumentation:
 
 ```rust
-use raceway_sdk::{RacewayClient, Config};
+use raceway::{RacewayClient, Config};
 
 let raceway = RacewayClient::new(Config {
     service_name: "banking-api".to_string(),

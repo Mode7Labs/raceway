@@ -583,20 +583,16 @@ impl App {
                             distributed_analysis_data: self.distributed_analysis_data.clone(),
                         },
                     );
-
-                    return;
                 } else {
                     // JSON parsing succeeded but data is None
                     self.anomalies =
                         vec!["❌ Server returned success=false or null data".to_string()];
                     self.events = vec!["❌ No data in response".to_string()];
-                    return;
                 }
             } else {
                 // JSON parsing failed
                 self.anomalies = vec!["❌ Failed to parse response JSON".to_string()];
                 self.events = vec!["❌ Invalid response format".to_string()];
-                return;
             }
         } else {
             // HTTP request failed
@@ -728,7 +724,7 @@ impl App {
 
                             self.anomalies.push("".to_string());
                             self.anomalies
-                                .push(format!("💡 Events marked in red are involved in races"));
+                                .push("💡 Events marked in red are involved in races".to_string());
                             self.anomalies.push(
                                 "   Switch traces to see other race participants".to_string(),
                             );
@@ -758,11 +754,10 @@ impl App {
                 self.fetch_trace_details();
 
                 // Fetch audit trail if needed
-                if matches!(self.view_mode, ViewMode::AuditTrail) {
-                    if self.audit_trail_data.is_none() && self.selected_variable.is_none() {
+                if matches!(self.view_mode, ViewMode::AuditTrail)
+                    && self.audit_trail_data.is_none() && self.selected_variable.is_none() {
                         self.fetch_first_race_variable();
                     }
-                }
             } else {
                 // Not cached - show loading state immediately, then mark for debounced load
                 self.events = vec![
@@ -797,11 +792,10 @@ impl App {
                 self.fetch_trace_details();
 
                 // Fetch audit trail if needed
-                if matches!(self.view_mode, ViewMode::AuditTrail) {
-                    if self.audit_trail_data.is_none() && self.selected_variable.is_none() {
+                if matches!(self.view_mode, ViewMode::AuditTrail)
+                    && self.audit_trail_data.is_none() && self.selected_variable.is_none() {
                         self.fetch_first_race_variable();
                     }
-                }
             } else {
                 // Not cached - show loading state immediately, then mark for debounced load
                 self.events = vec![

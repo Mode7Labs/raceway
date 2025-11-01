@@ -96,7 +96,7 @@ async fn test_api_traces_list_pagination() -> Result<()> {
     let page2 = app.get_json("/api/traces?page=2&page_size=10").await?;
     let traces2 = page2["data"]["traces"].as_array().unwrap();
 
-    assert!(traces2.len() > 0, "Page 2 should have remaining traces");
+    assert!(!traces2.is_empty(), "Page 2 should have remaining traces");
 
     Ok(())
 }
@@ -279,7 +279,7 @@ async fn test_api_events_post_large_batch() -> Result<()> {
     for i in 0..100 {
         let mut event = fixture.events[0].clone();
         event.id = uuid::Uuid::new_v4();
-        event.timestamp = event.timestamp + chrono::Duration::milliseconds(i);
+        event.timestamp += chrono::Duration::milliseconds(i);
         events.push(event);
     }
 

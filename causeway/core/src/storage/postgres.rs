@@ -202,7 +202,7 @@ impl StorageBackend for PostgresBackend {
             FROM events
             WHERE trace_id = $1
             ORDER BY timestamp ASC,
-                     array_length(causality_vector, 1) ASC NULLS FIRST,
+                     jsonb_array_length(causality_vector) ASC NULLS FIRST,
                      id ASC
             "#,
         )
@@ -237,7 +237,7 @@ impl StorageBackend for PostgresBackend {
             SELECT id, trace_id, parent_id, timestamp, kind, metadata, causality_vector, lock_set
             FROM events
             ORDER BY timestamp ASC,
-                     array_length(causality_vector, 1) ASC NULLS FIRST,
+                     jsonb_array_length(causality_vector) ASC NULLS FIRST,
                      id ASC
             "#,
         )
@@ -1181,7 +1181,7 @@ impl StorageBackend for PostgresBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::StorageConfig;
+    use crate::config::{PostgresConfig, StorageConfig};
     use crate::event::{AccessType, EventKind, EventMetadata};
     use chrono::{TimeZone, Utc};
     use serde_json::json;
@@ -1233,10 +1233,14 @@ mod tests {
             }
         };
 
-        let mut storage_config = StorageConfig::default();
-        storage_config.backend = "postgres".to_string();
-        storage_config.postgres.connection_string = Some(url);
-        storage_config.postgres.auto_migrate = true;
+        let storage_config = StorageConfig {
+            backend: "postgres".to_string(),
+            postgres: PostgresConfig {
+                connection_string: Some(url),
+                auto_migrate: true,
+                ..Default::default()
+            },
+        };
 
         let backend = PostgresBackend::new(&storage_config).await?;
         backend.clear().await?;

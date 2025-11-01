@@ -6,7 +6,7 @@ This shows the before/after comparison for lock tracking:
 - After: 1 line with RAII wrappers (75% reduction)
 */
 
-use raceway_sdk::{RacewayClient, TrackedMutex, TrackedRwLock};
+use raceway::{RacewayClient, TrackedMutex, TrackedRwLock};
 use std::sync::Arc;
 
 #[tokio::main]

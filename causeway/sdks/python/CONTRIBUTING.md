@@ -47,6 +47,53 @@ python -m pytest -m unit
 python -m pytest -m middleware
 ```
 
+## Building the Package
+
+To build the Python package for distribution:
+
+### Install Build Tools
+
+```bash
+# Install the build tool
+python3 -m pip install build
+
+# Optional: Install twine for uploading to PyPI
+python3 -m pip install twine
+```
+
+### Build the Package
+
+```bash
+# Build source distribution and wheel
+python3 -m build
+
+# Output will be in dist/:
+# - raceway-0.1.0.tar.gz (source distribution)
+# - raceway-0.1.0-py3-none-any.whl (wheel)
+```
+
+### Verify the Build
+
+```bash
+# Check the distribution files
+twine check dist/*
+
+# Install locally from the wheel to test
+pip install dist/raceway-0.1.0-py3-none-any.whl
+
+# Or install in editable mode for development
+pip install -e .
+```
+
+### Build Requirements
+
+The build process requires:
+- `pyproject.toml` - Build system configuration (PEP 517)
+- `setup.py` or `setup.cfg` - Package metadata (if not using pyproject.toml exclusively)
+- `build` tool - PEP 517 compliant build frontend
+
+All dependencies are declared in `pyproject.toml`.
+
 ## Code Style
 
 - Follow [PEP 8](https://peps.python.org/pep-0008/) style guidelines
