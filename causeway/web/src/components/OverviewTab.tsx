@@ -2,7 +2,6 @@ import { type Event, type CriticalPathData, type AnomaliesData } from '../types'
 import { TraceHealth } from './TraceHealth';
 import { DashboardStats } from './DashboardStats';
 import { TraceInsights } from './TraceInsights';
-import { Button } from './ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { cn } from '@/lib/utils';
 

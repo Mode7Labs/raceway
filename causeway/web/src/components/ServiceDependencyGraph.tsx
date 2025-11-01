@@ -170,7 +170,7 @@ export function ServiceDependencyGraph({ services }: ServiceDependencyGraphProps
           if (!event.active) simulation.alphaTarget(0);
           d.fx = null;
           d.fy = null;
-        })
+        }) as any
       );
 
     // Add circles

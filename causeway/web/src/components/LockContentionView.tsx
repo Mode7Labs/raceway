@@ -4,7 +4,7 @@ import { cn } from '@/lib/utils';
 import { Badge } from './ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
-import { Lock, AlertTriangle, CheckCircle, Clock, Users, TrendingUp } from 'lucide-react';
+import { Lock, AlertTriangle, CheckCircle, Users, TrendingUp } from 'lucide-react';
 
 interface LockContentionViewProps {
   events: Event[];
@@ -79,8 +79,6 @@ export function LockContentionView({ events, selectedEventId, onEventSelect }: L
 
         if (otherHolders.length > 0) {
           // Contention detected: lock is held by another thread
-          const [blockingThread, blockingAcquire] = otherHolders[0];
-
           // Add to pending acquires
           const pending = pendingAcquires.get(lock_id) || [];
           pending.push(lockEvent);

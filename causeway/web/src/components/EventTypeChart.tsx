@@ -80,7 +80,7 @@ export function EventTypeChart({ events }: EventTypeChartProps) {
       .attr('stroke', backgroundColor)
       .attr('stroke-width', 2)
       .style('cursor', 'pointer')
-      .on('mouseover', function(event, d) {
+      .on('mouseover', function() {
         d3.select(this)
           .transition()
           .duration(200)
@@ -89,7 +89,7 @@ export function EventTypeChart({ events }: EventTypeChartProps) {
             .outerRadius(radius * 0.85) as any
           );
       })
-      .on('mouseout', function(event, d) {
+      .on('mouseout', function() {
         d3.select(this)
           .transition()
           .duration(200)

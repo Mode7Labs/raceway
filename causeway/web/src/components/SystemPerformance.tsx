@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Card, CardContent } from './ui/card';
 import { RacewayAPI } from '@/api';
-import type { TraceMetadata } from '@/types';
 import { Clock, Zap, TrendingDown, TrendingUp, Activity, Database, Globe, Code } from 'lucide-react';
 import { ServiceLink } from './ServiceLink';
 import { TraceLink } from './TraceLink';

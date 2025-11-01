@@ -39,79 +39,12 @@ impl AnalysisService {
             }
         }
 
-        let service = Self {
-            storage: Arc::clone(&storage),
-            graph: Arc::clone(&graph),
-            warmup: Arc::clone(&warmup),
+        Ok(Self {
+            storage,
+            graph,
+            warmup,
             config,
-        };
-
-        tokio::spawn(Self::warmup_existing_events(storage, graph, warmup));
-
-        Ok(service)
-    }
-
-    async fn warmup_existing_events(
-        storage: Arc<dyn StorageBackend>,
-        graph: Arc<RwLock<CausalGraph>>,
-        warmup: Arc<RwLock<WarmupStatus>>,
-    ) {
-        if let Err(err) = async {
-            let trace_ids = storage.get_all_trace_ids().await?;
-
-            {
-                let mut status = warmup.write().await;
-                status.phase = WarmupPhase::Replaying;
-                status.total_traces = trace_ids.len();
-                status.started_at = Some(Utc::now());
-            }
-
-            for (idx, trace_id) in trace_ids.into_iter().enumerate() {
-                let events = storage
-                    .get_trace_events(trace_id)
-                    .await
-                    .with_context(|| format!("fetching events for trace {}", trace_id))?;
-
-                let missing_events = {
-                    let graph_read = graph.read().await;
-                    events
-                        .iter()
-                        .filter(|event| !graph_read.contains_event(event.id))
-                        .cloned()
-                        .collect::<Vec<_>>()
-                };
-
-                if !missing_events.is_empty() {
-                    let graph_guard = graph.write().await;
-                    let mut pending = missing_events;
-                    pending.retain(|event| !graph_guard.contains_event(event.id));
-
-                    if !pending.is_empty() {
-                        graph_guard
-                            .ingest_events(pending)
-                            .with_context(|| format!("ingesting events for trace {}", trace_id))?;
-                    }
-                }
-
-                let mut status = warmup.write().await;
-                status.processed_traces = idx + 1;
-                status.last_trace = Some(trace_id);
-            }
-
-            {
-                let mut status = warmup.write().await;
-                status.phase = WarmupPhase::Completed;
-                status.completed_at = Some(Utc::now());
-            }
-
-            Ok::<(), anyhow::Error>(())
-        }
-        .await
-        {
-            let mut status = warmup.write().await;
-            status.phase = WarmupPhase::Failed;
-            status.last_error = Some(err.to_string());
-        }
+        })
     }
 
     /// Add an event (this goes through storage, then updates graph)
@@ -601,7 +534,7 @@ impl Default for WarmupStatus {
 impl WarmupStatus {
     pub fn new() -> Self {
         Self {
-            phase: WarmupPhase::Idle,
+            phase: WarmupPhase::Completed,
             total_traces: 0,
             processed_traces: 0,
             last_trace: None,

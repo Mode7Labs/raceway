@@ -85,7 +85,7 @@ pub struct GlobalAnalysisResponse {
     pub data: Option<GlobalAnalysisData>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 pub struct GlobalAnalysisData {
     pub total_traces: usize,
     pub total_events: usize,
@@ -95,7 +95,7 @@ pub struct GlobalAnalysisData {
     pub race_details: Option<Vec<GlobalRaceDetail>>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 pub struct GlobalRaceDetail {
     pub severity: String,
     pub variable: String,
@@ -183,8 +183,16 @@ pub enum Panel {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EventFilterMode {
+    ByType,        // Filter by event type (StateChange, FunctionCall, etc.)
+    ByService,     // Filter by service name
+    ByKeyword,     // Search by keyword in event details
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ViewMode {
     Events,              // Default event timeline view
+    Debugger,            // Time-travel debugger with playback controls
     Tree,                // Tree view showing causal relationships
     CriticalPath,        // Show critical path analysis
     Anomalies,           // Show detected anomalies with details
@@ -192,6 +200,8 @@ pub enum ViewMode {
     AuditTrail,          // Show audit trail for a variable
     CrossTrace,          // Show cross-trace race detection (lazy loaded)
     DistributedAnalysis, // Show distributed trace analysis with service breakdown
+    Dashboard,           // System dashboard with overview stats
+    Hotspots,            // Variable and service call hotspots
 }
 
 // Dependencies response types

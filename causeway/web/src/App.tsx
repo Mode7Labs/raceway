@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { RacewayAPI } from './api';
 import {type SidebarMode, type SystemViewMode, type InsightsViewMode, type ViewMode, type ServiceViewMode, type Event, type AnomaliesData, type CriticalPathData, type DependenciesData, type VariableAccess, type TraceMetadata, type ServiceListItem } from './types';
@@ -64,6 +64,9 @@ export default function App() {
   const [raceCount, setRaceCount] = useState<number>(0);
   const [raceInfo, setRaceInfo] = useState<string[]>([]);
 
+  // Track which trace we're currently loading to prevent race conditions
+  const loadingTraceIdRef = useRef<string | null>(null);
+
   // Global analysis (cross-trace races) is available at /api/analyze/global
   // but is not currently displayed in UI, so we don't fetch it
   // TODO: Add UI for global cross-trace race detection
@@ -128,8 +131,11 @@ export default function App() {
 
 
   // Fetch trace details (optimized to use single /full endpoint)
-  const fetchTraceDetails = useCallback(async (traceId: string, options: { silent?: boolean } = {}) => {
+  const fetchTraceDetails = useCallback(async (traceId: string, options: { silent?: boolean; signal?: AbortSignal } = {}) => {
     const silent = options.silent ?? false;
+
+    // Mark this trace as the one we're loading
+    loadingTraceIdRef.current = traceId;
 
     if (!silent) {
       setLoading(true);
@@ -138,7 +144,12 @@ export default function App() {
 
     try {
       // Single API call to fetch all trace data
-      const fullAnalysis = await RacewayAPI.getFullTraceAnalysis(traceId);
+      const fullAnalysis = await RacewayAPI.getFullTraceAnalysis(traceId, options.signal);
+
+      // Only update state if this is still the trace we should be showing
+      if (loadingTraceIdRef.current !== traceId) {
+        return; // Stale response, ignore it
+      }
 
       if (fullAnalysis.data) {
         // Extract events
@@ -174,11 +185,20 @@ export default function App() {
       }
       setError(null);
     } catch (error) {
-      console.error('Error fetching trace details:', error);
-      const errorMessage = error instanceof Error ? error.message : 'Failed to fetch trace details';
-      setError(errorMessage);
+      // Ignore AbortError - this is expected when switching traces quickly
+      if (error instanceof Error && error.name === 'AbortError') {
+        return;
+      }
+
+      // Only set error if this is still the current trace
+      if (loadingTraceIdRef.current === traceId) {
+        console.error('Error fetching trace details:', error);
+        const errorMessage = error instanceof Error ? error.message : 'Failed to fetch trace details';
+        setError(errorMessage);
+      }
     } finally {
-      if (!silent) {
+      // Only clear loading if this is still the current trace
+      if (!silent && loadingTraceIdRef.current === traceId) {
         setLoading(false);
       }
     }
@@ -207,16 +227,25 @@ export default function App() {
     };
   }, [autoRefresh, fetchTraces, fetchServices, fetchTraceDetails, selectedTraceId]);
 
-  // Handle trace selection
+  // Handle trace selection with abort controller to prevent race conditions
   useEffect(() => {
     if (selectedTraceId) {
+      // Create abort controller for this fetch
+      const abortController = new AbortController();
+
       // Clear data before refetching
       setDependenciesData(null);
       setAuditTrails({});
       setCriticalPathData(null);
       setAnomaliesData(null);
+
       // Fetch ALL trace details in one call (no lazy loading!)
-      fetchTraceDetails(selectedTraceId);
+      fetchTraceDetails(selectedTraceId, { signal: abortController.signal });
+
+      // Cleanup: abort the request if selectedTraceId changes or component unmounts
+      return () => {
+        abortController.abort();
+      };
     }
   }, [selectedTraceId, fetchTraceDetails]);
 
@@ -671,7 +700,7 @@ export default function App() {
                           <ServiceTraces
                             serviceName={selectedServiceName}
                             onSelectTrace={navigateToTrace}
-                            onNavigateToService={navigateToService}
+                            selectedTraceId={selectedTraceId}
                           />
                         )}
                       </div>

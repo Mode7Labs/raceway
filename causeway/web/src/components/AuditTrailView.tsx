@@ -28,6 +28,15 @@ interface VariableSummary {
   lastAccess: string;
 }
 
+interface VariableState {
+  name: string;
+  value: any;
+  lastModifiedBy: string;
+  lastModifiedAt: string;
+  isChanged: boolean;
+  accessType: string;
+}
+
 type AuditViewMode = 'focus' | 'graph' | 'debugger' | 'cross-trace';
 
 export function AuditTrailView({ auditTrails, events, traceId, onTraceSelect }: AuditTrailViewProps) {

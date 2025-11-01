@@ -1,13 +1,7 @@
 import {
   TracesListResponse,
-  TraceResponse,
   AnalysisResponse,
-  CriticalPathResponse,
-  AnomaliesResponse,
-  DependenciesResponse,
-  AuditTrailResponse,
   FullTraceAnalysisResponse,
-  DistributedTraceAnalysisResponse,
   ServicesListResponse,
   ServiceDependenciesResponse,
   DistributedEdgesResponse,
@@ -21,10 +15,10 @@ import {
 const API_BASE = '';  // Empty because we're using Vite proxy
 
 export class RacewayAPI {
-  private static async fetchJSON<T>(url: string): Promise<T> {
+  private static async fetchJSON<T>(url: string, signal?: AbortSignal): Promise<T> {
     // Note: In dev mode, headers are added by Vite proxy (see vite.config.ts)
     // The proxy reads from RACEWAY_KEY environment variable
-    const response = await fetch(url);
+    const response = await fetch(url, { signal });
     if (!response.ok) {
       throw new Error(`HTTP error! status: ${response.status}`);
     }
@@ -37,8 +31,8 @@ export class RacewayAPI {
     return this.fetchJSON<TracesListResponse>(`${API_BASE}/api/traces?page=${page}&page_size=${pageSize}`);
   }
 
-  static async getFullTraceAnalysis(traceId: string): Promise<FullTraceAnalysisResponse> {
-    return this.fetchJSON<FullTraceAnalysisResponse>(`${API_BASE}/api/traces/${traceId}`);
+  static async getFullTraceAnalysis(traceId: string, signal?: AbortSignal): Promise<FullTraceAnalysisResponse> {
+    return this.fetchJSON<FullTraceAnalysisResponse>(`${API_BASE}/api/traces/${traceId}`, signal);
   }
 
   static async analyzeGlobal(): Promise<AnalysisResponse> {

@@ -140,6 +140,7 @@ export function DistributedAnalysisView({
           events={events}
           selectedEventId={selectedEventId}
           onEventSelect={onEventSelect}
+          zoomLevel={1}
         />
       )}
 

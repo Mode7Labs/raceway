@@ -1,8 +1,11 @@
 pub mod anomalies_view;
 pub mod audit_trail_view;
 pub mod critical_path;
+pub mod dashboard_view;
+pub mod debugger_view;
 pub mod dependencies_view;
 pub mod distributed_analysis_view;
+pub mod hotspots_view;
 pub mod tree_view;
 pub mod types;
 
@@ -67,8 +70,21 @@ struct App {
     dependencies_data: Option<DependenciesData>,
     audit_trail_data: Option<AuditTrailData>,
     distributed_analysis_data: Option<DistributedTraceAnalysisData>,
+    global_analysis_data: Option<GlobalAnalysisData>,
     selected_variable: Option<String>,
     audit_trails: HashMap<String, Vec<VariableAccess>>, // All audit trails from full response
+
+    // Debugger state
+    debugger_playing: bool,
+    debugger_speed: f64,       // 0.5, 1.0, 2.0, 4.0
+    debugger_last_advance: Instant, // Track when we last advanced
+
+    // Event filtering
+    event_filter_mode: Option<EventFilterMode>,
+    event_filter_value: String,
+
+    // Request tracking to prevent race conditions
+    pending_trace_fetch: Option<usize>, // Track which trace we're currently fetching
 }
 
 impl App {
@@ -149,7 +165,20 @@ impl App {
             dependencies_data: None,
             audit_trail_data: None,
             distributed_analysis_data: None,
+            global_analysis_data: None,
             selected_variable: None,
+
+            // Debugger state
+            debugger_playing: false,
+            debugger_speed: 1.0,
+            debugger_last_advance: Instant::now(),
+
+            // Event filtering
+            event_filter_mode: None,
+            event_filter_value: String::new(),
+
+            // Request tracking
+            pending_trace_fetch: None,
         }
     }
 
@@ -237,8 +266,8 @@ impl App {
     // Check if enough time has passed since selection changed to actually load the trace
     fn should_load_trace(&self) -> bool {
         if let Some(last_change) = self.last_selection_change {
-            // Wait 300ms after last selection change
-            last_change.elapsed().as_millis() >= 300
+            // Wait 500ms after last selection change (debounce for smooth navigation)
+            last_change.elapsed().as_millis() >= 500
         } else {
             false
         }
@@ -394,6 +423,11 @@ impl App {
             return;
         }
 
+        // Prevent duplicate fetches for the same trace
+        if self.pending_trace_fetch == Some(self.loaded_trace) {
+            return; // Already fetching this trace
+        }
+
         // CACHE CHECK: Skip fetch if we already have this trace's data
         if let Some(cached) = self.trace_cache.get(&self.loaded_trace) {
             // Restore from cache
@@ -416,6 +450,10 @@ impl App {
             return;
         }
 
+        // Mark that we're fetching this trace
+        let fetching_trace_index = self.loaded_trace;
+        self.pending_trace_fetch = Some(fetching_trace_index);
+
         let trace_id = &self.trace_ids[self.loaded_trace];
 
         // Fetch full trace analysis in ONE request (includes events, analysis, critical path, anomalies, dependencies)
@@ -423,10 +461,17 @@ impl App {
         let has_races;
 
         if let Ok(response) = self.client.get(&full_url).send() {
+            // Check if user switched to a different trace while we were fetching
+            if self.loaded_trace != fetching_trace_index {
+                // Stale response - discard it
+                self.pending_trace_fetch = None;
+                return;
+            }
             // Check response status first
             if !response.status().is_success() {
                 self.anomalies = vec![format!("❌ HTTP Error: {}", response.status())];
                 self.events = vec!["❌ Failed to fetch events".to_string()];
+                self.pending_trace_fetch = None;
                 return;
             }
 
@@ -599,6 +644,9 @@ impl App {
             self.anomalies = vec!["❌ Failed to connect to server".to_string()];
             self.events = vec!["❌ Connection error".to_string()];
         }
+
+        // Clear pending fetch - we're done (success or failure)
+        self.pending_trace_fetch = None;
     }
 
     fn fetch_global_analysis(&mut self) {
@@ -609,6 +657,9 @@ impl App {
         if let Ok(response) = self.client.get(&global_url).send() {
             if let Ok(global_resp) = response.json::<GlobalAnalysisResponse>() {
                 if let Some(global) = global_resp.data {
+                    // Store global analysis data for dashboard
+                    self.global_analysis_data = Some(global.clone());
+
                     if global.potential_races > 0 {
                         let current_trace_id = &self.trace_ids[self.selected_trace];
                         let current_trace_short = &current_trace_id[..8];
@@ -759,17 +810,8 @@ impl App {
                         self.fetch_first_race_variable();
                     }
             } else {
-                // Not cached - show loading state immediately, then mark for debounced load
-                self.events = vec![
-                    "⏳ Loading trace...".to_string(),
-                    "".to_string(),
-                    "Fetching events and analysis...".to_string(),
-                ];
-                self.event_detail = "Loading trace data from server...".to_string();
-                self.anomalies = vec!["⏳ Loading...".to_string()];
-                self.event_data = vec![];
-
-                // Mark selection changed - will load after debounce delay
+                // Not cached - mark for debounced load, keep showing previous trace's data
+                // This allows smooth navigation without flashing loading states
                 self.mark_selection_changed();
             }
         }
@@ -797,32 +839,39 @@ impl App {
                         self.fetch_first_race_variable();
                     }
             } else {
-                // Not cached - show loading state immediately, then mark for debounced load
-                self.events = vec![
-                    "⏳ Loading trace...".to_string(),
-                    "".to_string(),
-                    "Fetching events and analysis...".to_string(),
-                ];
-                self.event_detail = "Loading trace data from server...".to_string();
-                self.anomalies = vec!["⏳ Loading...".to_string()];
-                self.event_data = vec![];
-
-                // Mark selection changed - will load after debounce delay
+                // Not cached - mark for debounced load, keep showing previous trace's data
+                // This allows smooth navigation without flashing loading states
                 self.mark_selection_changed();
             }
         }
     }
 
+    fn toggle_event_type_filter(&mut self, event_type: &str) {
+        // Toggle filter: if same type is active, clear it; otherwise set it
+        if matches!(self.event_filter_mode, Some(EventFilterMode::ByType))
+            && self.event_filter_value == event_type
+        {
+            self.event_filter_mode = None;
+            self.event_filter_value.clear();
+        } else {
+            self.event_filter_mode = Some(EventFilterMode::ByType);
+            self.event_filter_value = event_type.to_string();
+        }
+    }
+
     fn cycle_view_mode(&mut self) {
         self.view_mode = match self.view_mode {
-            ViewMode::Events => ViewMode::Tree,
+            ViewMode::Events => ViewMode::Debugger,
+            ViewMode::Debugger => ViewMode::Tree,
             ViewMode::Tree => ViewMode::CriticalPath,
             ViewMode::CriticalPath => ViewMode::Anomalies,
             ViewMode::Anomalies => ViewMode::Dependencies,
             ViewMode::Dependencies => ViewMode::DistributedAnalysis,
             ViewMode::DistributedAnalysis => ViewMode::AuditTrail,
             ViewMode::AuditTrail => ViewMode::CrossTrace,
-            ViewMode::CrossTrace => ViewMode::Events,
+            ViewMode::CrossTrace => ViewMode::Dashboard,
+            ViewMode::Dashboard => ViewMode::Hotspots,
+            ViewMode::Hotspots => ViewMode::Events,
         };
 
         // Lazy load data for view modes not included in /full endpoint
@@ -833,6 +882,12 @@ impl App {
         } else if matches!(self.view_mode, ViewMode::CrossTrace) {
             // Only fetch global analysis if we haven't done it yet or trace count changed
             if self.last_global_analysis_trace_count != self.trace_ids.len() {
+                self.fetch_global_analysis();
+            }
+        } else if matches!(self.view_mode, ViewMode::Dashboard) {
+            // Load global analysis for dashboard if not already loaded or stale
+            if self.global_analysis_data.is_none()
+                || self.last_global_analysis_trace_count != self.trace_ids.len() {
                 self.fetch_global_analysis();
             }
         } // Distributed analysis is now always loaded from dependencies in fetch_trace_details()
@@ -937,6 +992,26 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
         // Try to load pending trace after debounce period
         app.try_load_pending_trace();
 
+        // Handle debugger playback
+        if app.debugger_playing && matches!(app.view_mode, ViewMode::Debugger) {
+            let interval_ms = (1000.0 / app.debugger_speed) as u64;
+            if app.debugger_last_advance.elapsed().as_millis() >= interval_ms as u128 {
+                // Advance to next event
+                if app.selected_event < app.events.len().saturating_sub(1) {
+                    app.selected_event += 1;
+                    app.details_scroll = 0;
+                    if app.selected_event < app.event_data.len() {
+                        let event = &app.event_data[app.selected_event];
+                        app.event_detail = format!("{:#}", event);
+                    }
+                } else {
+                    // Reached end, stop playing
+                    app.debugger_playing = false;
+                }
+                app.debugger_last_advance = Instant::now();
+            }
+        }
+
         // Non-blocking event check
         if event::poll(std::time::Duration::from_millis(100))? {
             match event::read()? {
@@ -989,6 +1064,53 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> 
                             }
                             KeyCode::Char('n') if matches!(app.focused_panel, Panel::Anomalies) => {
                                 app.scroll_focused_down()
+                            }
+
+                            // Debugger controls (when in Debugger view)
+                            KeyCode::Char(' ') if matches!(app.view_mode, ViewMode::Debugger) => {
+                                app.debugger_playing = !app.debugger_playing;
+                            }
+                            KeyCode::Char('[') if matches!(app.view_mode, ViewMode::Debugger) => {
+                                app.debugger_speed = match app.debugger_speed as i32 {
+                                    4 => 2.0,
+                                    2 => 1.0,
+                                    1 => 0.5,
+                                    _ => 0.5,
+                                };
+                            }
+                            KeyCode::Char(']') if matches!(app.view_mode, ViewMode::Debugger) => {
+                                app.debugger_speed = match app.debugger_speed as i32 {
+                                    0 => 1.0,
+                                    1 => 2.0,
+                                    2 => 4.0,
+                                    _ => 4.0,
+                                };
+                            }
+                            KeyCode::Home if matches!(app.view_mode, ViewMode::Debugger) => {
+                                app.selected_event = 0;
+                                app.debugger_playing = false;
+                            }
+                            KeyCode::End if matches!(app.view_mode, ViewMode::Debugger) => {
+                                app.selected_event = app.events.len().saturating_sub(1);
+                                app.debugger_playing = false;
+                            }
+
+                            // Event filtering (in Events view only)
+                            KeyCode::Char('1') if matches!(app.view_mode, ViewMode::Events) => {
+                                app.toggle_event_type_filter("StateChange");
+                            }
+                            KeyCode::Char('2') if matches!(app.view_mode, ViewMode::Events) => {
+                                app.toggle_event_type_filter("FunctionCall");
+                            }
+                            KeyCode::Char('3') if matches!(app.view_mode, ViewMode::Events) => {
+                                app.toggle_event_type_filter("HTTPRequest");
+                            }
+                            KeyCode::Char('4') if matches!(app.view_mode, ViewMode::Events) => {
+                                app.toggle_event_type_filter("HTTPResponse");
+                            }
+                            KeyCode::Char('c') if matches!(app.view_mode, ViewMode::Events) => {
+                                app.event_filter_mode = None;
+                                app.event_filter_value.clear();
                             }
 
                             // Global actions
@@ -1190,12 +1312,60 @@ fn ui(f: &mut Frame, app: &App) {
     let events_focused = matches!(app.focused_panel, Panel::Events);
 
     match app.view_mode {
+        ViewMode::Debugger => {
+            // Time-travel debugger view
+            debugger_view::render_debugger_view(
+                f,
+                main_chunks[1],
+                &app.event_data,
+                &app.events_in_races,
+                events_focused,
+                app.selected_event,
+                app.debugger_playing,
+                app.debugger_speed,
+            );
+        }
         ViewMode::Events => {
-            // Service-aware events list view
+            // Service-aware events list view with optional filtering
             let events: Vec<ListItem> = app
                 .events
                 .iter()
                 .enumerate()
+                .filter(|(i, _event)| {
+                    // Apply filter if active
+                    if let Some(filter_mode) = app.event_filter_mode {
+                        if *i < app.event_data.len() {
+                            match filter_mode {
+                                EventFilterMode::ByType => {
+                                    // Check if event kind matches filter value
+                                    app.event_data[*i]
+                                        .get("kind")
+                                        .and_then(|k| k.as_object())
+                                        .and_then(|obj| obj.keys().next())
+                                        .map(|kind| kind == &app.event_filter_value)
+                                        .unwrap_or(false)
+                                }
+                                EventFilterMode::ByService => {
+                                    // Check if service name matches filter value
+                                    app.event_data[*i]
+                                        .get("metadata")
+                                        .and_then(|m| m.get("service_name"))
+                                        .and_then(|s| s.as_str())
+                                        .map(|service| service == app.event_filter_value)
+                                        .unwrap_or(false)
+                                }
+                                EventFilterMode::ByKeyword => {
+                                    // Search in event display text (simple contains)
+                                    false // Not implemented yet
+                                }
+                            }
+                        } else {
+                            true // Show loading/placeholder events
+                        }
+                    } else {
+                        true // No filter active, show all events
+                    }
+                })
                 .map(|(i, event)| {
                     // Check if this event is involved in a race
                     let event_in_race = if i < app.event_data.len() {
@@ -1250,10 +1420,20 @@ fn ui(f: &mut Frame, app: &App) {
                 })
                 .collect();
 
-            let events_title = if events_focused {
-                "⚡ Event Timeline [j/k] ●"
+            let filter_indicator = if let Some(filter_mode) = app.event_filter_mode {
+                match filter_mode {
+                    EventFilterMode::ByType => format!(" 🔍 Type={}", app.event_filter_value),
+                    EventFilterMode::ByService => format!(" 🔍 Service={}", app.event_filter_value),
+                    EventFilterMode::ByKeyword => format!(" 🔍 Keyword={}", app.event_filter_value),
+                }
             } else {
-                "⚡ Event Timeline [j/k]"
+                String::new()
+            };
+
+            let events_title = if events_focused {
+                format!("⚡ Event Timeline [1-4:Filter c:Clear] ●{}", filter_indicator)
+            } else {
+                format!("⚡ Event Timeline [1-4:Filter c:Clear]{}", filter_indicator)
             };
             let events_block = Block::default()
                 .borders(Borders::ALL)
@@ -1386,6 +1566,45 @@ fn ui(f: &mut Frame, app: &App) {
                 f.render_widget(list, main_chunks[1]);
             }
         }
+        ViewMode::Dashboard => {
+            // Calculate system statistics
+            let total_traces = app.trace_metadata.len();
+
+            // Calculate total events from trace metadata
+            let total_events: usize = app.trace_metadata.iter()
+                .map(|t| t.event_count)
+                .sum();
+
+            // Count unique services
+            let mut unique_services = HashSet::new();
+            for trace in &app.trace_metadata {
+                for service in &trace.services {
+                    unique_services.insert(service.clone());
+                }
+            }
+            let total_services = unique_services.len();
+
+            // Get recent traces (limit to 20)
+            let recent_traces: Vec<_> = app.trace_metadata.iter()
+                .take(20)
+                .cloned()
+                .collect();
+
+            // Render dashboard view
+            dashboard_view::render_dashboard_view(
+                f,
+                main_chunks[1],
+                total_traces,
+                total_events,
+                total_services,
+                &recent_traces,
+                app.global_analysis_data.as_ref(),
+            );
+        }
+        ViewMode::Hotspots => {
+            // Render hotspots view with detailed resource usage analysis
+            hotspots_view::render_hotspots_view(f, main_chunks[1], &app.event_data);
+        }
     }
 
     // Right panel: Event details and anomalies
@@ -1441,6 +1660,7 @@ fn ui(f: &mut Frame, app: &App) {
     // Footer
     let view_mode_text = match app.view_mode {
         ViewMode::Events => "Events",
+        ViewMode::Debugger => "Debugger",
         ViewMode::Tree => "Tree",
         ViewMode::CriticalPath => "Critical Path",
         ViewMode::Anomalies => "Anomalies",
@@ -1448,6 +1668,8 @@ fn ui(f: &mut Frame, app: &App) {
         ViewMode::DistributedAnalysis => "Distributed Analysis",
         ViewMode::AuditTrail => "Audit Trail",
         ViewMode::CrossTrace => "Cross-Trace Races",
+        ViewMode::Dashboard => "Dashboard",
+        ViewMode::Hotspots => "Hotspots",
     };
     let footer_text = format!(
         "View: {} | Tab/v: Cycle view | ←→/hl: Switch trace | r: Refresh | ?: Help | q: Quit",
