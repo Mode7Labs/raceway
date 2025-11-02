@@ -4,7 +4,7 @@ First off, thank you for considering contributing to Raceway! It's people like y
 
 ## Code of Conduct
 
-This project and everyone participating in it is governed by our Code of Conduct. By participating, you are expected to uphold this code.
+This project and everyone participating in it is governed by our [Code of Conduct](CODE_OF_CONDUCT.md). By participating, you are expected to uphold this code. Please report unacceptable behavior to [hello@mode7.io](mailto:hello@mode7.io).
 
 ## How Can I Contribute?
 

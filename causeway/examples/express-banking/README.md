@@ -27,7 +27,8 @@ The banking app will start on `http://localhost:3050`
 
 Open your browser to:
 - **Banking App:** http://localhost:3050
-- **Raceway Analysis:** http://localhost:8080
+- **Raceway Analysis:** http://localhost:3005 (Web UI)
+  - Or use the TUI: `raceway tui` for terminal-based analysis
 
 ### 4. Trigger the Race Condition
 
@@ -36,14 +37,16 @@ In the banking app, click the **"Trigger Race Condition"** button. This will:
 1. Send two concurrent transfers from Alice's account
 2. Cause a race condition due to read-modify-write bug
 3. Send instrumentation events to Raceway
-4. Show the detected race in Raceway's Web UI
+4. Show the detected race in Raceway's analysis interface
 
 ### 5. View Results in Raceway
 
-Go to `http://localhost:8080` and:
+**Web UI:** Go to `http://localhost:3005` and:
 - Select one of the traces from the left panel
 - Navigate to the "Anomalies" or "Cross Trace" tab
 - See the detected race condition with detailed analysis
+
+**TUI:** Run `raceway tui` in your terminal for interactive trace analysis
 
 ## The Bug
 
@@ -77,17 +80,20 @@ const raceway = new RacewayClient({
   environment: 'development',
 });
 
-raceway.startTrace();
+// Use middleware for automatic trace management
+app.use(raceway.middleware());
 
-raceway.trackStateChange(
-  'alice.balance',      // Variable name
-  1000,                 // Old value
-  900,                  // New value
-  'index.js:277',       // Location
-  'Write'               // Access type
-);
-
-raceway.endTrace();
+// Track state changes within request handlers
+app.post('/transfer', (req, res) => {
+  raceway.trackStateChange(
+    'alice.balance',      // Variable name
+    1000,                 // Old value
+    900,                  // New value
+    'index.js:277',       // Location
+    'Write'               // Access type
+  );
+  // ... rest of handler
+});
 ```
 
 ### Race Detection

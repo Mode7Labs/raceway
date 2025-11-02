@@ -27,7 +27,8 @@ The banking app will start on `http://localhost:3053`
 
 Open your browser to:
 - **Banking App:** http://localhost:3053
-- **Raceway Analysis:** http://localhost:8080
+- **Raceway Analysis:** http://localhost:3005 (Web UI)
+  - Or use the TUI: `raceway tui` for terminal-based analysis
 
 ### 4. Trigger the Race Condition
 
@@ -35,10 +36,12 @@ In the banking app, click the **"Trigger Race Condition"** button.
 
 ### 5. View Results in Raceway
 
-Go to `http://localhost:8080` and:
+**Web UI:** Go to `http://localhost:3005` and:
 - Select one of the traces from the left panel
 - Navigate to the "Anomalies" or "Cross Trace" tab
 - See the detected race condition with detailed analysis
+
+**TUI:** Run `raceway tui` in your terminal for interactive trace analysis
 
 ## The Bug
 
@@ -51,5 +54,6 @@ The banking API uses the Raceway SDK to track state changes, function calls, and
 ## Learn More
 
 - [Raceway Documentation](../../README.md)
-- [Instrumentation Guide](../../docs/INSTRUMENTATION_GUIDE.md)
+- [Getting Started Guide](../../docs/guide/getting-started.md)
+- [Python SDK Documentation](../../docs/sdks/python.md)
 - [Python SDK Reference](../../sdks/python/README.md)

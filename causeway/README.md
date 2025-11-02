@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/logo.png" alt="Raceway Logo" width="120" />
+</p>
+
 # Raceway
 
 **Deep concurrency analysis and debugging for distributed systems**

@@ -122,5 +122,3 @@ After Phase 2 backend changes:
 - ✅ Critical path will span all services
 - ✅ Race detection will work across service boundaries
 - ✅ Distributed span hierarchy will link parent/child spans
-
-See `DISTRIBUTED.md` for full roadmap.

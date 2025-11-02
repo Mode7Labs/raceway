@@ -26,7 +26,8 @@ The banking app will start on `http://localhost:3051`
 
 Open your browser to:
 - **Banking App:** http://localhost:3051
-- **Raceway Analysis:** http://localhost:8080
+- **Raceway Analysis:** http://localhost:3005 (Web UI)
+  - Or use the TUI: `raceway tui` for terminal-based analysis
 
 ### 4. Trigger the Race Condition
 
@@ -35,14 +36,16 @@ In the banking app, click the **"Trigger Race Condition"** button. This will:
 1. Send two concurrent transfers from Alice's account
 2. Cause a race condition due to read-modify-write bug
 3. Send instrumentation events to Raceway
-4. Show the detected race in Raceway's Web UI
+4. Show the detected race in Raceway's analysis interface
 
 ### 5. View Results in Raceway
 
-Go to `http://localhost:8080` and:
+**Web UI:** Go to `http://localhost:3005` and:
 - Select one of the traces from the left panel
 - Navigate to the "Anomalies" or "Cross Trace" tab
 - See the detected race condition with detailed analysis
+
+**TUI:** Run `raceway tui` in your terminal for interactive trace analysis
 
 ## The Bug
 
@@ -72,23 +75,29 @@ Example instrumentation:
 
 ```rust
 use raceway::{RacewayClient, Config};
+use axum::{Router, middleware};
 
 let raceway = RacewayClient::new(Config {
     service_name: "banking-api".to_string(),
     ..Default::default()
 });
 
-raceway.start_trace().await;
+// Use middleware for automatic trace management
+let app = Router::new()
+    .route("/transfer", post(transfer_handler))
+    .layer(middleware::from_fn(raceway.middleware()));
 
-raceway.track_state_change(
-    "alice.balance",      // Variable name
-    Some(1000),           // Old value
-    900,                  // New value
-    "main.rs:277",        // Location
-    "Write",              // Access type
-).await;
-
-raceway.end_trace().await;
+// Track state changes within request handlers
+async fn transfer_handler() {
+    raceway.track_state_change(
+        "alice.balance",      // Variable name
+        Some(1000),           // Old value
+        900,                  // New value
+        "main.rs:277",        // Location
+        "Write",              // Access type
+    ).await;
+    // ... rest of handler
+}
 ```
 
 ### Race Detection

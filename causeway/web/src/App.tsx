@@ -399,7 +399,7 @@ export default function App() {
           <div className="flex items-center gap-3">
             <h1 className="text-base font-medium flex items-center gap-2">
               <img src={logo} alt="Raceway" className="w-5 h-5" />
-              <span className="text-red-400/60 font-extralight uppercase tracking-[0.25em]">raceway</span>
+              <span className="text-red-400/60 font-black" style={{ fontFamily: "'Orbitron', sans-serif" }}>Raceway</span>
             </h1>
           </div>
 

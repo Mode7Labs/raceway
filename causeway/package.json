@@ -6,13 +6,17 @@
   "license": "MIT",
   "scripts": {
     "seed": "ts-node scripts/seed-database.ts",
-    "validate": "ts-node scripts/validate-trace.ts"
+    "validate": "ts-node scripts/validate-trace.ts",
+    "docs:dev": "vitepress dev docs",
+    "docs:build": "vitepress build docs",
+    "docs:preview": "vitepress preview docs"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
     "@types/uuid": "^10.0.0",
     "ts-node": "^10.9.2",
-    "typescript": "^5.0.0"
+    "typescript": "^5.0.0",
+    "vitepress": "^1.6.4"
   },
   "dependencies": {
     "uuid": "^9.0.0"

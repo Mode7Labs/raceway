@@ -15,6 +15,10 @@ dist/
 *.tsbuildinfo
 .turbo/
 
+# VitePress
+**/.vitepress/dist/
+**/.vitepress/cache/
+
 # Build outputs
 build/
 out/
