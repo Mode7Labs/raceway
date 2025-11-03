@@ -30,7 +30,7 @@ use axum::{
     routing::post,
     Json, Router,
 };
-use raceway_sdk::RacewayClient;
+use raceway::RacewayClient;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 

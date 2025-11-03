@@ -80,7 +80,7 @@ if __name__ == "__main__":
 ```python
 from fastapi import FastAPI, Request
 from raceway import RacewayClient, Config
-from raceway.middleware import fastapi_middleware
+from raceway.middleware import FastAPIMiddleware
 
 app = FastAPI()
 
@@ -90,7 +90,7 @@ raceway = RacewayClient(Config(
 ))
 
 # Add middleware
-app.middleware("http")(fastapi_middleware(raceway))
+app.add_middleware(FastAPIMiddleware, client=raceway)
 
 @app.post("/transfer")
 async def transfer(request: Request):
@@ -291,7 +291,78 @@ Convenience wrapper around `requests.request` that automatically adds propagatio
 response = raceway.request("POST", "http://downstream/api", json=data)
 ```
 
+### Lock Tracking Methods
+
+#### `track_lock_acquire(lock_id, lock_type="Mutex")`
+
+Manually track lock acquisition.
+
+```python
+raceway.track_lock_acquire("account_lock", "Mutex")
+```
+
+#### `track_lock_release(lock_id, lock_type="Mutex")`
+
+Manually track lock release.
+
+```python
+raceway.track_lock_release("account_lock", "Mutex")
+```
+
+#### `tracked_lock(lock, lock_id, lock_type="Mutex")`
+
+Context manager for automatic lock tracking.
+
+```python
+from threading import Lock
+from raceway.lock_helpers import tracked_lock
+
+account_lock = Lock()
+
+with tracked_lock(raceway, account_lock, "account_lock", "Mutex"):
+    # Lock is automatically acquired and tracked
+    account["balance"] -= amount
+    # Lock is automatically released and tracked, even if exception occurs
+```
+
+**Benefits:**
+- Automatic acquire/release tracking
+- Exception-safe (lock released even if error occurs)
+- Works with `threading.Lock`, `asyncio.Lock`, or any lock with `acquire()`/`release()`
+
+### Function Decorators
+
+#### `@track_function(client)`
+
+Decorator to automatically track function entry/exit and duration.
+
+```python
+from raceway.decorators import track_function
+
+@track_function(raceway)
+def process_payment(user_id, amount):
+    # Function call is automatically tracked with args
+    # Duration is measured automatically
+    return charge_card(user_id, amount)
+```
+
+**What it tracks:**
+- Function entry with arguments
+- Function duration (in nanoseconds)
+- Return value (optional)
+- Exceptions (if any)
+
 ### Lifecycle Methods
+
+#### `flush()`
+
+Manually flush buffered events to the server.
+
+```python
+raceway.flush()
+```
+
+Use this when you need to ensure events are sent immediately (e.g., before process exit, after critical operations).
 
 #### `shutdown()`
 
@@ -300,6 +371,8 @@ Flush remaining events and stop background thread.
 ```python
 raceway.shutdown()
 ```
+
+**Note:** `shutdown()` calls `flush()` internally before stopping the background thread.
 
 ## Context Propagation
 

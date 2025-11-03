@@ -9,7 +9,7 @@ Raceway provides first-class SDKs for TypeScript, Python, Go, and Rust.
 | **TypeScript/Node.js** | `@mode-7/raceway` | `npm install @mode-7/raceway` | [Docs](/sdks/typescript) |
 | **Python** | `raceway` | `pip install raceway` | [Docs](/sdks/python) |
 | **Go** | `github.com/mode7labs/raceway/sdks/go` | `go get github.com/mode7labs/raceway/sdks/go` | [Docs](/sdks/go) |
-| **Rust** | `raceway-client` | `cargo add raceway-client` | [Docs](/sdks/rust) |
+| **Rust** | `raceway` | `cargo add raceway` | [Docs](/sdks/rust) |
 
 ## Common Features
 

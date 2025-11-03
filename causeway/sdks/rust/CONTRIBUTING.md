@@ -159,7 +159,7 @@ Example:
 /// # Examples
 ///
 /// ```
-/// use raceway_sdk::RacewayClient;
+/// use raceway::RacewayClient;
 ///
 /// let client = RacewayClient::new("http://localhost:8080", "my-service");
 /// client.track_state_change("balance", Some(100), 150, "Write");
@@ -212,7 +212,7 @@ pub enum RacewayError {
 Create proc macros for automatic instrumentation:
 
 ```rust
-use raceway_sdk::track;
+use raceway::track;
 
 #[track] // Automatically tracks function calls
 async fn process_payment(amount: i64) -> Result<(), Error> {
@@ -247,7 +247,7 @@ Add support for Actix-Web framework:
 
 ```rust
 use actix_web::{web, App, HttpServer};
-use raceway_sdk::actix::RacewayMiddleware;
+use raceway::actix::RacewayMiddleware;
 
 #[actix_web::main]
 async fn main() {
@@ -276,7 +276,7 @@ Add support for Rocket framework:
 
 ```rust
 use rocket::{State, routes};
-use raceway_sdk::rocket::RacewayFairing;
+use raceway::rocket::RacewayFairing;
 
 #[launch]
 fn rocket() -> _ {
@@ -295,14 +295,14 @@ Add helpers for popular Rust database libraries:
 
 ```rust
 // SQLx integration
-use raceway_sdk::sqlx::track_query;
+use raceway::sqlx::track_query;
 
 let result = track_query(&client, sqlx::query!("SELECT * FROM users"))
     .fetch_all(&pool)
     .await?;
 
 // Diesel integration
-use raceway_sdk::diesel::TrackableConnection;
+use raceway::diesel::TrackableConnection;
 
 let conn = establish_connection().track(&client);
 ```
@@ -321,7 +321,7 @@ let conn = establish_connection().track(&client);
 Integrate with the `tracing` ecosystem:
 
 ```rust
-use raceway_sdk::tracing::RacewaySubscriber;
+use raceway::tracing::RacewaySubscriber;
 use tracing_subscriber::layer::SubscriberExt;
 
 let subscriber = tracing_subscriber::registry()
@@ -357,7 +357,7 @@ let client = RacewayClient::builder()
 Export metrics to Prometheus:
 
 ```rust
-use raceway_sdk::metrics::PrometheusExporter;
+use raceway::metrics::PrometheusExporter;
 
 let exporter = PrometheusExporter::new(&client);
 let registry = prometheus::Registry::new();
@@ -377,7 +377,7 @@ Add support for Warp framework:
 
 ```rust
 use warp::Filter;
-use raceway_sdk::warp::with_raceway;
+use raceway::warp::with_raceway;
 
 let routes = warp::path("api")
     .and(with_raceway(client.clone()))
@@ -390,7 +390,7 @@ Create Tower middleware:
 
 ```rust
 use tower::ServiceBuilder;
-use raceway_sdk::tower::RacewayLayer;
+use raceway::tower::RacewayLayer;
 
 let service = ServiceBuilder::new()
     .layer(RacewayLayer::new(client))
@@ -403,7 +403,7 @@ Add GraphQL integration:
 
 ```rust
 use async_graphql::*;
-use raceway_sdk::graphql::RacewayExtension;
+use raceway::graphql::RacewayExtension;
 
 let schema = Schema::build(Query, Mutation, EmptySubscription)
     .extension(RacewayExtension::new(client))

@@ -229,5 +229,6 @@ while (!success) {
 ## Learn More
 
 - [Raceway Documentation](../../README.md)
-- [Instrumentation Guide](../../docs/INSTRUMENTATION_GUIDE.md)
+- [Getting Started Guide](../../docs/guide/getting-started.md)
+- [TypeScript SDK Documentation](../../docs/sdks/typescript.md)
 - [TypeScript SDK Reference](../../sdks/typescript/README.md)

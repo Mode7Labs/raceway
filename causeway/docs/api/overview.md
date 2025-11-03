@@ -34,6 +34,29 @@ Returns server health status.
 }
 ```
 
+### Server Status
+
+```http
+GET /status
+```
+
+Returns detailed server statistics.
+
+**Response:**
+```json
+{
+  "version": "0.1.0",
+  "uptime_seconds": 3600,
+  "events_captured": 15420,
+  "traces_active": 342,
+  "warmup": {
+    "phase": "Complete",
+    "started_at": "2024-11-02T10:00:00Z",
+    "completed_at": "2024-11-02T10:00:05Z"
+  }
+}
+```
+
 ### Event Ingestion
 
 ```http

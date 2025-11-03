@@ -31,12 +31,12 @@ import (
 )
 
 func main() {
-    client := raceway.NewClient(raceway.Config{
+    client := raceway.New(raceway.Config{
         ServerURL:   "http://localhost:8080",
         ServiceName: "my-service",
         InstanceID:  "instance-1",
     })
-    defer client.Stop()
+    defer client.Shutdown()
 
     mux := http.NewServeMux()
     mux.HandleFunc("/api/transfer", transferHandler(client))
@@ -53,26 +53,28 @@ func transferHandler(client *raceway.Client) http.HandlerFunc {
         startTime := time.Now()
 
         // Track function call
-        client.TrackFunctionCall(ctx, "transfer", map[string]interface{}{
+        client.TrackFunctionCall(ctx, "transfer", "app", map[string]interface{}{
             "from":   "alice",
             "to":     "bob",
             "amount": 100,
-        })
+        }, "main.go", 56)
 
         // Track state changes
         balance := getBalance("alice")
-        client.TrackStateChange(ctx, "alice.balance", nil, balance, "Read")
+        client.TrackStateChange(ctx, "alice.balance", nil, balance, "main.go:63", "Read")
 
         if balance < 100 {
-            client.TrackHTTPResponse(ctx, 400, uint64(time.Since(startTime).Milliseconds()))
+            headers := map[string]string{}
+            client.TrackHTTPResponse(ctx, 400, headers, nil, time.Since(startTime).Milliseconds())
             w.WriteHeader(http.StatusBadRequest)
             return
         }
 
         setBalance("alice", balance-100)
-        client.TrackStateChange(ctx, "alice.balance", balance, balance-100, "Write")
+        client.TrackStateChange(ctx, "alice.balance", balance, balance-100, "main.go:72", "Write")
 
-        client.TrackHTTPResponse(ctx, 200, uint64(time.Since(startTime).Milliseconds()))
+        headers := map[string]string{}
+        client.TrackHTTPResponse(ctx, 200, headers, nil, time.Since(startTime).Milliseconds())
         w.WriteHeader(http.StatusOK)
     }
 }
@@ -161,12 +163,12 @@ import (
     raceway "github.com/mode7labs/raceway/sdks/go"
 )
 
-client := raceway.NewClient(raceway.Config{
+client := raceway.New(raceway.Config{
     ServerURL:   "http://localhost:8080",
     ServiceName: "my-service",
     APIKey:      os.Getenv("RACEWAY_API_KEY"),  // Read from environment variable
 })
-defer client.Stop()
+defer client.Shutdown()
 ```
 
 **Best Practices:**
@@ -180,7 +182,7 @@ defer client.Stop()
 If your Raceway server doesn't require authentication, simply omit the `APIKey` parameter:
 
 ```go
-client := raceway.NewClient(raceway.Config{
+client := raceway.New(raceway.Config{
     ServerURL:   "http://localhost:8080",
     ServiceName: "my-service",
 })
@@ -205,49 +207,65 @@ type Config struct {
 
 ### Client Creation
 
-#### `raceway.NewClient(config)`
+#### `raceway.New(config)`
 
 Create a new Raceway client instance.
 
 ```go
-client := raceway.NewClient(raceway.Config{
+client := raceway.New(raceway.Config{
     ServerURL:   "http://localhost:8080",
     ServiceName: "my-service",
     InstanceID:  "instance-1",
 })
-defer client.Stop()
+defer client.Shutdown()
 ```
+
+**Note:** `raceway.NewClient()` is available as an alias for compatibility.
 
 ### Core Tracking Methods
 
 All methods accept `context.Context` as the first parameter for automatic goroutine tracking.
 
-#### `client.TrackStateChange(ctx, variable, oldValue, newValue, accessType)`
+#### `client.TrackStateChange(ctx, variable, oldValue, newValue, location, accessType)`
 
 Track a variable read or write.
 
 ```go
 // Track a read
-client.TrackStateChange(ctx, "counter", nil, 5, "Read")
+client.TrackStateChange(ctx, "counter", nil, 5, "main.go:42", "Read")
 
 // Track a write
-client.TrackStateChange(ctx, "counter", 5, 6, "Write")
+client.TrackStateChange(ctx, "counter", 5, 6, "main.go:45", "Write")
 ```
 
-#### `client.TrackFunctionCall(ctx, functionName, args)`
+#### `client.TrackFunctionCall(ctx, functionName, module, args, file, line)`
 
 Track a function call (no duration tracking).
 
 ```go
-client.TrackFunctionCall(ctx, "processPayment", map[string]interface{}{
+client.TrackFunctionCall(ctx, "processPayment", "app", map[string]interface{}{
     "userId": 123,
     "amount": 50,
+}, "main.go", 42)
+```
+
+#### `client.TrackFunction(ctx, functionName, args, fn) interface{}`
+
+Track a function with automatic duration measurement by wrapping it.
+
+```go
+result := client.TrackFunction(ctx, "processPayment", map[string]interface{}{
+    "userId": 123,
+    "amount": 50,
+}, func() interface{} {
+    // Your function logic here
+    return processPaymentLogic()
 })
 ```
 
 #### `client.StartFunction(ctx, functionName, args) func()`
 
-Track a function with automatic duration measurement. Returns a function to be called with `defer`.
+Track a function with automatic duration measurement. Returns a function to be called with `defer`. This is the idiomatic Go pattern.
 
 ```go
 func transfer(ctx context.Context, client *raceway.Client) {
@@ -261,13 +279,131 @@ func transfer(ctx context.Context, client *raceway.Client) {
 }
 ```
 
-#### `client.TrackHTTPResponse(ctx, status, durationMs)`
+#### `client.TrackFunctionReturn(ctx, functionName, returnValue, file, line)`
+
+Track a function return with its return value.
+
+```go
+client.TrackFunctionReturn(ctx, "processPayment", result, "main.go", 50)
+```
+
+#### `client.TrackHTTPRequest(ctx, method, url, headers, body)`
+
+Track an HTTP request. This is automatically called by the middleware.
+
+```go
+headers := map[string]string{"Content-Type": "application/json"}
+client.TrackHTTPRequest(ctx, "POST", "/api/users", headers, nil)
+```
+
+#### `client.TrackHTTPResponse(ctx, status, headers, body, durationMs)`
 
 Track an HTTP response.
 
 ```go
-duration := uint64(time.Since(startTime).Milliseconds())
-client.TrackHTTPResponse(ctx, 200, duration)
+headers := map[string]string{"Content-Type": "application/json"}
+durationMs := time.Since(startTime).Milliseconds()
+client.TrackHTTPResponse(ctx, 200, headers, nil, durationMs)
+```
+
+### Async Tracking Methods
+
+#### `client.TrackAsyncSpawn(ctx, taskID, taskName, location)`
+
+Track spawning a goroutine.
+
+```go
+taskID := uuid.New().String()
+client.TrackAsyncSpawn(ctx, taskID, "backgroundProcessor", "main.go:85")
+
+go func() {
+    // Task logic here
+}()
+```
+
+#### `client.TrackAsyncAwait(ctx, futureID, location)`
+
+Track waiting for an async operation.
+
+```go
+client.TrackAsyncAwait(ctx, futureID, "main.go:90")
+result := <-resultChan
+```
+
+### Lock Tracking Methods
+
+The Go SDK provides both manual lock tracking methods and convenience helpers for automatic tracking.
+
+#### `client.TrackLockAcquire(ctx, lockID, lockType)`
+
+Manually track lock acquisition. Location is automatically captured.
+
+```go
+client.TrackLockAcquire(ctx, "account_lock", "Mutex")
+accountLock.Lock()
+```
+
+#### `client.TrackLockRelease(ctx, lockID, lockType)`
+
+Manually track lock release. Location is automatically captured.
+
+```go
+accountLock.Unlock()
+client.TrackLockRelease(ctx, "account_lock", "Mutex")
+```
+
+#### `client.WithLock(ctx, lock, lockID, lockType, fn)`
+
+Execute a function while holding a lock, automatically tracking acquire and release.
+
+```go
+var accountLock sync.Mutex
+
+client.WithLock(ctx, &accountLock, "account_lock", "Mutex", func() {
+    accounts["alice"].Balance -= 100
+})
+// Lock is automatically acquired before fn() and released after, even if panic occurs
+```
+
+**Benefits:**
+- Automatic acquire/release tracking
+- Exception-safe (lock released even if panic occurs)
+- Works with `sync.Mutex` or any type implementing `sync.Locker`
+
+#### `client.WithRWLockRead(ctx, lock, lockID, fn)`
+
+Execute a function while holding a read lock.
+
+```go
+var dataLock sync.RWMutex
+
+client.WithRWLockRead(ctx, &dataLock, "data_lock", func() {
+    balance := accounts["alice"].Balance
+    fmt.Println(balance)
+})
+```
+
+#### `client.WithRWLockWrite(ctx, lock, lockID, fn)`
+
+Execute a function while holding a write lock.
+
+```go
+var dataLock sync.RWMutex
+
+client.WithRWLockWrite(ctx, &dataLock, "data_lock", func() {
+    accounts["alice"].Balance -= 100
+})
+```
+
+### Error Tracking Methods
+
+#### `client.TrackError(ctx, errorType, message, stackTrace)`
+
+Track an error occurrence.
+
+```go
+stackTrace := []string{"main.go:42", "handler.go:15"}
+client.TrackError(ctx, "ValidationError", "Invalid amount", stackTrace)
 ```
 
 ### Distributed Tracing Methods
@@ -336,13 +472,25 @@ raceCtx := raceway.GetRacewayContext(ctx)
 
 ### Lifecycle Methods
 
-#### `client.Stop()`
+#### `client.Flush()`
 
-Stop the client and flush remaining events.
+Manually flush buffered events to the server.
 
 ```go
-defer client.Stop()
+client.Flush()
 ```
+
+Use this when you need to ensure events are sent immediately (e.g., before process exit, after critical operations).
+
+#### `client.Shutdown()`
+
+Flush remaining events and stop the auto-flush goroutine.
+
+```go
+defer client.Shutdown()
+```
+
+**Note:** `Shutdown()` calls `Flush()` internally before stopping background tasks.
 
 ## Goroutine Tracking
 
@@ -365,7 +513,7 @@ func handler(w http.ResponseWriter, r *http.Request) {
 }
 
 func processOrder(ctx context.Context) {
-    client.TrackFunctionCall(ctx, "processOrder", nil)
+    client.TrackFunctionCall(ctx, "processOrder", "app", nil, "main.go", 514)
     // Context automatically carries trace information
 }
 ```
@@ -376,9 +524,9 @@ func processOrder(ctx context.Context) {
 2. **Use middleware**: Set up Raceway middleware for automatic initialization
 3. **Track shared state**: Focus on shared mutable state accessed by multiple goroutines
 4. **Propagate headers**: Always use `PropagationHeaders()` when calling downstream services
-5. **Graceful shutdown**: Always call `client.Stop()` before exiting:
+5. **Graceful shutdown**: Always call `client.Shutdown()` before exiting:
    ```go
-   defer client.Stop()
+   defer client.Shutdown()
    ```
 6. **Use unique instance IDs**: Set `InstanceID` to differentiate service instances
 
@@ -397,12 +545,12 @@ import (
 )
 
 func main() {
-    client := raceway.NewClient(raceway.Config{
+    client := raceway.New(raceway.Config{
         ServerURL:   "http://localhost:8080",
         ServiceName: "api-gateway",
         InstanceID:  "gateway-1",
     })
-    defer client.Stop()
+    defer client.Shutdown()
 
     mux := http.NewServeMux()
     mux.HandleFunc("/api/order", createOrderHandler(client))
@@ -418,9 +566,9 @@ func createOrderHandler(client *raceway.Client) http.HandlerFunc {
         var req OrderRequest
         json.NewDecoder(r.Body).Decode(&req)
 
-        client.TrackFunctionCall(ctx, "createOrder", map[string]interface{}{
+        client.TrackFunctionCall(ctx, "createOrder", "app", map[string]interface{}{
             "orderId": req.OrderID,
-        })
+        }, "main.go", 567)
 
         // Get propagation headers
         headers, err := client.PropagationHeaders(ctx, nil)
@@ -466,7 +614,7 @@ All services in the chain will share the same trace ID, and Raceway will merge t
 
 1. Check server is running: `curl http://localhost:8080/health`
 2. Enable debug mode: `Config{Debug: true}`
-3. Verify `client.Stop()` is called to flush events
+3. Verify `client.Shutdown()` is called to flush events
 4. Check middleware is properly installed
 
 ### Distributed traces not merging

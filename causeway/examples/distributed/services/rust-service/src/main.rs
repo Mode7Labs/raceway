@@ -7,7 +7,7 @@ use axum::{
     Router,
 };
 use once_cell::sync::OnceCell;
-use raceway_sdk::{RacewayClient, TrackedMutex};
+use raceway::{RacewayClient, TrackedMutex};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;

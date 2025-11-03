@@ -31,11 +31,11 @@ import (
 )
 
 func main() {
-    client := raceway.NewClient(raceway.Config{
+    client := raceway.New(raceway.Config{
         ServerURL:   "http://localhost:8080",
         ServiceName: "my-service",
     })
-    defer client.Stop()
+    defer client.Shutdown()
 
     mux := http.NewServeMux()
     mux.HandleFunc("/api/transfer", transferHandler(client))
@@ -52,18 +52,26 @@ func transferHandler(client *raceway.Client) http.HandlerFunc {
         startTime := time.Now()
 
         // Track function call
-        client.TrackFunctionCall(ctx, "transfer", map[string]interface{}{
+        client.TrackFunctionCall(ctx, "transfer", "handler", map[string]interface{}{
             "from": "alice", "to": "bob", "amount": 100,
-        })
+        }, "main.go", 56)
 
         // Track state changes
         balance := getBalance("alice")
-        client.TrackStateChange(ctx, "alice.balance", nil, balance, "Read")
+        client.TrackStateChange(ctx, "alice.balance", nil, balance, "main.go:60", "Read")
+
+        if balance < 100 {
+            headers := map[string]string{"Content-Type": "application/json"}
+            client.TrackHTTPResponse(ctx, 400, headers, nil, time.Since(startTime).Milliseconds())
+            w.WriteHeader(http.StatusBadRequest)
+            return
+        }
 
         setBalance("alice", balance-100)
-        client.TrackStateChange(ctx, "alice.balance", balance, balance-100, "Write")
+        client.TrackStateChange(ctx, "alice.balance", balance, balance-100, "main.go:69", "Write")
 
-        client.TrackHTTPResponse(ctx, 200, uint64(time.Since(startTime).Milliseconds()))
+        headers := map[string]string{"Content-Type": "application/json"}
+        client.TrackHTTPResponse(ctx, 200, headers, nil, time.Since(startTime).Milliseconds())
         w.WriteHeader(http.StatusOK)
     }
 }

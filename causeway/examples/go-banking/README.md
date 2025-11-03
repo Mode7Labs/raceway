@@ -53,5 +53,6 @@ The banking API uses the Raceway SDK to track state changes, function calls, and
 ## Learn More
 
 - [Raceway Documentation](../../README.md)
-- [Instrumentation Guide](../../docs/INSTRUMENTATION_GUIDE.md)
+- [Getting Started Guide](../../docs/guide/getting-started.md)
+- [Go SDK Documentation](../../docs/sdks/go.md)
 - [Go SDK Reference](../../sdks/go/README.md)

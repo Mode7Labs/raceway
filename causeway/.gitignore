@@ -73,6 +73,10 @@ tmp/
 temp/
 *.tmp
 
+# Release notes and launch planning (generated, not tracked)
+RELEASE.md
+LAUNCH.md
+
 # Lock files (keep only the ones you need)
 # yarn.lock
 # pnpm-lock.yaml

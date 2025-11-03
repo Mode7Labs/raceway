@@ -67,7 +67,7 @@ go get github.com/mode7labs/raceway/sdks/go
 ```
 
 ```bash [Rust]
-cargo add raceway-client
+cargo add raceway
 ```
 
 :::
@@ -183,7 +183,7 @@ func main() {
 
 ```rust [Rust]
 use axum::{routing::post, Json, Router, extract::State};
-use raceway_sdk::RacewayClient;
+use raceway::RacewayClient;
 use std::sync::Arc;
 
 #[tokio::main]

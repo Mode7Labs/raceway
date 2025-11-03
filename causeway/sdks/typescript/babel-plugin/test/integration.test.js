@@ -22,7 +22,7 @@ describe('babel-plugin-raceway', () => {
         const x = 1;
       `;
       const output = transform(input);
-      expect(output).toContain('import __raceway from "@mode-7/raceway-node/runtime"');
+      expect(output).toContain('import __raceway from "@mode-7/raceway/runtime"');
     });
 
     it('should use custom raceway instance name', () => {
@@ -30,7 +30,7 @@ describe('babel-plugin-raceway', () => {
         const x = 1;
       `;
       const output = transform(input, { racewayInstance: 'myRaceway' });
-      expect(output).toContain('import myRaceway from "@mode-7/raceway-node/runtime"');
+      expect(output).toContain('import myRaceway from "@mode-7/raceway/runtime"');
     });
   });
 
@@ -228,7 +228,7 @@ describe('babel-plugin-raceway', () => {
       const output = transform(input);
 
       // Should have runtime import
-      expect(output).toContain('import __raceway from "@mode-7/raceway-node/runtime"');
+      expect(output).toContain('import __raceway from "@mode-7/raceway/runtime"');
 
       // Should track function call
       expect(output).toContain('captureFunctionCall');

@@ -10,7 +10,7 @@
  * user.balance = 100;
  *
  * // After Babel transformation:
- * import __raceway from '@mode-7/raceway-node/runtime';
+ * import __raceway from '@mode-7/raceway/runtime';
  * const _oldValue = user.balance;
  * __raceway.trackStateChange('user.balance', _oldValue, 100, 'Write');
  * user.balance = 100;
@@ -35,7 +35,7 @@ let globalRacewayInstance: Raceway | null = null;
  *
  * @example
  * ```typescript
- * import { initializeRuntime } from '@mode-7/raceway-node/runtime';
+ * import { initializeRuntime } from '@mode-7/raceway/runtime';
  *
  * initializeRuntime({
  *   serverUrl: 'http://localhost:8080',

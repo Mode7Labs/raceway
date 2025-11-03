@@ -1,127 +1,590 @@
+// Package raceway provides a lightweight SDK for race condition detection in Go applications.
 package raceway
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	"io"
 	"net/http"
+	"os"
+	"path/filepath"
+	"runtime"
 	"sync"
+	"time"
+
+	"github.com/google/uuid"
 )
 
-// httpClient handles HTTP communication with Raceway server
-type httpClient struct {
-	serverURL   string
-	batchSize   int
-	debug       bool
-	apiKey      *string
-	eventBuffer []*Event
+// Config holds the configuration for the Raceway client.
+type Config struct {
+	// Endpoint is the Raceway server URL (default: http://localhost:8080)
+	// Deprecated: Use ServerURL instead for clarity
+	Endpoint string
+	// ServerURL is the Raceway server URL (default: http://localhost:8080)
+	// Preferred over Endpoint for clarity
+	ServerURL string
+	// ServiceName identifies this service in event metadata
+	ServiceName string
+	// InstanceID distinguishes this instance in distributed clocks (default: hostname-pid)
+	InstanceID string
+	// Environment specifies the deployment environment (development, staging, production)
+	Environment string
+	// BatchSize is the number of events to buffer before sending (default: 50)
+	BatchSize int
+	// FlushInterval is how often to flush buffered events (default: 1 second)
+	FlushInterval time.Duration
+	// Debug enables debug logging
+	Debug bool
+}
+
+// DefaultConfig returns a Config with sensible defaults.
+func DefaultConfig() Config {
+	env := os.Getenv("ENV")
+	if env == "" {
+		env = "development"
+	}
+
+	return Config{
+		ServerURL:     "http://localhost:8080",
+		Endpoint:      "http://localhost:8080", // Keep for backward compatibility
+		ServiceName:   "unknown-service",
+		InstanceID:    "",
+		Environment:   env,
+		BatchSize:     50,
+		FlushInterval: time.Second,
+		Debug:         false,
+	}
+}
+
+// Client is the main Raceway SDK client.
+type Client struct {
+	config      Config
+	instanceID  string
+	eventBuffer []Event
 	mu          sync.Mutex
 	httpClient  *http.Client
+	flushTicker *time.Ticker
+	stopChan    chan struct{}
 }
 
-// newHTTPClient creates a new HTTP client
-func newHTTPClient(serverURL string, batchSize int, debug bool, apiKey *string) *httpClient {
-	return &httpClient{
-		serverURL:   serverURL,
-		batchSize:   batchSize,
-		debug:       debug,
-		apiKey:      apiKey,
-		eventBuffer: make([]*Event, 0, batchSize),
-		httpClient:  &http.Client{},
+// ServiceName returns the configured service name.
+func (c *Client) ServiceName() string {
+	return c.config.ServiceName
+}
+
+// InstanceID returns the instance identifier.
+func (c *Client) InstanceID() string {
+	return c.instanceID
+}
+
+// New creates a new Raceway client.
+func New(config Config) *Client {
+	// Prefer ServerURL over Endpoint for clarity
+	if config.ServerURL != "" {
+		config.Endpoint = config.ServerURL
+	} else if config.Endpoint == "" {
+		config.Endpoint = "http://localhost:8080"
+	}
+
+	instanceID := config.InstanceID
+	if instanceID == "" {
+		host, err := os.Hostname()
+		if err != nil || host == "" {
+			host = "instance"
+		}
+		instanceID = fmt.Sprintf("%s-%d", host, os.Getpid())
+	}
+
+	client := &Client{
+		config:      config,
+		instanceID:  instanceID,
+		eventBuffer: make([]Event, 0, config.BatchSize),
+		httpClient:  &http.Client{Timeout: 10 * time.Second},
+		flushTicker: time.NewTicker(config.FlushInterval),
+		stopChan:    make(chan struct{}),
+	}
+
+	// Start auto-flush goroutine
+	go client.autoFlush()
+
+	return client
+}
+
+// NewClient is an alias for New() for compatibility with documentation.
+func NewClient(config Config) *Client {
+	return New(config)
+}
+
+// Middleware returns standard HTTP middleware that automatically initializes Raceway context.
+// It follows the standard Go pattern: func(http.Handler) http.Handler
+//
+// Usage with net/http:
+//
+//	mux := http.NewServeMux()
+//	mux.HandleFunc("/api/endpoint", handler)
+//	wrappedHandler := client.Middleware(mux)
+//	http.ListenAndServe(":3000", wrappedHandler)
+//
+// Usage with Gin:
+//
+//	router := gin.Default()
+//	router.Use(client.GinMiddleware())
+//	router.GET("/api/endpoint", handler)
+func (c *Client) Middleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Parse incoming trace headers
+		parsed := ParseIncomingHeaders(r.Header, c.config.ServiceName, c.instanceID)
+
+		// Create Raceway context and attach to request context
+		ctxWith := NewContext(r.Context(), parsed.TraceID, c.config.ServiceName, c.instanceID)
+		if rctx := FromContext(ctxWith); rctx != nil {
+			rctx.SpanID = parsed.SpanID
+			rctx.ParentSpanID = parsed.ParentSpanID
+			rctx.Distributed = parsed.Distributed
+			rctx.ClockVector = parsed.ClockVector
+			rctx.TraceState = parsed.TraceState
+		}
+
+		// Track HTTP request as root event
+		c.TrackHTTPRequest(ctxWith, r.Method, r.URL.Path, nil, nil)
+
+		// Update request with new context and call next handler
+		next.ServeHTTP(w, r.WithContext(ctxWith))
+	})
+}
+
+// GinMiddleware returns Gin-compatible middleware that automatically initializes Raceway context.
+// This is type-safe for Gin and provides the same functionality as Middleware.
+//
+// Usage:
+//
+//	router := gin.Default()
+//	router.Use(client.GinMiddleware())
+//	router.GET("/api/transfer", func(c *gin.Context) {
+//	    ctx := c.Request.Context()
+//	    // Use ctx with Raceway tracking methods
+//	})
+//
+// Note: This returns a Gin HandlerFunc directly without importing gin as a dependency.
+// It works with any framework that uses func(*http.Request).
+func (c *Client) GinMiddleware() func(interface{}) {
+	return func(ginCtx interface{}) {
+		// Use type assertion with minimal interface requirements
+		type contextWithRequest interface {
+			Request() *http.Request
+			Next()
+		}
+
+		gc, ok := ginCtx.(contextWithRequest)
+		if !ok {
+			// If type assertion fails, try to extract just the request
+			if reqGetter, ok := ginCtx.(interface{ Request() *http.Request }); ok {
+				req := reqGetter.Request()
+				parsed := ParseIncomingHeaders(req.Header, c.config.ServiceName, c.instanceID)
+
+				ctxWith := NewContext(req.Context(), parsed.TraceID, c.config.ServiceName, c.instanceID)
+				if rctx := FromContext(ctxWith); rctx != nil {
+					rctx.SpanID = parsed.SpanID
+					rctx.ParentSpanID = parsed.ParentSpanID
+					rctx.Distributed = parsed.Distributed
+					rctx.ClockVector = parsed.ClockVector
+					rctx.TraceState = parsed.TraceState
+				}
+
+				c.TrackHTTPRequest(ctxWith, req.Method, req.URL.Path, nil, nil)
+				*req = *req.WithContext(ctxWith)
+			}
+			return
+		}
+
+		req := gc.Request()
+		parsed := ParseIncomingHeaders(req.Header, c.config.ServiceName, c.instanceID)
+
+		// Create Raceway context
+		ctxWith := NewContext(req.Context(), parsed.TraceID, c.config.ServiceName, c.instanceID)
+		if rctx := FromContext(ctxWith); rctx != nil {
+			rctx.SpanID = parsed.SpanID
+			rctx.ParentSpanID = parsed.ParentSpanID
+			rctx.Distributed = parsed.Distributed
+			rctx.ClockVector = parsed.ClockVector
+			rctx.TraceState = parsed.TraceState
+		}
+
+		// Track HTTP request
+		c.TrackHTTPRequest(ctxWith, req.Method, req.URL.Path, nil, nil)
+
+		// Update request with context
+		*req = *req.WithContext(ctxWith)
+
+		// Call next handler
+		gc.Next()
 	}
 }
 
-// BufferEvent adds an event to the buffer
-func (c *httpClient) BufferEvent(event *Event) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	c.eventBuffer = append(c.eventBuffer, event)
-
-	if c.debug {
-		log.Printf("[Raceway] Buffered event %s (buffer size: %d)\n", event.ID, len(c.eventBuffer))
-	}
-
-	// Flush if batch size reached
-	if len(c.eventBuffer) >= c.batchSize {
-		c.flush()
-	}
+// TrackStateChange tracks a read or write to a variable.
+func (c *Client) TrackStateChange(ctx context.Context, variable string, oldValue, newValue interface{}, location, accessType string) {
+	c.captureEvent(ctx, EventKind{
+		StateChange: &StateChangeData{
+			Variable:   variable,
+			OldValue:   oldValue,
+			NewValue:   newValue,
+			Location:   location,
+			AccessType: accessType,
+		},
+	})
 }
 
-// Flush sends all buffered events to server
-func (c *httpClient) Flush() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.flush()
+// TrackFunctionCall tracks a function entry.
+func (c *Client) TrackFunctionCall(ctx context.Context, functionName, module string, args interface{}, file string, line int) {
+	c.captureEvent(ctx, EventKind{
+		FunctionCall: &FunctionCallData{
+			FunctionName: functionName,
+			Module:       module,
+			Args:         args,
+			File:         file,
+			Line:         line,
+		},
+	})
 }
 
-// flush (internal, assumes mutex is held)
-func (c *httpClient) flush() {
-	if len(c.eventBuffer) == 0 {
+// TrackFunctionReturn tracks a function return.
+func (c *Client) TrackFunctionReturn(ctx context.Context, functionName string, returnValue interface{}, file string, line int) {
+	c.captureEvent(ctx, EventKind{
+		FunctionReturn: &FunctionReturnData{
+			FunctionName: functionName,
+			ReturnValue:  returnValue,
+			File:         file,
+			Line:         line,
+		},
+	})
+}
+
+// TrackHTTPRequest tracks an HTTP request.
+func (c *Client) TrackHTTPRequest(ctx context.Context, method, url string, headers map[string]string, body interface{}) {
+	if headers == nil {
+		headers = make(map[string]string)
+	}
+	c.captureEvent(ctx, EventKind{
+		HTTPRequest: &HTTPRequestData{
+			Method:  method,
+			URL:     url,
+			Headers: headers,
+			Body:    body,
+		},
+	})
+}
+
+// TrackHTTPResponse tracks an HTTP response.
+func (c *Client) TrackHTTPResponse(ctx context.Context, status int, headers map[string]string, body interface{}, durationMs int64) {
+	if headers == nil {
+		headers = make(map[string]string)
+	}
+	c.captureEvent(ctx, EventKind{
+		HTTPResponse: &HTTPResponseData{
+			Status:     status,
+			Headers:    headers,
+			Body:       body,
+			DurationMs: durationMs,
+		},
+	})
+}
+
+// TrackAsyncSpawn tracks spawning a goroutine.
+func (c *Client) TrackAsyncSpawn(ctx context.Context, taskID, taskName, location string) {
+	c.captureEvent(ctx, EventKind{
+		AsyncSpawn: &AsyncSpawnData{
+			TaskID:    taskID,
+			TaskName:  taskName,
+			SpawnedAt: location,
+		},
+	})
+}
+
+// TrackAsyncAwait tracks waiting for an async operation.
+func (c *Client) TrackAsyncAwait(ctx context.Context, futureID, location string) {
+	c.captureEvent(ctx, EventKind{
+		AsyncAwait: &AsyncAwaitData{
+			FutureID:  futureID,
+			AwaitedAt: location,
+		},
+	})
+}
+
+// captureLocation captures the file:line of the caller.
+// skip parameter controls how many stack frames to skip (2 = caller's caller).
+func captureLocation(skip int) string {
+	_, file, line, ok := runtime.Caller(skip)
+	if !ok {
+		return "unknown:0"
+	}
+	return fmt.Sprintf("%s:%d", filepath.Base(file), line)
+}
+
+// TrackLockAcquire tracks acquiring a lock.
+// Location is automatically captured from the call site.
+func (c *Client) TrackLockAcquire(ctx context.Context, lockID, lockType string) {
+	location := captureLocation(2)
+	c.captureEvent(ctx, EventKind{
+		LockAcquire: &LockAcquireData{
+			LockID:   lockID,
+			LockType: lockType,
+			Location: location,
+		},
+	})
+}
+
+// TrackLockRelease tracks releasing a lock.
+// Location is automatically captured from the call site.
+func (c *Client) TrackLockRelease(ctx context.Context, lockID, lockType string) {
+	location := captureLocation(2)
+	c.captureEvent(ctx, EventKind{
+		LockRelease: &LockReleaseData{
+			LockID:   lockID,
+			LockType: lockType,
+			Location: location,
+		},
+	})
+}
+
+// WithLock executes fn while holding the lock, automatically tracking acquire/release.
+// This is the recommended way to track locks as it ensures release is always tracked.
+//
+// Example:
+//
+//	client.WithLock(ctx, &accountLock, "account_lock", "Mutex", func() {
+//	    accounts["alice"].Balance -= 100
+//	})
+func (c *Client) WithLock(ctx context.Context, lock sync.Locker, lockID, lockType string, fn func()) {
+	c.TrackLockAcquire(ctx, lockID, lockType)
+	lock.Lock()
+	defer func() {
+		c.TrackLockRelease(ctx, lockID, lockType)
+		lock.Unlock()
+	}()
+	fn()
+}
+
+// WithRWLockRead executes fn while holding a read lock, automatically tracking acquire/release.
+//
+// Example:
+//
+//	client.WithRWLockRead(ctx, &accountLock, "account_lock", func() {
+//	    balance := accounts["alice"].Balance
+//	    fmt.Println(balance)
+//	})
+func (c *Client) WithRWLockRead(ctx context.Context, lock *sync.RWMutex, lockID string, fn func()) {
+	c.TrackLockAcquire(ctx, lockID, "RWLock-Read")
+	lock.RLock()
+	defer func() {
+		c.TrackLockRelease(ctx, lockID, "RWLock-Read")
+		lock.RUnlock()
+	}()
+	fn()
+}
+
+// WithRWLockWrite executes fn while holding a write lock, automatically tracking acquire/release.
+//
+// Example:
+//
+//	client.WithRWLockWrite(ctx, &accountLock, "account_lock", func() {
+//	    accounts["alice"].Balance -= 100
+//	})
+func (c *Client) WithRWLockWrite(ctx context.Context, lock *sync.RWMutex, lockID string, fn func()) {
+	c.TrackLockAcquire(ctx, lockID, "RWLock-Write")
+	lock.Lock()
+	defer func() {
+		c.TrackLockRelease(ctx, lockID, "RWLock-Write")
+		lock.Unlock()
+	}()
+	fn()
+}
+
+// TrackError tracks an error.
+func (c *Client) TrackError(ctx context.Context, errorType, message string, stackTrace []string) {
+	c.captureEvent(ctx, EventKind{
+		Error: &ErrorData{
+			ErrorType:  errorType,
+			Message:    message,
+			StackTrace: stackTrace,
+		},
+	})
+}
+
+// PropagationHeaders builds outbound headers for distributed tracing.
+func (c *Client) PropagationHeaders(ctx context.Context, extra map[string]string) (map[string]string, error) {
+	rctx := FromContext(ctx)
+	if rctx == nil {
+		return nil, fmt.Errorf("raceway: propagation headers requested outside of active context")
+	}
+
+	result := BuildPropagationHeaders(rctx.TraceID, rctx.SpanID, rctx.TraceState, rctx.ClockVector, rctx.ServiceName, rctx.InstanceID)
+
+	rctx.ClockVector = result.ClockVector
+	rctx.Distributed = true
+	// Do NOT modify rctx.SpanID - this context should keep using its own span ID
+	// The child span ID is only for the downstream service in the headers
+
+	headers := make(map[string]string, len(result.Headers))
+	for k, v := range result.Headers {
+		headers[k] = v
+	}
+	for k, v := range extra {
+		headers[k] = v
+	}
+
+	return headers, nil
+}
+
+func (c *Client) captureEvent(ctx context.Context, kind EventKind) {
+	rctx := FromContext(ctx)
+	if rctx == nil {
+		if c.config.Debug {
+			fmt.Printf("[Raceway] captureEvent called outside of Raceway context\n")
+		}
 		return
 	}
 
-	eventsToSend := make([]*Event, len(c.eventBuffer))
-	copy(eventsToSend, c.eventBuffer)
-	c.eventBuffer = c.eventBuffer[:0] // Clear buffer
+	// Increment local clock component and clone vector for event payload
+	rctx.ClockVector = incrementClockVector(rctx.ClockVector, rctx.ServiceName, rctx.InstanceID)
+	causalityVector := make([]CausalityEntry, len(rctx.ClockVector))
+	copy(causalityVector, rctx.ClockVector)
 
-	if c.debug {
-		log.Printf("[Raceway] Flushing %d events to %s/events\n", len(eventsToSend), c.serverURL)
+	event := Event{
+		ID:              uuid.New().String(),
+		TraceID:         rctx.TraceID,
+		ParentID:        rctx.ParentID,
+		Timestamp:       time.Now().UTC().Format(time.RFC3339Nano),
+		Kind:            kind,
+		Metadata:        c.buildMetadata(rctx),
+		CausalityVector: causalityVector,
+		LockSet:         []string{},
 	}
 
-	// Send in background to avoid blocking
-	go c.sendEvents(eventsToSend)
+	// Update context: set root ID if first event, update parent, increment clock
+	if rctx.RootID == nil {
+		rctx.RootID = &event.ID
+	}
+	rctx.ParentID = &event.ID
+	rctx.Clock++
+
+	// Buffer event for sending
+	c.mu.Lock()
+	c.eventBuffer = append(c.eventBuffer, event)
+	shouldFlush := len(c.eventBuffer) >= c.config.BatchSize
+	c.mu.Unlock()
+
+	if c.config.Debug {
+		kindName := ""
+		if kind.StateChange != nil {
+			kindName = "StateChange"
+		} else if kind.FunctionCall != nil {
+			kindName = "FunctionCall"
+		} else if kind.HTTPRequest != nil {
+			kindName = "HttpRequest"
+		} else if kind.HTTPResponse != nil {
+			kindName = "HttpResponse"
+		}
+		fmt.Printf("[Raceway] Captured %s event %s\n", kindName, event.ID[:8])
+	}
+
+	if shouldFlush {
+		go c.Flush()
+	}
 }
 
-// sendEvents sends events to server
-func (c *httpClient) sendEvents(events []*Event) {
+func (c *Client) buildMetadata(rctx *RacewayContext) Metadata {
+	// Phase 2: Always populate distributed tracing fields when we have a context
+	// This ensures entry-point services also create distributed spans
+	instanceID := &rctx.InstanceID
+	spanID := &rctx.SpanID
+	upstreamSpanID := rctx.ParentSpanID
+
+	return Metadata{
+		ThreadID:    rctx.ThreadID, // Use virtual thread ID from context
+		ProcessID:   os.Getpid(),
+		ServiceName: c.config.ServiceName,
+		Environment: c.config.Environment,
+		Tags:        map[string]string{"sdk_language": "go"},
+		DurationNs:  nil,
+		// Phase 2: Distributed tracing fields
+		InstanceID:        instanceID,
+		DistributedSpanID: spanID,
+		UpstreamSpanID:    upstreamSpanID,
+	}
+}
+
+// Flush sends buffered events to the server.
+func (c *Client) Flush() {
+	c.mu.Lock()
+	if len(c.eventBuffer) == 0 {
+		c.mu.Unlock()
+		return
+	}
+
+	events := make([]Event, len(c.eventBuffer))
+	copy(events, c.eventBuffer)
+	c.eventBuffer = c.eventBuffer[:0]
+	c.mu.Unlock()
+
 	payload := map[string]interface{}{
 		"events": events,
 	}
 
-	jsonData, err := json.Marshal(payload)
+	data, err := json.Marshal(payload)
 	if err != nil {
-		log.Printf("[Raceway] Error marshaling events: %v\n", err)
+		fmt.Printf("[Raceway] Error marshaling events: %v\n", err)
 		return
 	}
 
-	if c.debug && len(events) > 0 {
-		preview := string(jsonData)
-		if len(preview) > 500 {
-			preview = preview[:500] + "..."
-		}
-		log.Printf("[Raceway] Sample event JSON: %s\n", preview)
-	}
-
-	req, err := http.NewRequest("POST", fmt.Sprintf("%s/events", c.serverURL), bytes.NewBuffer(jsonData))
+	resp, err := c.httpClient.Post(
+		fmt.Sprintf("%s/events", c.config.Endpoint),
+		"application/json",
+		bytes.NewReader(data),
+	)
 	if err != nil {
-		log.Printf("[Raceway] Error creating request: %v\n", err)
-		return
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	// Add API key headers if provided
-	if c.apiKey != nil && *c.apiKey != "" {
-		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", *c.apiKey))
-		req.Header.Set("X-Raceway-Key", *c.apiKey)
-	}
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		log.Printf("[Raceway] Error sending events: %v\n", err)
+		fmt.Printf("[Raceway] Error sending events: %v\n", err)
 		return
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body := make([]byte, 1024)
-		n, _ := resp.Body.Read(body)
-		log.Printf("[Raceway] Server returned status %d: %s\n", resp.StatusCode, string(body[:n]))
-		return
+		body, _ := io.ReadAll(resp.Body)
+		fmt.Printf("[Raceway] Failed to send events: status %d, body: %s\n", resp.StatusCode, string(body))
+	} else if c.config.Debug {
+		fmt.Printf("[Raceway] Sent %d events\n", len(events))
 	}
+}
 
-	if c.debug {
-		log.Printf("[Raceway] Successfully sent %d events\n", len(events))
+func (c *Client) autoFlush() {
+	for {
+		select {
+		case <-c.flushTicker.C:
+			c.Flush()
+		case <-c.stopChan:
+			return
+		}
 	}
+}
+
+// Shutdown flushes remaining events and stops the auto-flush goroutine.
+func (c *Client) Shutdown() {
+	close(c.stopChan)
+	c.flushTicker.Stop()
+	c.Flush()
+}
+
+// Stop is an alias for Shutdown() for compatibility with documentation.
+func (c *Client) Stop() {
+	c.Shutdown()
+}
+
+// getGoroutineID returns the current goroutine ID (for debugging purposes).
+func getGoroutineID() int {
+	var buf [64]byte
+	n := runtime.Stack(buf[:], false)
+	var id int
+	fmt.Sscanf(string(buf[:n]), "goroutine %d ", &id)
+	return id
 }

@@ -2,69 +2,85 @@ package raceway
 
 import (
 	"context"
-	"fmt"
-	"os"
-	"sync"
-	"sync/atomic"
+	"strings"
+
+	"github.com/google/uuid"
 )
 
-var goroutineCounter uint64
+type contextKey int
 
-// RacewayContext holds trace-related state for the current execution
+const racewayContextKey contextKey = 0
+
+// RacewayContext holds the trace context for a request.
 type RacewayContext struct {
-	TraceID     string  // UUID identifying this trace
-	GoroutineID string  // Unique ID for this goroutine/execution chain
-	ParentID    *string // ID of parent event (nil for roots)
-	RootID      *string // ID of root event in this chain
-	Clock       uint64  // Logical clock for this event chain
-	mu          sync.Mutex
+	TraceID      string
+	ThreadID     string // Unique virtual thread ID for this goroutine/request
+	ParentID     *string
+	RootID       *string
+	Clock        int
+	SpanID       string
+	ParentSpanID *string
+	Distributed  bool
+	ClockVector  []CausalityEntry
+	TraceState   *string
+	ServiceName  string
+	InstanceID   string
 }
 
-// Context key for storing RacewayContext
-type contextKey string
-
-const racewayContextKey contextKey = "raceway_context"
-
-// NewRacewayContext creates a new context for a trace
-func NewRacewayContext(traceID string) *RacewayContext {
-	// Generate unique goroutine ID
-	gid := atomic.AddUint64(&goroutineCounter, 1)
-	goroutineID := fmt.Sprintf("go-%d-%d", os.Getpid(), gid)
-
-	return &RacewayContext{
-		TraceID:     traceID,
-		GoroutineID: goroutineID,
-		ParentID:    nil,
-		RootID:      nil,
-		Clock:       0,
+// NewContext creates a new context with Raceway tracing enabled.
+// If traceID is empty, a new UUID will be generated.
+func NewContext(ctx context.Context, traceID, serviceName, instanceID string) context.Context {
+	if traceID == "" {
+		traceID = uuid.New().String()
 	}
+
+	// Generate unique virtual thread ID for this context
+	threadID := uuid.New().String()
+
+	component := clockComponent(serviceName, instanceID)
+
+	rctx := &RacewayContext{
+		TraceID:      traceID,
+		ThreadID:     threadID,
+		ParentID:     nil,
+		RootID:       nil,
+		Clock:        0,
+		SpanID:       generateSpanID(),
+		ParentSpanID: nil,
+		Distributed:  false,
+		ClockVector:  []CausalityEntry{NewCausalityEntry(component, 0)},
+		TraceState:   nil,
+		ServiceName:  serviceName,
+		InstanceID:   instanceID,
+	}
+
+	return context.WithValue(ctx, racewayContextKey, rctx)
 }
 
-// Update updates the context after an event (thread-safe)
-func (rc *RacewayContext) Update(eventID string, isFirstEvent bool) {
-	rc.mu.Lock()
-	defer rc.mu.Unlock()
-
-	if isFirstEvent && rc.RootID == nil {
-		rc.RootID = &eventID
-	}
-	rc.ParentID = &eventID
-	rc.Clock++
-}
-
-// GetRacewayContext extracts RacewayContext from context.Context
-func GetRacewayContext(ctx context.Context) *RacewayContext {
-	if ctx == nil {
-		return nil
-	}
-	raceCtx, ok := ctx.Value(racewayContextKey).(*RacewayContext)
+// FromContext retrieves the RacewayContext from a context.Context.
+// Returns nil if no RacewayContext is present.
+func FromContext(ctx context.Context) *RacewayContext {
+	rctx, ok := ctx.Value(racewayContextKey).(*RacewayContext)
 	if !ok {
 		return nil
 	}
-	return raceCtx
+	return rctx
 }
 
-// WithRacewayContext adds RacewayContext to a context.Context
-func WithRacewayContext(ctx context.Context, raceCtx *RacewayContext) context.Context {
-	return context.WithValue(ctx, racewayContextKey, raceCtx)
+// WithTraceID creates a new context with the specified trace ID (legacy helper).
+func WithTraceID(ctx context.Context, traceID string) context.Context {
+	return NewContext(ctx, traceID, "unknown-service", "instance")
+}
+
+// WithTraceIDAndInstance creates a context with explicit service/instance identifiers.
+func WithTraceIDAndInstance(ctx context.Context, traceID, serviceName, instanceID string) context.Context {
+	return NewContext(ctx, traceID, serviceName, instanceID)
+}
+
+func clockComponent(serviceName, instanceID string) string {
+	return serviceName + "#" + instanceID
+}
+
+func generateSpanID() string {
+	return strings.ReplaceAll(uuid.New().String(), "-", "")[:16]
 }

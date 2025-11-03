@@ -193,7 +193,7 @@ client.track_state_change(f"{user}.balance", balance, new_balance, "Write")
 
 **TypeScript/Node (Express):**
 ```typescript
-import { Raceway } from '@mode-7/raceway-node';
+import { Raceway } from '@mode-7/raceway';
 
 const raceway = new Raceway({
   serverUrl: 'http://localhost:4242',
@@ -209,18 +209,22 @@ raceway.trackStateChange('user.balance', oldValue, newValue, 'Write');
 ```go
 import "github.com/mode7labs/raceway/sdks/go"
 
-client := raceway.NewClient(raceway.Config{
-    Endpoint:    "http://localhost:4242",
+client := raceway.New(raceway.Config{
+    ServerURL:   "http://localhost:4242",
     ServiceName: "banking-api",
 })
+defer client.Shutdown()
 
-router.Use(client.Middleware)
-client.TrackStateChange(ctx, "user.balance", oldValue, newValue, "Write")
+// Use GinMiddleware for Gin framework
+router.Use(client.GinMiddleware())
+
+// Track state changes
+client.TrackStateChange(ctx, "user.balance", oldValue, newValue, "main.go:10", "Write")
 ```
 
 **Rust (Axum):**
 ```rust
-use raceway_sdk::{RacewayClient, Config};
+use raceway::{RacewayClient, Config};
 
 let client = RacewayClient::new(Config {
     endpoint: "http://localhost:4242".to_string(),
@@ -712,7 +716,7 @@ raceway = RacewayClient(Config(
 
 **Go**:
 ```go
-racewayClient := raceway.NewClient(raceway.Config{
+racewayClient := raceway.New(raceway.Config{
     ServerURL:   os.Getenv("RACEWAY_URL"),
     ServiceName: "your-service",
     APIKey:      getAPIKey(), // Helper to read from env

@@ -41,7 +41,7 @@ export default declare((api: any, options: PluginOptions) => {
         // Inject raceway import at top of file
         const importDeclaration = t.importDeclaration(
           [t.importDefaultSpecifier(t.identifier(racewayInstance))],
-          t.stringLiteral('@mode-7/raceway-node/runtime')
+          t.stringLiteral('@mode-7/raceway/runtime')
         );
 
         path.node.body.unshift(importDeclaration);

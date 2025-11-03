@@ -79,7 +79,7 @@ go get github.com/mode7labs/raceway/sdks/go
 ```
 
 ```bash [Rust]
-cargo add raceway-client
+cargo add raceway
 ```
 
 :::

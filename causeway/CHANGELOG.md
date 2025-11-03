@@ -92,7 +92,7 @@ Raceway is a causality tracking engine for debugging concurrent and distributed 
 
 ### 📦 SDKs
 
-#### TypeScript/Node.js SDK (`@mode-7/raceway-node`)
+#### TypeScript/Node.js SDK (`@mode-7/raceway`)
 - Express.js middleware for automatic HTTP tracing
 - Manual event tracking API
 - Lock helper functions with automatic tracking

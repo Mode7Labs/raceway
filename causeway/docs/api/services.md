@@ -105,6 +105,42 @@ GET /api/services/{service_name}/dependencies
 }
 ```
 
+## Get Service Health
+
+Get health status for all services.
+
+```http
+GET /api/services/health?time_window_minutes=60
+```
+
+**Query Parameters:**
+- `time_window_minutes`: Time window for health calculation (default: 60)
+
+**Response:**
+
+```json
+{
+  "services": [
+    {
+      "name": "api-service",
+      "status": "healthy",
+      "error_rate": 0.02,
+      "avg_response_time_ms": 250.0,
+      "request_count": 1500,
+      "last_seen": "2024-11-02T10:35:00.000Z"
+    },
+    {
+      "name": "auth-service",
+      "status": "healthy",
+      "error_rate": 0.001,
+      "avg_response_time_ms": 50.0,
+      "request_count": 800,
+      "last_seen": "2024-11-02T10:35:00.000Z"
+    }
+  ]
+}
+```
+
 ## Next Steps
 
 - [Events API](/api/events) - Event ingestion

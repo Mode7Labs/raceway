@@ -163,6 +163,127 @@ GET /api/distributed/global-races
 }
 ```
 
+## Get Global Analysis
+
+Get analysis across all traces.
+
+```http
+GET /api/analyze/global
+```
+
+**Response:**
+
+```json
+{
+  "total_traces": 1500,
+  "total_races": 42,
+  "races": [
+    {
+      "severity": "Critical",
+      "variable": "user.balance",
+      "trace1_id": "abc123",
+      "trace2_id": "def456",
+      "event1_thread": "thread-1",
+      "event2_thread": "thread-2",
+      "event1_location": "api.ts:45",
+      "event2_location": "api.ts:45",
+      "event1_timestamp": "2024-11-02T10:30:00.000Z",
+      "event2_timestamp": "2024-11-02T10:30:00.001Z",
+      "description": "Write-Write race on user.balance"
+    }
+  ]
+}
+```
+
+## Get Distributed Edges
+
+Get distributed tracing edges across services.
+
+```http
+GET /api/distributed/edges
+```
+
+**Response:**
+
+```json
+{
+  "edges": [
+    {
+      "from_trace": "trace-1",
+      "to_trace": "trace-2",
+      "from_service": "api-gateway",
+      "to_service": "auth-service",
+      "timestamp": "2024-11-02T10:30:00.000Z"
+    }
+  ]
+}
+```
+
+## Get System Hotspots
+
+Get system-wide performance hotspots.
+
+```http
+GET /api/distributed/hotspots
+```
+
+**Response:**
+
+```json
+{
+  "top_variables": [
+    {
+      "variable": "user.balance",
+      "access_count": 1500,
+      "race_count": 12
+    }
+  ],
+  "top_service_calls": [
+    {
+      "from_service": "api-gateway",
+      "to_service": "auth-service",
+      "call_count": 5000,
+      "avg_duration_ms": 50.0
+    }
+  ]
+}
+```
+
+## Get Performance Metrics
+
+Get performance metrics across the system.
+
+```http
+GET /api/performance/metrics?limit=50
+```
+
+**Query Parameters:**
+- `limit`: Number of results to return (default: 50)
+
+**Response:**
+
+```json
+{
+  "slowest_events": [
+    {
+      "event_id": "evt-001",
+      "trace_id": "abc123",
+      "kind": "DatabaseQuery",
+      "duration_ms": 450.0,
+      "location": "api.ts:127"
+    }
+  ],
+  "slowest_traces": [
+    {
+      "trace_id": "abc123",
+      "service": "api-service",
+      "duration_ms": 2500.0,
+      "event_count": 150
+    }
+  ]
+}
+```
+
 ## Next Steps
 
 - [Events API](/api/events) - Event ingestion

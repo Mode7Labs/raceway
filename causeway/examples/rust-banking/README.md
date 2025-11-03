@@ -267,5 +267,6 @@ async fn transfer_with_tx(pool: &PgPool, req: TransferRequest) -> Result<()> {
 ## Learn More
 
 - [Raceway Documentation](../../README.md)
-- [Instrumentation Guide](../../docs/INSTRUMENTATION_GUIDE.md)
+- [Getting Started Guide](../../docs/guide/getting-started.md)
+- [Rust SDK Documentation](../../docs/sdks/rust.md)
 - [Rust SDK Reference](../../sdks/rust/README.md)

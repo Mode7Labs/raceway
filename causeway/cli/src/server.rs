@@ -416,67 +416,185 @@ fn build_cors_layer(config: &Config) -> Option<CorsLayer> {
     )
 }
 
-async fn root_handler() -> impl IntoResponse {
-    let html = r#"
+async fn root_handler(State(state): State<AppState>) -> impl IntoResponse {
+    // Get live stats
+    let event_count = state.engine.storage().count_events().await.unwrap_or(0);
+    let trace_count = state.engine.storage().count_traces().await.unwrap_or(0);
+    let version = env!("CARGO_PKG_VERSION");
+
+    let html = format!(r#"
 <!DOCTYPE html>
 <html>
 <head>
     <title>Raceway - Concurrency Debugger</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <style>
-        body {
+        body {{
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            max-width: 800px;
-            margin: 50px auto;
+            max-width: 1000px;
+            margin: 30px auto;
             padding: 20px;
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             color: white;
-        }
-        .container {
+            line-height: 1.6;
+        }}
+        .container {{
             background: rgba(255, 255, 255, 0.1);
             backdrop-filter: blur(10px);
             border-radius: 20px;
             padding: 40px;
             box-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.37);
-        }
-        h1 { font-size: 3em; margin: 0; }
-        .tagline { font-size: 1.2em; opacity: 0.9; margin-top: 10px; }
-        .endpoints {
+        }}
+        h1 {{ font-size: 3em; margin: 0; }}
+        h2 {{ font-size: 1.5em; margin-top: 30px; margin-bottom: 15px; opacity: 0.95; }}
+        .tagline {{ font-size: 1.2em; opacity: 0.9; margin-top: 10px; }}
+        .stats {{
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin: 25px 0;
+        }}
+        .stat {{
+            background: rgba(0, 0, 0, 0.2);
+            padding: 20px;
+            border-radius: 10px;
+            text-align: center;
+        }}
+        .stat-value {{ font-size: 2.5em; font-weight: bold; margin: 10px 0; }}
+        .stat-label {{ opacity: 0.8; font-size: 0.9em; }}
+        .links {{
             margin-top: 30px;
             background: rgba(0, 0, 0, 0.2);
             padding: 20px;
             border-radius: 10px;
-        }
-        .endpoint {
-            margin: 10px 0;
-            font-family: monospace;
-        }
-        .method {
+        }}
+        .link-item {{
+            margin: 12px 0;
+            font-size: 1.1em;
+        }}
+        .link-item a {{
+            color: #48b6ff;
+            text-decoration: none;
+            font-weight: 500;
+        }}
+        .link-item a:hover {{ text-decoration: underline; }}
+        .endpoints {{
+            margin-top: 20px;
+            background: rgba(0, 0, 0, 0.2);
+            padding: 20px;
+            border-radius: 10px;
+            max-height: 400px;
+            overflow-y: auto;
+        }}
+        .endpoint {{
+            margin: 8px 0;
+            font-family: 'Monaco', 'Menlo', monospace;
+            font-size: 0.9em;
+        }}
+        .method {{
             display: inline-block;
-            padding: 3px 8px;
+            padding: 3px 10px;
             border-radius: 4px;
-            margin-right: 10px;
+            margin-right: 12px;
             font-weight: bold;
-        }
-        .get { background: rgba(72, 182, 255, 0.2); color: #48b6ff; }
-        .post { background: rgba(72, 255, 145, 0.2); color: #48ff91; }
+            min-width: 50px;
+            text-align: center;
+        }}
+        .endpoint-desc {{ opacity: 0.8; font-size: 0.85em; margin-left: 70px; }}
+        .get {{ background: rgba(72, 182, 255, 0.3); color: #48b6ff; }}
+        .post {{ background: rgba(72, 255, 145, 0.3); color: #48ff91; }}
+        code {{ background: rgba(0,0,0,0.3); padding: 2px 6px; border-radius: 3px; }}
     </style>
 </head>
 <body>
     <div class="container">
         <h1>🏁 Raceway</h1>
         <div class="tagline">Concurrency debugging for distributed systems</div>
+
+        <div class="stats">
+            <div class="stat">
+                <div class="stat-label">Version</div>
+                <div class="stat-value">{}</div>
+            </div>
+            <div class="stat">
+                <div class="stat-label">Traces</div>
+                <div class="stat-value">{}</div>
+            </div>
+            <div class="stat">
+                <div class="stat-label">Events</div>
+                <div class="stat-value">{}</div>
+            </div>
+        </div>
+
+        <div class="links">
+            <h2>🎯 Quick Links</h2>
+            <div class="link-item">📊 <a href="http://localhost:3005" target="_blank">Open Web UI</a> - Visual trace analysis interface</div>
+            <div class="link-item">💻 Terminal UI - Run <code>raceway tui</code> for interactive CLI</div>
+            <div class="link-item">📚 <a href="https://mode7labs.github.io/raceway/" target="_blank">Documentation</a> - Complete user guide</div>
+            <div class="link-item">📖 <a href="https://mode7labs.github.io/raceway/api/overview" target="_blank">API Reference</a> - HTTP API docs</div>
+        </div>
+
+        <h2>🔌 API Endpoints</h2>
         <div class="endpoints">
             <div class="endpoint"><span class="method get">GET</span> /health</div>
+            <div class="endpoint-desc">Health check endpoint</div>
+
             <div class="endpoint"><span class="method get">GET</span> /status</div>
+            <div class="endpoint-desc">Server statistics (version, uptime, event/trace counts)</div>
+
             <div class="endpoint"><span class="method post">POST</span> /events</div>
+            <div class="endpoint-desc">Ingest trace events from SDKs</div>
+
             <div class="endpoint"><span class="method get">GET</span> /api/traces</div>
+            <div class="endpoint-desc">List all traces (paginated)</div>
+
             <div class="endpoint"><span class="method get">GET</span> /api/traces/:id</div>
-            <div class="endpoint"><span class="method get">GET</span> /api/traces/:id/analyze</div>
+            <div class="endpoint-desc">Get complete trace analysis</div>
+
+            <div class="endpoint"><span class="method get">GET</span> /api/traces/:id/critical-path</div>
+            <div class="endpoint-desc">Get critical path for a trace</div>
+
+            <div class="endpoint"><span class="method get">GET</span> /api/traces/:id/anomalies</div>
+            <div class="endpoint-desc">Get anomalies and race conditions for a trace</div>
+
+            <div class="endpoint"><span class="method get">GET</span> /api/traces/:id/audit-trail/:variable</div>
+            <div class="endpoint-desc">Get access history for a variable</div>
+
+            <div class="endpoint"><span class="method get">GET</span> /api/traces/:id/dependencies</div>
+            <div class="endpoint-desc">Get service dependency graph for a trace</div>
+
+            <div class="endpoint"><span class="method get">GET</span> /api/analyze/global</div>
+            <div class="endpoint-desc">Global analysis across all traces</div>
+
+            <div class="endpoint"><span class="method get">GET</span> /api/services</div>
+            <div class="endpoint-desc">List all services with metrics</div>
+
+            <div class="endpoint"><span class="method get">GET</span> /api/services/health</div>
+            <div class="endpoint-desc">Service health status (supports ?time_window_minutes param)</div>
+
+            <div class="endpoint"><span class="method get">GET</span> /api/services/:name/traces</div>
+            <div class="endpoint-desc">Get all traces for a specific service</div>
+
+            <div class="endpoint"><span class="method get">GET</span> /api/services/:name/dependencies</div>
+            <div class="endpoint-desc">Get dependency graph for a service</div>
+
+            <div class="endpoint"><span class="method get">GET</span> /api/performance/metrics</div>
+            <div class="endpoint-desc">Performance metrics (supports ?limit param)</div>
+
+            <div class="endpoint"><span class="method get">GET</span> /api/distributed/edges</div>
+            <div class="endpoint-desc">Distributed tracing edges across services</div>
+
+            <div class="endpoint"><span class="method get">GET</span> /api/distributed/global-races</div>
+            <div class="endpoint-desc">Race conditions across all traces</div>
+
+            <div class="endpoint"><span class="method get">GET</span> /api/distributed/hotspots</div>
+            <div class="endpoint-desc">System hotspots (top variables and service calls)</div>
         </div>
     </div>
 </body>
 </html>
-    "#;
+    "#, version, trace_count, event_count);
 
     (StatusCode::OK, [("content-type", "text/html")], html)
 }
