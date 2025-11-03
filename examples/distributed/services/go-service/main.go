@@ -14,7 +14,7 @@ import (
 	"syscall"
 	"time"
 
-	raceway "github.com/mode-7/raceway/raceway"
+	raceway "github.com/mode7labs/raceway/sdks/go"
 )
 
 const (
