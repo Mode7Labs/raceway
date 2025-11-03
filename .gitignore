@@ -50,7 +50,7 @@ Thumbs.db
 
 # Causeway/Raceway data
 *.causeway
-traces/
+/traces/
 *.trace
 
 # Logs
