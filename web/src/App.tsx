@@ -27,12 +27,57 @@ import { SystemHealth } from './components/features/system/SystemHealth';
 import { GlobalRaces } from './components/features/system/GlobalRaces';
 import { SystemHotspots } from './components/features/system/SystemHotspots';
 import { Dashboard } from './components/views/dashboard/Dashboard';
+import { Login } from './components/auth/Login';
 import { Loader2 } from 'lucide-react';
 import logo from './static/icon.png';
 
 export default function App() {
   const navigate = useNavigate();
   const location = useLocation();
+
+  // Authentication state
+  const [authChecked, setAuthChecked] = useState(false);
+  const [authenticated, setAuthenticated] = useState(false);
+  const [authRequired, setAuthRequired] = useState(false);
+
+  // Check authentication status on mount
+  useEffect(() => {
+    const checkAuth = async () => {
+      try {
+        const response = await fetch('/auth/check');
+        const data = await response.json();
+        setAuthenticated(data.authenticated);
+        setAuthRequired(data.auth_required);
+      } catch (err) {
+        // If check fails, assume no auth required (backward compatible)
+        setAuthenticated(true);
+        setAuthRequired(false);
+      } finally {
+        setAuthChecked(true);
+      }
+    };
+
+    checkAuth();
+  }, []);
+
+  // Handle successful login
+  const handleLogin = () => {
+    setAuthenticated(true);
+  };
+
+  // Show loading while checking auth
+  if (!authChecked) {
+    return (
+      <div className="flex items-center justify-center min-h-screen">
+        <Loader2 className="h-8 w-8 animate-spin" />
+      </div>
+    );
+  }
+
+  // Show login if auth is required and user is not authenticated
+  if (authRequired && !authenticated) {
+    return <Login onLogin={handleLogin} />;
+  }
 
   const [traces, setTraces] = useState<TraceMetadata[]>([]);
   const [selectedTraceId, setSelectedTraceId] = useState<string | null>(null);

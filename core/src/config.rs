@@ -131,6 +131,11 @@ pub struct ServerConfig {
 
     #[serde(default)]
     pub api_keys: Vec<String>,
+
+    /// Optional password for Web UI access. If set, users must authenticate before accessing the UI.
+    /// API endpoints are not affected - they use api_keys for authentication.
+    #[serde(default)]
+    pub ui_password: Option<String>,
 }
 
 impl Default for ServerConfig {
@@ -145,6 +150,7 @@ impl Default for ServerConfig {
             rate_limit_rpm: default_rate_limit_rpm(),
             auth_enabled: false,
             api_keys: Vec::new(),
+            ui_password: None,
         }
     }
 }

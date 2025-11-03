@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::num::NonZeroU32;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tower_http::cors::{AllowOrigin, Any, CorsLayer};
 use tower_http::services::{ServeDir, ServeFile};
@@ -30,6 +30,7 @@ struct AppState {
     engine: Arc<RacewayEngine>,
     verbose: bool,
     auth: AuthConfig,
+    ui_auth: UIAuthConfig,
     perf_metrics_cache: Arc<QueryCache<serde_json::Value>>,
 }
 
@@ -81,6 +82,64 @@ impl AuthConfig {
             limiter.check_key(&key_owned).is_ok()
         } else {
             true
+        }
+    }
+}
+
+#[derive(Clone)]
+struct UIAuthConfig {
+    enabled: bool,
+    password_hash: Option<String>,
+    sessions: Arc<Mutex<HashSet<String>>>,
+}
+
+impl UIAuthConfig {
+    fn from_server_config(cfg: &raceway_core::config::ServerConfig) -> Self {
+        let (enabled, password_hash) = if let Some(password) = &cfg.ui_password {
+            // Simple hash of the password - in production, use argon2 or bcrypt
+            // For now, we'll just use the password directly (not recommended for production)
+            (true, Some(password.clone()))
+        } else {
+            (false, None)
+        };
+
+        Self {
+            enabled,
+            password_hash,
+            sessions: Arc::new(Mutex::new(HashSet::new())),
+        }
+    }
+
+    fn create_session(&self) -> String {
+        let session_id = Uuid::new_v4().to_string();
+        if let Ok(mut sessions) = self.sessions.lock() {
+            sessions.insert(session_id.clone());
+        }
+        session_id
+    }
+
+    fn validate_session(&self, session_id: &str) -> bool {
+        if !self.enabled {
+            return true;
+        }
+        if let Ok(sessions) = self.sessions.lock() {
+            sessions.contains(session_id)
+        } else {
+            false
+        }
+    }
+
+    fn remove_session(&self, session_id: &str) {
+        if let Ok(mut sessions) = self.sessions.lock() {
+            sessions.remove(session_id);
+        }
+    }
+
+    fn validate_password(&self, password: &str) -> bool {
+        if let Some(stored) = &self.password_hash {
+            stored == password
+        } else {
+            false
         }
     }
 }
@@ -225,6 +284,7 @@ pub async fn init_engine(config: &Config) -> Result<Arc<RacewayEngine>> {
 
 pub fn build_router(config: &Config, engine: Arc<RacewayEngine>) -> Router {
     let auth = AuthConfig::from_server_config(&config.server);
+    let ui_auth = UIAuthConfig::from_server_config(&config.server);
 
     // Create cache for performance metrics with 60 second TTL
     let perf_metrics_cache = Arc::new(QueryCache::new(Duration::from_secs(60)));
@@ -233,15 +293,25 @@ pub fn build_router(config: &Config, engine: Arc<RacewayEngine>) -> Router {
         engine,
         verbose: config.server.verbose,
         auth,
+        ui_auth,
         perf_metrics_cache,
     };
     let auth_state = state.clone();
+    let ui_auth_state = state.clone();
 
     // Serve WebUI static files from web/dist
     let serve_dir = ServeDir::new("web/dist")
         .not_found_service(ServeFile::new("web/dist/index.html"));
 
-    let router = Router::new()
+    // Auth routes (no authentication required)
+    let auth_routes = Router::new()
+        .route("/auth/login", post(ui_login_handler))
+        .route("/auth/logout", post(ui_logout_handler))
+        .route("/auth/check", get(ui_check_handler))
+        .with_state(state.clone());
+
+    // API routes (protected by API key authentication)
+    let api_routes = Router::new()
         .route("/health", get(health_handler))
         .route("/status", get(status_handler))
         .route("/events", post(ingest_events_handler))
@@ -291,8 +361,18 @@ pub fn build_router(config: &Config, engine: Arc<RacewayEngine>) -> Router {
             get(get_system_hotspots_handler),
         )
         .layer(middleware::from_fn_with_state(auth_state, auth_middleware))
-        .with_state(state)
-        .fallback_service(serve_dir);
+        .with_state(state.clone());
+
+    // UI routes (protected by session authentication if ui_password is set)
+    let ui_routes = Router::new()
+        .fallback_service(serve_dir)
+        .layer(middleware::from_fn_with_state(ui_auth_state, ui_auth_middleware))
+        .with_state(state);
+
+    let router = Router::new()
+        .merge(auth_routes)
+        .merge(api_routes)
+        .merge(ui_routes);
 
     if let Some(cors_layer) = build_cors_layer(config) {
         router.layer(cors_layer)
@@ -373,6 +453,195 @@ fn extract_client_identifier(
     }
 
     "anonymous".to_string()
+}
+
+// UI Authentication Middleware
+async fn ui_auth_middleware(
+    State(state): State<AppState>,
+    req: Request<Body>,
+    next: Next,
+) -> Result<Response, Response> {
+    // If UI auth is not enabled, allow all requests
+    if !state.ui_auth.enabled {
+        return Ok(next.run(req).await);
+    }
+
+    // Extract session cookie
+    let session_id = req
+        .headers()
+        .get(axum::http::header::COOKIE)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|cookies| {
+            cookies
+                .split(';')
+                .find_map(|cookie| {
+                    let parts: Vec<&str> = cookie.trim().splitn(2, '=').collect();
+                    if parts.len() == 2 && parts[0] == "raceway_session" {
+                        Some(parts[1].to_string())
+                    } else {
+                        None
+                    }
+                })
+        });
+
+    // Validate session
+    if let Some(session_id) = session_id {
+        if state.ui_auth.validate_session(&session_id) {
+            return Ok(next.run(req).await);
+        }
+    }
+
+    // Return 401 Unauthorized with simple HTML page
+    let html = r#"
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Authentication Required - Raceway</title>
+    <meta http-equiv="refresh" content="0; url=/?auth=required">
+</head>
+<body>
+    <p>Redirecting to login...</p>
+</body>
+</html>
+    "#;
+
+    Ok(Response::builder()
+        .status(StatusCode::UNAUTHORIZED)
+        .header(axum::http::header::CONTENT_TYPE, "text/html")
+        .body(Body::from(html))
+        .unwrap())
+}
+
+// UI Auth Handlers
+#[derive(Deserialize)]
+struct LoginRequest {
+    password: String,
+}
+
+#[derive(Serialize)]
+struct LoginResponse {
+    success: bool,
+    message: String,
+}
+
+async fn ui_login_handler(
+    State(state): State<AppState>,
+    Json(req): Json<LoginRequest>,
+) -> Result<impl IntoResponse, (StatusCode, Json<ApiResponse<String>>)> {
+    if !state.ui_auth.enabled {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ApiResponse::error("UI authentication is not enabled".to_string())),
+        ));
+    }
+
+    if state.ui_auth.validate_password(&req.password) {
+        let session_id = state.ui_auth.create_session();
+
+        // Set cookie with session
+        let cookie = format!(
+            "raceway_session={}; Path=/; HttpOnly; SameSite=Strict; Max-Age={}",
+            session_id,
+            60 * 60 * 24 * 7 // 7 days
+        );
+
+        Ok((
+            StatusCode::OK,
+            [(axum::http::header::SET_COOKIE, cookie)],
+            Json(LoginResponse {
+                success: true,
+                message: "Login successful".to_string(),
+            }),
+        ))
+    } else {
+        Ok((
+            StatusCode::UNAUTHORIZED,
+            [(axum::http::header::SET_COOKIE, String::new())],
+            Json(LoginResponse {
+                success: false,
+                message: "Invalid password".to_string(),
+            }),
+        ))
+    }
+}
+
+async fn ui_logout_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    // Extract session cookie
+    if let Some(session_id) = headers
+        .get(axum::http::header::COOKIE)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|cookies| {
+            cookies
+                .split(';')
+                .find_map(|cookie| {
+                    let parts: Vec<&str> = cookie.trim().splitn(2, '=').collect();
+                    if parts.len() == 2 && parts[0] == "raceway_session" {
+                        Some(parts[1].to_string())
+                    } else {
+                        None
+                    }
+                })
+        })
+    {
+        state.ui_auth.remove_session(&session_id);
+    }
+
+    // Clear cookie
+    let cookie = "raceway_session=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0";
+
+    (
+        StatusCode::OK,
+        [(axum::http::header::SET_COOKIE, cookie)],
+        Json(LoginResponse {
+            success: true,
+            message: "Logged out successfully".to_string(),
+        }),
+    )
+}
+
+async fn ui_check_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    #[derive(Serialize)]
+    struct CheckResponse {
+        authenticated: bool,
+        auth_required: bool,
+    }
+
+    if !state.ui_auth.enabled {
+        return Json(CheckResponse {
+            authenticated: true,
+            auth_required: false,
+        });
+    }
+
+    // Extract session cookie
+    let authenticated = headers
+        .get(axum::http::header::COOKIE)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|cookies| {
+            cookies
+                .split(';')
+                .find_map(|cookie| {
+                    let parts: Vec<&str> = cookie.trim().splitn(2, '=').collect();
+                    if parts.len() == 2 && parts[0] == "raceway_session" {
+                        Some(parts[1].to_string())
+                    } else {
+                        None
+                    }
+                })
+        })
+        .map(|session_id| state.ui_auth.validate_session(&session_id))
+        .unwrap_or(false);
+
+    Json(CheckResponse {
+        authenticated,
+        auth_required: true,
+    })
 }
 
 fn build_cors_layer(config: &Config) -> Option<CorsLayer> {

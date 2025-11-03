@@ -24,6 +24,68 @@ uuidgen
 
 Store keys securely in environment variables, never commit them to source control.
 
+## Web UI Password Protection
+
+The Web UI can be password-protected separately from API key authentication. This is useful for limiting access to the visual interface while still allowing programmatic API access.
+
+### Enable UI Password
+
+Add a password to your `raceway.toml`:
+
+```toml
+[server]
+ui_password = "your-secure-password"  # Optional - if not set, no UI authentication required
+```
+
+::: warning Optional Feature
+UI password protection is **completely optional**. If `ui_password` is not configured, the Web UI is accessible without authentication. This maintains backward compatibility with existing deployments.
+:::
+
+### How It Works
+
+- **Separate from API authentication**: API endpoints still use API keys (`api_keys`), while the Web UI uses the password
+- **Session-based**: After login, a secure HTTP-only cookie is set for 7 days
+- **Automatic redirect**: Unauthenticated users are redirected to the login page
+- **No impact on APIs**: The `/api/*` endpoints are unaffected by UI password protection
+
+### Password Requirements
+
+For security, use a strong password:
+
+```bash
+# Generate a secure password (32 characters)
+openssl rand -base64 32
+
+# Or use a passphrase
+# Example: correct-horse-battery-staple-2024
+```
+
+**Best practices:**
+- Use at least 16 characters
+- Mix letters, numbers, and symbols
+- Don't reuse passwords from other services
+- Store in environment variables or secrets manager
+
+### Example Configuration
+
+```toml
+[server]
+host = "0.0.0.0"
+port = 80
+
+# API authentication (for programmatic access)
+auth_enabled = true
+api_keys = ["api-key-for-sdks-and-automation"]
+
+# UI authentication (for browser access)
+ui_password = "strong-password-for-web-ui"
+```
+
+With this configuration:
+- Web UI at `/` requires password login
+- API endpoints at `/api/*` require API key in headers
+- Both protections are independent
+
 ### SDK Configuration
 
 All SDKs support API keys:
