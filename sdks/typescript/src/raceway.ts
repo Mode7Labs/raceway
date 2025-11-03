@@ -110,6 +110,11 @@ export class Raceway {
    */
   public middleware() {
     return (req: any, res: any, next: any) => {
+      // Skip Raceway's own internal requests to prevent infinite loop
+      if (req.headers['x-raceway-internal'] === 'true') {
+        return next();
+      }
+
       // Generate unique thread ID for this request context
       const threadId = `node-${process.pid}-${uuidv4().substring(0, 8)}`;
 

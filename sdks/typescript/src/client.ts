@@ -67,6 +67,7 @@ export class RacewayClient {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          'X-Raceway-Internal': 'true', // Skip middleware instrumentation
           ...(this.apiKey
             ? {
                 Authorization: `Bearer ${this.apiKey}`,
