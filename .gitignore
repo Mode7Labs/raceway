@@ -89,6 +89,7 @@ LAUNCH.md
 # Claude Code
 .claude/
 .codex/
+.mcp.json
 
 # Local configuration (use raceway.toml.example as template)
 raceway.toml
