@@ -456,60 +456,17 @@ fn extract_client_identifier(
 }
 
 // UI Authentication Middleware
+// Note: This middleware doesn't actually block requests - it just lets everything through.
+// The React app will check /auth/check on load and show the login page if needed.
+// This approach ensures static files (HTML/JS/CSS) can always load.
 async fn ui_auth_middleware(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     req: Request<Body>,
     next: Next,
 ) -> Result<Response, Response> {
-    // If UI auth is not enabled, allow all requests
-    if !state.ui_auth.enabled {
-        return Ok(next.run(req).await);
-    }
-
-    // Extract session cookie
-    let session_id = req
-        .headers()
-        .get(axum::http::header::COOKIE)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|cookies| {
-            cookies
-                .split(';')
-                .find_map(|cookie| {
-                    let parts: Vec<&str> = cookie.trim().splitn(2, '=').collect();
-                    if parts.len() == 2 && parts[0] == "raceway_session" {
-                        Some(parts[1].to_string())
-                    } else {
-                        None
-                    }
-                })
-        });
-
-    // Validate session
-    if let Some(session_id) = session_id {
-        if state.ui_auth.validate_session(&session_id) {
-            return Ok(next.run(req).await);
-        }
-    }
-
-    // Return 401 Unauthorized with simple HTML page
-    let html = r#"
-<!DOCTYPE html>
-<html>
-<head>
-    <title>Authentication Required - Raceway</title>
-    <meta http-equiv="refresh" content="0; url=/?auth=required">
-</head>
-<body>
-    <p>Redirecting to login...</p>
-</body>
-</html>
-    "#;
-
-    Ok(Response::builder()
-        .status(StatusCode::UNAUTHORIZED)
-        .header(axum::http::header::CONTENT_TYPE, "text/html")
-        .body(Body::from(html))
-        .unwrap())
+    // Always allow static files to load
+    // The React app will handle authentication checks client-side
+    Ok(next.run(req).await)
 }
 
 // UI Auth Handlers
