@@ -920,13 +920,15 @@ async fn list_traces_handler(
         .get("page_size")
         .and_then(|p| p.parse().ok())
         .unwrap_or(20);
+    let min_events: Option<usize> = params.get("min_events").and_then(|p| p.parse().ok());
 
     if state.verbose {
         println!(
-            "[{}] 📋 list_traces_handler -> page: {}, page_size: {}",
+            "[{}] 📋 list_traces_handler -> page: {}, page_size: {}, min_events: {:?}",
             Local::now().format("%H:%M:%S.%3f"),
             page,
-            page_size
+            page_size,
+            min_events
         );
     }
 
@@ -953,7 +955,7 @@ async fn list_traces_handler(
     match state
         .engine
         .storage()
-        .get_trace_summaries(page, page_size)
+        .get_trace_summaries(page, page_size, min_events)
         .await
     {
         Ok((summaries, total_traces)) => {

@@ -46,6 +46,7 @@ pub trait StorageBackend: Send + Sync {
         &self,
         page: usize,
         page_size: usize,
+        min_events: Option<usize>,
     ) -> Result<(Vec<TraceSummary>, usize)>;
 
     /// Get paginated trace summaries filtered by service name

@@ -182,8 +182,10 @@ impl StorageBackend for MemoryBackend {
         &self,
         page: usize,
         page_size: usize,
+        min_events: Option<usize>,
     ) -> Result<(Vec<TraceSummary>, usize)> {
         let mut summaries: Vec<TraceSummary> = Vec::new();
+        let min_event_count = min_events.unwrap_or(1);
 
         for trace_entry in self.trace_events.iter() {
             let trace_id = *trace_entry.key();
@@ -203,6 +205,12 @@ impl StorageBackend for MemoryBackend {
 
             if !events.is_empty() {
                 let event_count = events.len() as i64;
+
+                // Apply min_events filter
+                if (event_count as usize) < min_event_count {
+                    continue;
+                }
+
                 let first_timestamp = events.iter().map(|e| e.timestamp).min().unwrap();
                 let last_timestamp = events.iter().map(|e| e.timestamp).max().unwrap();
 
@@ -876,7 +884,7 @@ impl StorageBackend for MemoryBackend {
         use std::collections::HashMap;
 
         // Collect trace summaries (limited)
-        let (summaries, _) = self.get_trace_summaries(1, limit).await?;
+        let (summaries, _) = self.get_trace_summaries(1, limit, None).await?;
 
         if summaries.is_empty() {
             return Ok(serde_json::json!({

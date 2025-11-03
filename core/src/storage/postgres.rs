@@ -297,16 +297,33 @@ impl StorageBackend for PostgresBackend {
         &self,
         page: usize,
         page_size: usize,
+        min_events: Option<usize>,
     ) -> Result<(Vec<TraceSummary>, usize)> {
-        // Get total count
-        let count_row = sqlx::query(
+        // Build count query with optional min_events filter
+        let count_query = if let Some(min) = min_events {
+            format!(
+                r#"
+                SELECT COUNT(DISTINCT trace_id) as total
+                FROM (
+                    SELECT trace_id, COUNT(*) as cnt
+                    FROM events
+                    GROUP BY trace_id
+                    HAVING COUNT(*) >= {}
+                ) AS filtered
+                "#,
+                min
+            )
+        } else {
             r#"
             SELECT COUNT(DISTINCT trace_id) as total
             FROM events
-            "#,
-        )
-        .fetch_one(&self.pool)
-        .await?;
+            "#
+            .to_string()
+        };
+
+        let count_row = sqlx::query(&count_query)
+            .fetch_one(&self.pool)
+            .await?;
 
         let total_count: i64 = count_row.get("total");
 
@@ -333,10 +350,12 @@ impl StorageBackend for PostgresBackend {
                 GROUP BY trace_id
             ) ds ON e.trace_id = ds.trace_id
             GROUP BY e.trace_id, ds.services, ds.service_count
+            HAVING COUNT(DISTINCT e.id) >= $1
             ORDER BY MAX(e.timestamp) DESC
-            LIMIT $1 OFFSET $2
+            LIMIT $2 OFFSET $3
             "#,
         )
+        .bind(min_events.unwrap_or(1) as i64)
         .bind(page_size as i64)
         .bind(offset as i64)
         .fetch_all(&self.pool)
