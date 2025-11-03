@@ -40,45 +40,7 @@ export default function App() {
   const [authenticated, setAuthenticated] = useState(false);
   const [authRequired, setAuthRequired] = useState(false);
 
-  // Check authentication status on mount
-  useEffect(() => {
-    const checkAuth = async () => {
-      try {
-        const response = await fetch('/auth/check');
-        const data = await response.json();
-        setAuthenticated(data.authenticated);
-        setAuthRequired(data.auth_required);
-      } catch (err) {
-        // If check fails, assume no auth required (backward compatible)
-        setAuthenticated(true);
-        setAuthRequired(false);
-      } finally {
-        setAuthChecked(true);
-      }
-    };
-
-    checkAuth();
-  }, []);
-
-  // Handle successful login
-  const handleLogin = () => {
-    setAuthenticated(true);
-  };
-
-  // Show loading while checking auth
-  if (!authChecked) {
-    return (
-      <div className="flex items-center justify-center min-h-screen">
-        <Loader2 className="h-8 w-8 animate-spin" />
-      </div>
-    );
-  }
-
-  // Show login if auth is required and user is not authenticated
-  if (authRequired && !authenticated) {
-    return <Login onLogin={handleLogin} />;
-  }
-
+  // All other state must be declared before any conditional returns
   const [traces, setTraces] = useState<TraceMetadata[]>([]);
   const [selectedTraceId, setSelectedTraceId] = useState<string | null>(null);
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
@@ -435,6 +397,45 @@ export default function App() {
       return;
     }
   }, [location.pathname]);
+
+  // Check authentication status on mount
+  useEffect(() => {
+    const checkAuth = async () => {
+      try {
+        const response = await fetch('/auth/check');
+        const data = await response.json();
+        setAuthenticated(data.authenticated);
+        setAuthRequired(data.auth_required);
+      } catch (err) {
+        // If check fails, assume no auth required (backward compatible)
+        setAuthenticated(true);
+        setAuthRequired(false);
+      } finally {
+        setAuthChecked(true);
+      }
+    };
+
+    checkAuth();
+  }, []);
+
+  // Handle successful login
+  const handleLogin = () => {
+    setAuthenticated(true);
+  };
+
+  // Show loading while checking auth
+  if (!authChecked) {
+    return (
+      <div className="flex items-center justify-center min-h-screen">
+        <Loader2 className="h-8 w-8 animate-spin" />
+      </div>
+    );
+  }
+
+  // Show login if auth is required and user is not authenticated
+  if (authRequired && !authenticated) {
+    return <Login onLogin={handleLogin} />;
+  }
 
   return (
     <div className="flex flex-col h-screen bg-background text-foreground">
