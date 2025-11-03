@@ -4,6 +4,7 @@ use crate::config::StorageConfig;
 use crate::event::{DistributedEdge, DistributedSpan, Event, EventKind};
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
+use itertools::Itertools;
 use sqlx::postgres::{PgPool, PgPoolOptions};
 use sqlx::Row;
 use uuid::Uuid;
@@ -160,6 +161,168 @@ impl StorageBackend for PostgresBackend {
         }
 
         Ok(())
+    }
+
+    async fn add_events_batch(&self, events: Vec<Event>) -> Result<usize> {
+        if events.is_empty() {
+            return Ok(0);
+        }
+
+        let event_count = events.len();
+
+        // Prepare bulk data for events table
+        let mut event_ids = Vec::with_capacity(event_count);
+        let mut trace_ids = Vec::with_capacity(event_count);
+        let mut parent_ids = Vec::with_capacity(event_count);
+        let mut timestamps = Vec::with_capacity(event_count);
+        let mut kinds = Vec::with_capacity(event_count);
+        let mut metadatas = Vec::with_capacity(event_count);
+        let mut causality_vectors = Vec::with_capacity(event_count);
+        let mut lock_sets = Vec::with_capacity(event_count);
+
+        // Collect data for related tables
+        let mut causal_edges: Vec<(Uuid, Uuid, &str)> = Vec::new();
+        let mut trace_roots: Vec<(Uuid, Uuid)> = Vec::new();
+        let mut cross_trace_entries: Vec<(String, Uuid, Uuid, chrono::DateTime<chrono::Utc>, String, String, serde_json::Value, String)> = Vec::new();
+
+        for event in &events {
+            // Serialize complex types
+            let kind_json = serde_json::to_value(&event.kind)?;
+            let metadata_json = serde_json::to_value(&event.metadata)?;
+            let causality_vector_json = serde_json::to_value(&event.causality_vector)?;
+            let lock_set_json = serde_json::to_value(&event.lock_set)?;
+
+            event_ids.push(event.id);
+            trace_ids.push(event.trace_id);
+            parent_ids.push(event.parent_id);
+            timestamps.push(event.timestamp);
+            kinds.push(kind_json);
+            metadatas.push(metadata_json);
+            causality_vectors.push(causality_vector_json);
+            lock_sets.push(lock_set_json);
+
+            // Collect causal edges
+            if let Some(parent_id) = event.parent_id {
+                let edge_type = match &event.kind {
+                    EventKind::AsyncSpawn { .. } => "AsyncSpawn",
+                    EventKind::AsyncAwait { .. } => "AsyncAwait",
+                    EventKind::HttpResponse { .. } => "HttpRequestResponse",
+                    EventKind::DatabaseResult { .. } => "DatabaseQueryResult",
+                    EventKind::StateChange { .. } => "DataDependency",
+                    _ => "DirectCall",
+                };
+                causal_edges.push((parent_id, event.id, edge_type));
+            } else {
+                // Root event
+                trace_roots.push((event.trace_id, event.id));
+            }
+
+            // Collect cross-trace index entries for StateChange events
+            if let EventKind::StateChange {
+                variable,
+                new_value,
+                location,
+                access_type,
+                ..
+            } = &event.kind
+            {
+                let access_type_str = format!("{:?}", access_type);
+                let value_json = serde_json::to_value(new_value)?;
+                cross_trace_entries.push((
+                    variable.clone(),
+                    event.id,
+                    event.trace_id,
+                    event.timestamp,
+                    event.metadata.thread_id.clone(),
+                    access_type_str,
+                    value_json,
+                    location.clone(),
+                ));
+            }
+        }
+
+        // Bulk insert events using unnest
+        sqlx::query(
+            r#"
+            INSERT INTO events (id, trace_id, parent_id, timestamp, kind, metadata, causality_vector, lock_set)
+            SELECT * FROM unnest($1::uuid[], $2::uuid[], $3::uuid[], $4::timestamptz[], $5::jsonb[], $6::jsonb[], $7::jsonb[], $8::jsonb[])
+            ON CONFLICT (id) DO NOTHING
+            "#,
+        )
+        .bind(&event_ids)
+        .bind(&trace_ids)
+        .bind(&parent_ids)
+        .bind(&timestamps)
+        .bind(&kinds)
+        .bind(&metadatas)
+        .bind(&causality_vectors)
+        .bind(&lock_sets)
+        .execute(&self.pool)
+        .await?;
+
+        // Bulk insert causal edges if any
+        if !causal_edges.is_empty() {
+            let (from_ids, to_ids, edge_types): (Vec<_>, Vec<_>, Vec<_>) = causal_edges
+                .into_iter()
+                .map(|(f, t, e)| (f, t, e.to_string()))
+                .multiunzip();
+
+            sqlx::query(
+                r#"
+                INSERT INTO causal_edges (from_event_id, to_event_id, edge_type)
+                SELECT * FROM unnest($1::uuid[], $2::uuid[], $3::text[])
+                ON CONFLICT (from_event_id, to_event_id) DO NOTHING
+                "#,
+            )
+            .bind(&from_ids)
+            .bind(&to_ids)
+            .bind(&edge_types)
+            .execute(&self.pool)
+            .await?;
+        }
+
+        // Bulk insert trace roots if any
+        if !trace_roots.is_empty() {
+            let (root_trace_ids, root_event_ids): (Vec<_>, Vec<_>) = trace_roots.into_iter().unzip();
+
+            sqlx::query(
+                r#"
+                INSERT INTO trace_roots (trace_id, root_event_id)
+                SELECT * FROM unnest($1::uuid[], $2::uuid[])
+                ON CONFLICT (trace_id, root_event_id) DO NOTHING
+                "#,
+            )
+            .bind(&root_trace_ids)
+            .bind(&root_event_ids)
+            .execute(&self.pool)
+            .await?;
+        }
+
+        // Bulk insert cross-trace index entries if any
+        if !cross_trace_entries.is_empty() {
+            let (variables, event_ids, trace_ids, timestamps, thread_ids, access_types, values, locations): (Vec<_>, Vec<_>, Vec<_>, Vec<_>, Vec<_>, Vec<_>, Vec<_>, Vec<_>) =
+                cross_trace_entries.into_iter().multiunzip();
+
+            sqlx::query(
+                r#"
+                INSERT INTO cross_trace_index (variable, event_id, trace_id, timestamp, thread_id, access_type, value, location)
+                SELECT * FROM unnest($1::text[], $2::uuid[], $3::uuid[], $4::timestamptz[], $5::text[], $6::text[], $7::jsonb[], $8::text[])
+                ON CONFLICT (variable, event_id) DO NOTHING
+                "#,
+            )
+            .bind(&variables)
+            .bind(&event_ids)
+            .bind(&trace_ids)
+            .bind(&timestamps)
+            .bind(&thread_ids)
+            .bind(&access_types)
+            .bind(&values)
+            .bind(&locations)
+            .execute(&self.pool)
+            .await?;
+        }
+
+        Ok(event_count)
     }
 
     async fn get_event(&self, id: Uuid) -> Result<Option<Event>> {

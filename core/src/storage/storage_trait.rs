@@ -16,6 +16,12 @@ pub trait StorageBackend: Send + Sync {
     /// Add an event to storage
     async fn add_event(&self, event: Event) -> Result<()>;
 
+    /// Add multiple events to storage in a single batch operation
+    /// This is significantly more efficient than calling add_event() in a loop
+    /// as it performs bulk inserts with a single database transaction
+    /// Returns the number of events successfully inserted
+    async fn add_events_batch(&self, events: Vec<Event>) -> Result<usize>;
+
     /// Get a specific event by ID
     async fn get_event(&self, id: Uuid) -> Result<Option<Event>>;
 

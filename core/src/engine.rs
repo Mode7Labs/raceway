@@ -112,10 +112,10 @@ impl RacewayEngine {
                 }
             }
 
-            // Add events to analysis service (which persists to storage and updates graph)
-            for event in batch {
-                if let Err(e) = analysis.add_event(event).await {
-                    eprintln!("Failed to add event: {}", e);
+            // Add events to analysis service using batch operation (much faster!)
+            if !batch.is_empty() {
+                if let Err(e) = analysis.add_events_batch(batch).await {
+                    eprintln!("Failed to add event batch: {}", e);
                 }
             }
 

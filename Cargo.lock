@@ -1925,6 +1925,7 @@ dependencies = [
  "crossbeam",
  "dashmap 6.1.0",
  "futures",
+ "itertools 0.13.0",
  "lru",
  "petgraph",
  "serde",

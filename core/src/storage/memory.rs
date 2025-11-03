@@ -122,6 +122,28 @@ impl StorageBackend for MemoryBackend {
         Ok(())
     }
 
+    async fn add_events_batch(&self, events: Vec<Event>) -> Result<usize> {
+        let event_count = events.len();
+
+        for event in events {
+            let event_id = event.id;
+            let trace_id = event.trace_id;
+
+            // Store the event
+            self.events.insert(event_id, event);
+
+            // Add event ID to trace's event list
+            self.trace_events
+                .entry(trace_id)
+                .or_insert_with(|| RwLock::new(Vec::new()))
+                .write()
+                .unwrap()
+                .push(event_id);
+        }
+
+        Ok(event_count)
+    }
+
     async fn get_event(&self, id: Uuid) -> Result<Option<Event>> {
         Ok(self.events.get(&id).map(|e| e.clone()))
     }

@@ -125,6 +125,85 @@ impl AnalysisService {
         Ok(())
     }
 
+    /// Add multiple events in a batch (significantly more efficient than calling add_event in a loop)
+    pub async fn add_events_batch(&self, events: Vec<Event>) -> Result<usize> {
+        if events.is_empty() {
+            return Ok(0);
+        }
+
+        // First, persist all events to storage in a single batch
+        let event_count = self.storage.add_events_batch(events.clone()).await?;
+
+        // Handle distributed tracing if enabled
+        if self.config.distributed_tracing.enabled {
+            let mut spans_to_save = Vec::new();
+            let mut edges_to_add = Vec::new();
+
+            for event in &events {
+                if let Some(span_id) = &event.metadata.distributed_span_id {
+                    // Create or update distributed span
+                    let existing_span = self.storage.get_distributed_span(span_id).await?;
+
+                    let span = if let Some(mut existing) = existing_span {
+                        existing.last_event = Some(event.timestamp);
+                        existing
+                    } else {
+                        DistributedSpan {
+                            trace_id: event.trace_id,
+                            span_id: span_id.clone(),
+                            service: event.metadata.service_name.clone(),
+                            instance: event.metadata.instance_id.clone().unwrap_or_default(),
+                            first_event: event.timestamp,
+                            last_event: Some(event.timestamp),
+                        }
+                    };
+
+                    spans_to_save.push(span);
+
+                    // Create distributed edge if there's an upstream span
+                    if let Some(upstream_span_id) = &event.metadata.upstream_span_id {
+                        let link_type = match &event.kind {
+                            crate::event::EventKind::HttpRequest { .. } => EdgeLinkType::HttpCall,
+                            crate::event::EventKind::HttpResponse { .. } => EdgeLinkType::HttpCall,
+                            crate::event::EventKind::DatabaseQuery { .. } => EdgeLinkType::DatabaseQuery,
+                            _ => EdgeLinkType::Custom,
+                        };
+
+                        let edge = DistributedEdge {
+                            from_span: upstream_span_id.clone(),
+                            to_span: span_id.clone(),
+                            link_type,
+                            metadata: serde_json::json!({
+                                "event_id": event.id,
+                                "timestamp": event.timestamp,
+                            }),
+                        };
+
+                        edges_to_add.push(edge);
+                    }
+                }
+            }
+
+            // Batch save all spans
+            for span in spans_to_save {
+                self.storage.save_distributed_span(span).await?;
+            }
+
+            // Batch add all edges
+            for edge in edges_to_add {
+                self.storage.add_distributed_edge(edge).await?;
+            }
+        }
+
+        // Update in-memory graph with all events
+        let graph = self.graph.write().await;
+        for event in events {
+            graph.add_event(event)?;
+        }
+
+        Ok(event_count)
+    }
+
     /// Update baselines after processing a trace
     pub async fn update_baselines(&self, trace_id: Uuid) -> Result<()> {
         self.ensure_trace_loaded(trace_id).await?;
