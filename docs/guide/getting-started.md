@@ -5,8 +5,22 @@ Get Raceway up and running in minutes.
 ## Prerequisites
 
 - **Rust 1.70+** (for the server)
-- **Node.js 18+** (for the Web UI)
+- **Node.js 18+** (required to build the Web UI)
 - **PostgreSQL** (optional, for persistent storage)
+
+### Linux Build Dependencies
+
+On Debian/Ubuntu and similar distributions, you'll need additional build tools:
+
+```bash
+sudo apt-get update
+sudo apt-get install build-essential pkg-config libssl-dev
+```
+
+These packages provide:
+- `build-essential` - GCC compiler and build tools
+- `pkg-config` - Package configuration helper
+- `libssl-dev` - OpenSSL development headers (required for HTTPS)
 
 ## Installation
 
@@ -17,7 +31,22 @@ git clone https://github.com/mode7labs/raceway.git
 cd raceway
 ```
 
-### 2. Start the Raceway Server
+### 2. Build the Web UI
+
+The server serves the Web UI on its root path, so you need to build it first:
+
+```bash
+cd web
+npm install
+npm run build
+cd ..
+```
+
+::: tip Quick Build Script
+Or use the provided build script: `bash scripts/build-with-ui.sh`
+:::
+
+### 3. Start the Raceway Server
 
 ```bash
 # Development mode
@@ -29,21 +58,10 @@ cargo run --release -- serve
 
 The server will start on `http://localhost:8080` by default.
 
-### 3. Start the Web UI (Optional)
-
-The Web UI is a separate React application. To use it:
-
-```bash
-# In a new terminal
-cd web
-npm install
-npm run dev
-```
-
-Navigate to `http://localhost:3005` in your browser.
+**Access the Web UI:** Navigate to `http://localhost:8080/` in your browser.
 
 ::: tip API-First Design
-Raceway is API-first. The Web UI is optional - you can use the HTTP API directly or build your own visualization tools. See the [API Reference](/api/overview) for details.
+Raceway is API-first. The Web UI is optional - you can use the HTTP API directly (`/api/*` endpoints) or build your own visualization tools. See the [API Reference](/api/overview) for details.
 :::
 
 ## Quick Example

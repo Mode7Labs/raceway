@@ -14,23 +14,77 @@ The Raceway Web UI provides a comprehensive interface for:
 
 ## Setup
 
-The Web UI is a separate React application that must be run alongside the Raceway server:
+::: warning Node.js Required
+The Web UI is a React application that **must be built** before the server can serve it. You need **Node.js 18+** to build the UI.
+:::
+
+### Server Integration (Recommended)
+
+**By default, the Raceway server serves the Web UI on the root path** (`/`) after it's been built:
+
+```bash
+# 1. Build the Web UI
+cd web
+npm install
+npm run build
+cd ..
+
+# 2. Start the Raceway server (serves UI on /)
+cargo run --release -- serve
+```
+
+**Access:** `http://localhost:8080/` (Web UI on root, API on `/api/*`)
+
+The server will serve the built UI from `web/dist/` automatically. If the UI hasn't been built, the root path will return a 404.
+
+### Development Mode (Optional)
+
+For active UI development, run the UI with hot-reload in a separate terminal:
 
 ```bash
 # Terminal 1: Start the Raceway server
 cargo run -- serve
 
-# Terminal 2: Start the Web UI
+# Terminal 2: Start the Web UI dev server
 cd web
-npm install
 npm run dev
 ```
 
-**Access:** `http://localhost:3005` (Vite dev server)
+**Access:** `http://localhost:3005` (Vite dev server with hot reload)
 
-::: tip Production Deployment
-For production, build the UI (`npm run build`) and serve the `web/dist/` directory with your preferred web server (nginx, Caddy, etc.). The UI uses the `/api` proxy configuration to communicate with the Raceway server.
+::: tip Quick Build Script
+Use the provided build script to build both UI and server:
+```bash
+bash scripts/build-with-ui.sh
+```
+This builds the Web UI first, then compiles the Rust server with the embedded UI.
 :::
+
+### Production Deployment
+
+For production, you have two options:
+
+**Option 1: Embedded (Recommended)**
+Build the UI and let the Raceway server serve it:
+```bash
+cd web && npm run build && cd ..
+cargo build --release
+./target/release/raceway serve
+```
+The server serves the UI on `/` and API on `/api/*`.
+
+**Option 2: Separate Web Server**
+Serve `web/dist/` with nginx or Caddy and proxy API requests:
+```nginx
+server {
+    listen 80;
+    root /path/to/raceway/web/dist;
+
+    location /api {
+        proxy_pass http://localhost:8080;
+    }
+}
+```
 
 ## Key Features
 

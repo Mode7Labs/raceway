@@ -110,6 +110,14 @@ Raceway does not currently support native TLS/HTTPS. Use a reverse proxy for HTT
 **Want to contribute?** Native TLS support is a [priority issue for contributors](https://github.com/mode7labs/raceway/issues).
 :::
 
+### CloudFlare Flexible SSL
+
+::: tip CloudFlare Compatible
+If you're using CloudFlare, **Flexible SSL mode** works with Raceway. CloudFlare handles HTTPS between the client and CloudFlare, while the connection between CloudFlare and your server remains HTTP.
+
+This is a quick way to get HTTPS without managing certificates, though Full SSL mode with a reverse proxy is more secure.
+:::
+
 ### Production Setup
 
 Run Raceway on localhost and use a reverse proxy:
