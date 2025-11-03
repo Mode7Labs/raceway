@@ -23,6 +23,7 @@ use std::num::NonZeroU32;
 use std::sync::Arc;
 use std::time::Duration;
 use tower_http::cors::{AllowOrigin, Any, CorsLayer};
+use tower_http::services::{ServeDir, ServeFile};
 use uuid::Uuid;
 #[derive(Clone)]
 struct AppState {
@@ -236,8 +237,11 @@ pub fn build_router(config: &Config, engine: Arc<RacewayEngine>) -> Router {
     };
     let auth_state = state.clone();
 
+    // Serve WebUI static files from web/dist
+    let serve_dir = ServeDir::new("web/dist")
+        .not_found_service(ServeFile::new("web/dist/index.html"));
+
     let router = Router::new()
-        .route("/", get(root_handler))
         .route("/health", get(health_handler))
         .route("/status", get(status_handler))
         .route("/events", post(ingest_events_handler))
@@ -287,7 +291,8 @@ pub fn build_router(config: &Config, engine: Arc<RacewayEngine>) -> Router {
             get(get_system_hotspots_handler),
         )
         .layer(middleware::from_fn_with_state(auth_state, auth_middleware))
-        .with_state(state);
+        .with_state(state)
+        .fallback_service(serve_dir);
 
     if let Some(cors_layer) = build_cors_layer(config) {
         router.layer(cors_layer)
