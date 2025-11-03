@@ -1,0 +1,27 @@
+[Unit]
+Description=Raceway - Concurrency Debugger
+After=network.target postgresql.service
+Wants=postgresql.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/raceway
+ExecStart=/root/raceway/target/release/raceway serve
+Restart=always
+RestartSec=10
+
+# Environment variables (if needed)
+# Environment="RUST_LOG=info"
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=raceway
+
+# Security (optional but recommended)
+# NoNewPrivileges=true
+# PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
