@@ -16,6 +16,7 @@ import { ExportMenu } from './components/shared/ExportMenu';
 import { Button } from './components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from './components/ui/tabs';
 import { Badge } from './components/ui/badge';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './components/ui/select';
 import { OverviewTab } from './components/views/dashboard/OverviewTab';
 import { AnomaliesTab } from './components/views/traces/AnomaliesTab';
 import { ServiceOverview } from './components/features/services/ServiceOverview';
@@ -61,6 +62,7 @@ export default function App() {
   const [currentPage, setCurrentPage] = useState(1);
   const [hasMoreTraces, setHasMoreTraces] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
+  const [minEvents, setMinEvents] = useState(1);
 
   // Data caches
   const [events, setEvents] = useState<Event[]>([]);
@@ -97,7 +99,7 @@ export default function App() {
   const fetchTraces = useCallback(async () => {
     setRefreshing(true);
     try {
-      const response = await RacewayAPI.getTraces(1, 20);
+      const response = await RacewayAPI.getTraces(1, 20, minEvents > 1 ? minEvents : undefined);
       if (response.data) {
         // Store full trace metadata
         setTraces(response.data.traces);
@@ -113,7 +115,7 @@ export default function App() {
     } finally {
       setRefreshing(false);
     }
-  }, []);
+  }, [minEvents]);
 
   // Load more traces (append next page)
   const loadMoreTraces = useCallback(async () => {
@@ -122,7 +124,7 @@ export default function App() {
     setLoadingMore(true);
     try {
       const nextPage = currentPage + 1;
-      const response = await RacewayAPI.getTraces(nextPage, 20);
+      const response = await RacewayAPI.getTraces(nextPage, 20, minEvents > 1 ? minEvents : undefined);
       if (response.data && response.data.traces) {
         // Append new traces to existing list
         setTraces(prev => [...prev, ...response.data!.traces]);
@@ -134,7 +136,7 @@ export default function App() {
     } finally {
       setLoadingMore(false);
     }
-  }, [currentPage, hasMoreTraces, loadingMore]);
+  }, [currentPage, hasMoreTraces, loadingMore, minEvents]);
 
 
   // Fetch trace details (optimized to use single /full endpoint)
@@ -595,7 +597,7 @@ export default function App() {
               </>
             ) : (
               <>
-                <div className="p-3 border-b border-border">
+                <div className="p-3 border-b border-border space-y-2">
                   <input
                     type="text"
                     placeholder="Search by ID..."
@@ -603,6 +605,23 @@ export default function App() {
                     onChange={(e) => setSearchQuery(e.target.value)}
                     className="w-full px-3 py-1.5 text-xs bg-background border border-border rounded-md focus:outline-none focus:ring-1 focus:ring-primary/50"
                   />
+                  <div className="flex items-center gap-2">
+                    <label className="text-xs text-muted-foreground whitespace-nowrap">Min Events:</label>
+                    <Select
+                      value={minEvents.toString()}
+                      onValueChange={(value) => setMinEvents(parseInt(value))}
+                    >
+                      <SelectTrigger className="h-8 text-xs">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="1">1+</SelectItem>
+                        <SelectItem value="2">2+</SelectItem>
+                        <SelectItem value="5">5+</SelectItem>
+                        <SelectItem value="10">10+</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
                 </div>
                 <div className="flex-1 overflow-y-auto p-3">
                   <TraceList

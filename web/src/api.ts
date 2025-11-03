@@ -27,8 +27,9 @@ export class RacewayAPI {
 
   // ===== ACTIVE ENDPOINTS =====
 
-  static async getTraces(page: number = 1, pageSize: number = 20): Promise<TracesListResponse> {
-    return this.fetchJSON<TracesListResponse>(`${API_BASE}/api/traces?page=${page}&page_size=${pageSize}`);
+  static async getTraces(page: number = 1, pageSize: number = 20, minEvents?: number): Promise<TracesListResponse> {
+    const minEventsParam = minEvents ? `&min_events=${minEvents}` : '';
+    return this.fetchJSON<TracesListResponse>(`${API_BASE}/api/traces?page=${page}&page_size=${pageSize}${minEventsParam}`);
   }
 
   static async getFullTraceAnalysis(traceId: string, signal?: AbortSignal): Promise<FullTraceAnalysisResponse> {
