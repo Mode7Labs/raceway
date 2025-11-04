@@ -9,6 +9,11 @@ edition = "2021"
 authors = ["Raceway Contributors"]
 license = "MIT"
 repository = "https://github.com/mode7labs/raceway"
+homepage = "https://mode7labs.github.io/raceway"
+documentation = "https://mode7labs.github.io/raceway"
+keywords = ["concurrency", "debugging", "tracing", "distributed-systems", "race-condition"]
+categories = ["development-tools::debugging", "development-tools::profiling", "asynchronous"]
+readme = "README.md"
 
 [workspace.dependencies]
 tokio = { version = "1.40", features = ["full"] }

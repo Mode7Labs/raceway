@@ -6,6 +6,9 @@ authors = ["Raceway Contributors"]
 description = "Official Rust SDK for Raceway - race condition detection and distributed tracing"
 license = "MIT"
 repository = "https://github.com/mode7labs/raceway"
+homepage = "https://mode7labs.github.io/raceway"
+documentation = "https://mode7labs.github.io/raceway/sdks/rust"
+readme = "README.md"
 keywords = ["tracing", "instrumentation", "race-detection", "concurrency", "debugging"]
 categories = ["development-tools::debugging", "development-tools::profiling"]
 

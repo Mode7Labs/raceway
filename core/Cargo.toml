@@ -4,6 +4,18 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+keywords.workspace = true
+categories.workspace = true
+readme.workspace = true
+description = "Core library for Raceway - Causality tracking and race condition detection for concurrent systems"
+include = [
+    "src/**/*",
+    "Cargo.toml",
+    "../migrations/**/*",
+]
 
 [dependencies]
 tokio.workspace = true

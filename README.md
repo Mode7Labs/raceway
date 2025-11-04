@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/logo.png" alt="Raceway Logo" width="120" />
+  <img src="docs/public/logo.png" alt="Raceway Logo" width="120" />
 </p>
 
 # Raceway

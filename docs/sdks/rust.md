@@ -380,13 +380,145 @@ Context is maintained across:
 
 **Note:** Context does NOT automatically propagate to spawned tasks (`tokio::spawn`). For spawned tasks, you need to manually propagate the context.
 
+### Working with Background Tasks
+
+Background tasks and spawned work require explicit context propagation. Here are the common patterns:
+
+#### Pattern 1: Background Workers with Channels
+
+When passing work to background workers via channels (e.g., job queues), capture the context in the handler and pass it through the channel:
+
+```rust
+use raceway::{RacewayClient, RACEWAY_CONTEXT};
+use std::cell::RefCell;
+use std::sync::Arc;
+use tokio::sync::{mpsc, oneshot};
+
+struct Job {
+    data: String,
+    response_tx: oneshot::Sender<String>,
+    trace_context: Option<raceway::RacewayContext>,  // Pass context through channel
+}
+
+// In your HTTP handler - capture context
+async fn enqueue_job(
+    State(state): State<Arc<AppState>>,
+    Json(payload): Json<JobPayload>,
+) -> Result<Json<JobResult>, StatusCode> {
+    // Capture the current trace context
+    let trace_context = RACEWAY_CONTEXT.try_with(|ctx| ctx.borrow().clone()).ok();
+
+    let (tx, rx) = oneshot::channel();
+    let job = Job {
+        data: payload.data,
+        response_tx: tx,
+        trace_context,  // Include context in job
+    };
+
+    state.tx.send(job).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let result = rx.await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(JobResult { result }))
+}
+
+// Background worker - re-establish context
+async fn worker(
+    mut rx: mpsc::Receiver<Job>,
+    raceway: Arc<RacewayClient>,
+) {
+    while let Some(job) = rx.recv().await {
+        let trace_context = job.trace_context;
+        let raceway_clone = raceway.clone();
+        let data = job.data.clone();
+
+        let work = async move {
+            // This will be tracked in the same trace as the HTTP request
+            raceway_clone.track_function_call("worker_process_job", &data);
+
+            // Do work...
+            let result = format!("Processed: {}", data);
+            let _ = job.response_tx.send(result);
+        };
+
+        // Re-establish the trace context for this work
+        if let Some(ctx) = trace_context {
+            RACEWAY_CONTEXT.scope(RefCell::new(ctx), work).await;
+        } else {
+            work.await;
+        }
+    }
+}
+```
+
+#### Pattern 2: Spawned Tasks
+
+When using `tokio::spawn`, manually propagate context by capturing it before spawning:
+
+```rust
+use raceway::{RacewayClient, RACEWAY_CONTEXT};
+use std::cell::RefCell;
+use tokio::time::{sleep, Duration};
+
+async fn handle_with_timeout(
+    State(raceway): State<Arc<RacewayClient>>,
+    Json(req): Json<Request>,
+) -> StatusCode {
+    raceway.track_function_call("handle_request", &req);
+
+    // Capture context before spawning
+    let ctx_for_spawn = RACEWAY_CONTEXT.try_with(|ctx| ctx.borrow().clone()).ok();
+    let raceway_clone = raceway.clone();
+    let req_id = req.id.clone();
+
+    // Spawn a timeout task with context propagation
+    let timeout_handle = tokio::spawn(async move {
+        if let Some(ctx) = ctx_for_spawn {
+            RACEWAY_CONTEXT.scope(RefCell::new(ctx), async {
+                sleep(Duration::from_secs(30)).await;
+                // This tracking will be in the same trace as the parent request
+                raceway_clone.track_function_call(
+                    "timeout_expired",
+                    &format!("request_id={}", req_id)
+                );
+            }).await;
+        }
+    });
+
+    // Do work...
+
+    StatusCode::OK
+}
+```
+
+#### Common Pitfall: Forgetting to Propagate
+
+```rust
+// ❌ WRONG - Creates orphaned trace events
+tokio::spawn(async move {
+    // This will NOT be in the same trace - context is lost!
+    raceway.track_function_call("background_task", &data);
+});
+
+// ✅ CORRECT - Propagates context
+let ctx = RACEWAY_CONTEXT.try_with(|ctx| ctx.borrow().clone()).ok();
+tokio::spawn(async move {
+    if let Some(ctx) = ctx {
+        RACEWAY_CONTEXT.scope(RefCell::new(ctx), async {
+            // Now this is in the same trace
+            raceway.track_function_call("background_task", &data);
+        }).await;
+    }
+});
+```
+
 ## Best Practices
 
 1. **Always use middleware**: Set up Raceway middleware to enable automatic trace initialization
 2. **Use Arc for client**: Wrap the client in `Arc` for safe sharing across handlers
 3. **Track shared state**: Focus on shared mutable state accessed by concurrent requests
 4. **Propagate headers**: Always use `propagation_headers()` when calling downstream services
-5. **Graceful shutdown**: Call `client.shutdown()` before exiting:
+5. **Propagate context to background tasks**: When using `tokio::spawn` or background workers, capture and re-establish trace context (see "Working with Background Tasks" above)
+6. **Graceful shutdown**: Call `client.shutdown()` before exiting:
    ```rust
    tokio::select! {
        _ = ctrl_c => {
@@ -394,7 +526,7 @@ Context is maintained across:
        },
    }
    ```
-6. **Pass client via State**: Use Axum's `State` extractor to access the client in handlers
+7. **Pass client via State**: Use Axum's `State` extractor to access the client in handlers
 
 ## Distributed Example
 

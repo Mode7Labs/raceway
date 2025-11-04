@@ -2,7 +2,7 @@ use crate::config::Config;
 use crate::event::{DistributedEdge, DistributedSpan, EdgeLinkType, Event};
 use crate::graph::{Anomaly, AuditTrail, CausalGraph, CriticalPath, ServiceDependencies, TreeNode};
 use crate::storage::{CrossTraceRace, StorageBackend, TraceAnalysisData};
-use anyhow::{Context, Result};
+use anyhow::Result;
 use chrono::{DateTime, Utc};
 use std::collections::HashSet;
 use std::sync::Arc;

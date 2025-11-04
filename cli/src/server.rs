@@ -647,6 +647,7 @@ fn build_cors_layer(config: &Config) -> Option<CorsLayer> {
     )
 }
 
+#[allow(dead_code)]
 async fn root_handler(State(state): State<AppState>) -> impl IntoResponse {
     // Get live stats
     let event_count = state.engine.storage().count_events().await.unwrap_or(0);

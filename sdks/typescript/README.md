@@ -58,6 +58,44 @@ app.post('/transfer', async (req, res) => {
 app.listen(3000);
 ```
 
+## Middleware Patterns
+
+### Global Middleware (Quick Start)
+
+```typescript
+app.use(raceway.middleware());
+```
+
+Traces all routes. Good for development and getting started quickly.
+
+### Per-Route Middleware (Production Recommended)
+
+```typescript
+// Health checks - no tracing
+app.get('/health', (req, res) => {
+  res.json({ status: 'ok' });
+});
+
+// Business endpoints - traced
+app.post('/transfer', raceway.middleware(), transferHandler);
+app.get('/users/:id', raceway.middleware(), getUserHandler);
+```
+
+**Why per-route is better for production:**
+- No noise from health checks (load balancers polling every 10 seconds)
+- Excludes metrics, static assets, and internal endpoints
+- Better signal-to-noise ratio in trace analysis
+- Lower database load and faster ingestion
+
+### Helper Pattern (Clean Syntax)
+
+```typescript
+const traced = (...handlers) => [raceway.middleware(), ...handlers];
+
+app.post('/transfer', ...traced(transferHandler));
+app.get('/users/:id', ...traced(authMiddleware, getUserHandler));
+```
+
 ## Distributed Tracing
 
 Propagate traces across service boundaries:

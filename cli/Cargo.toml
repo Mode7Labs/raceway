@@ -4,6 +4,13 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+keywords.workspace = true
+categories.workspace = true
+readme.workspace = true
+description = "Raceway server and CLI - Deep concurrency analysis and debugging for distributed systems"
 
 [lib]
 name = "raceway"

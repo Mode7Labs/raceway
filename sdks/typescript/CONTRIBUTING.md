@@ -149,6 +149,32 @@ describe('Feature Name', () => {
 - Provide usage examples for complex functions
 - Keep README.md updated with API changes
 
+### Best Practices
+
+#### Middleware Usage
+
+**Always recommend per-route middleware for production examples:**
+
+```typescript
+// ✅ Good - Per-route (production pattern)
+app.get('/health', healthHandler);
+app.post('/api/transfer', raceway.middleware(), transferHandler);
+
+// ⚠️ Acceptable - Global (quick start only)
+app.use(raceway.middleware());
+```
+
+**Rationale**:
+- Health checks from load balancers create thousands of unnecessary traces
+- Metrics and static asset endpoints add noise to analysis
+- Production databases fill up quickly with non-business traces
+- Users discover this problem only after deployment
+
+**When writing examples:**
+- Use global middleware only in "Quick Start" sections
+- Mark production patterns with "Production Recommended"
+- Always explain the trade-offs
+
 ## 🎯 Areas We Need Help
 
 ### High Priority

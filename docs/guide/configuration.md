@@ -188,17 +188,149 @@ Applies globally to all endpoints. Clients exceeding the limit receive `429 Too 
 
 ## Event Processing
 
+Raceway uses a batched event processing pipeline for optimal database performance. Events from SDKs are buffered in memory, then flushed to storage in batches.
+
+### Configuration
+
 ```toml
 [engine]
 buffer_size = 10000        # Event queue capacity
 batch_size = 100           # Events per batch
-flush_interval_ms = 100    # Batch flush frequency
+flush_interval_ms = 100    # Batch flush interval (milliseconds)
 ```
 
-**Tuning:**
-- **buffer_size**: Larger = handle more concurrent events, more memory
-- **batch_size**: Larger = better throughput, higher latency
-- **flush_interval_ms**: Lower = more real-time, more CPU
+### How It Works
+
+1. **SDKs send events** → Events arrive at `/events` endpoint
+2. **Buffer in memory** → Events queue in a channel (up to `buffer_size`)
+3. **Batch collection** → Engine collects up to `batch_size` events
+4. **Flush trigger** → Batch flushes when:
+   - `batch_size` events collected, OR
+   - `flush_interval_ms` milliseconds elapsed
+5. **Bulk database insert** → All events in batch written in a single transaction
+
+**Performance impact:** Batch processing reduces database operations by ~100-200x compared to individual inserts.
+
+### Tuning Guidelines
+
+#### buffer_size (Default: 10000)
+
+The in-memory event queue capacity.
+
+**Increase when:**
+- High event volume (>1000 events/sec)
+- Burst traffic patterns
+- Database temporarily slow/unavailable
+
+**Decrease when:**
+- Memory constrained
+- Low event volume
+- Want faster shutdown (fewer buffered events to flush)
+
+**Memory impact:** ~1-2 KB per event. 10000 events ≈ 10-20 MB.
+
+#### batch_size (Default: 100)
+
+Number of events per database transaction.
+
+**Increase (200-500) when:**
+- High sustained throughput
+- Database can handle large transactions
+- Optimizing for maximum ingestion rate
+- Using powerful database (4+ cores, SSD)
+
+**Decrease (10-50) when:**
+- Want lower latency (events visible sooner)
+- Database connection limited
+- Small/embedded database
+- Memory constrained
+
+**Trade-off:** Larger batches = higher throughput but slightly higher latency.
+
+#### flush_interval_ms (Default: 100)
+
+Maximum time to wait before flushing a partial batch.
+
+**Decrease (50-100ms) when:**
+- Want near real-time visibility
+- Low event volume (batches rarely fill)
+- Debugging/development
+
+**Increase (200-1000ms) when:**
+- Optimizing for throughput over latency
+- Very high event volume
+- Reducing database load
+
+**Trade-off:** Lower interval = more real-time but more frequent database writes.
+
+### Performance Scenarios
+
+#### High Volume Production (1000+ events/sec)
+
+```toml
+[engine]
+buffer_size = 50000
+batch_size = 500
+flush_interval_ms = 200
+
+[storage.postgres]
+max_connections = 20
+```
+
+- Large buffer handles bursts
+- Large batches maximize throughput
+- Higher flush interval reduces DB load
+- More connections for concurrent operations
+
+#### Low Latency Development
+
+```toml
+[engine]
+buffer_size = 1000
+batch_size = 10
+flush_interval_ms = 50
+```
+
+- Small buffer (events visible quickly)
+- Small batches (low latency)
+- Fast flush (near real-time)
+
+#### Memory Constrained
+
+```toml
+[engine]
+buffer_size = 1000
+batch_size = 50
+flush_interval_ms = 100
+
+[storage.postgres]
+max_connections = 5
+```
+
+- Minimal buffer size
+- Moderate batch size
+- Fewer database connections
+
+### Monitoring and Tuning
+
+**Signs buffer is too small:**
+- Logs show "event buffer full" warnings
+- SDKs report failed event submissions
+- High event loss under load
+
+**Signs batch is too large:**
+- Database transaction timeouts
+- High memory usage
+- Long flush times in logs
+
+**Signs flush interval is too high:**
+- Events appear in UI with noticeable delay
+- Traces incomplete until flush occurs
+
+**Optimal settings:**
+- Buffer rarely fills (check logs)
+- Batches typically full (efficient DB usage)
+- Events visible within acceptable latency
 
 ## Analysis Settings
 

@@ -162,6 +162,38 @@ impl RacewayClient {
             .ok();
     }
 
+    /// Track a function call with automatic causality tracking.
+    ///
+    /// This method is **synchronous** - do not use `.await`.
+    ///
+    /// # Arguments
+    ///
+    /// * `function_name` - Name of the function being called
+    /// * `args` - Function arguments (must be serializable)
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use raceway::RacewayClient;
+    /// use serde::Serialize;
+    ///
+    /// #[derive(Serialize)]
+    /// struct TransferArgs {
+    ///     from: String,
+    ///     to: String,
+    ///     amount: u64,
+    /// }
+    ///
+    /// let client = RacewayClient::new("http://localhost:8080", "my-service");
+    /// let args = TransferArgs {
+    ///     from: "alice".into(),
+    ///     to: "bob".into(),
+    ///     amount: 100,
+    /// };
+    ///
+    /// // Synchronous - no .await!
+    /// client.track_function_call("transfer", &args);
+    /// ```
     pub fn track_function_call<T: Serialize>(&self, function_name: &str, args: T) {
         self.track_function_call_with_duration(function_name, args, None);
     }
@@ -282,6 +314,29 @@ impl RacewayClient {
             .ok();
     }
 
+    /// Track an HTTP response with status code and duration.
+    ///
+    /// This method is **synchronous** - do not use `.await`.
+    ///
+    /// # Arguments
+    ///
+    /// * `status` - HTTP status code (e.g., 200, 404, 500)
+    /// * `duration_ms` - Request duration in milliseconds
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use raceway::RacewayClient;
+    /// use std::time::Instant;
+    ///
+    /// let client = RacewayClient::new("http://localhost:8080", "my-service");
+    /// let start = Instant::now();
+    ///
+    /// // ... handle request ...
+    ///
+    /// let duration_ms = start.elapsed().as_millis() as u64;
+    /// client.track_http_response(200, duration_ms);
+    /// ```
     pub fn track_http_response(&self, status: u16, duration_ms: u64) {
         RACEWAY_CONTEXT
             .try_with(|ctx_cell| {

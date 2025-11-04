@@ -162,6 +162,74 @@ await raceway.withLock(accountLock, 'account_lock', async () => {
 });
 ```
 
+## Middleware Patterns
+
+The SDK middleware can be applied globally or per-route. Choose the pattern that best fits your environment.
+
+### Global Middleware (Development/Quick Start)
+
+```typescript
+app.use(raceway.middleware());
+```
+
+Traces all routes. Good for development and getting started quickly.
+
+### Per-Route Middleware (Production Recommended)
+
+```typescript
+// Health checks and metrics - no tracing
+app.get('/health', (req, res) => {
+  res.json({ status: 'ok' });
+});
+
+app.get('/metrics', metricsHandler);
+
+// Business endpoints - traced
+app.post('/api/transfer', raceway.middleware(), transferHandler);
+app.get('/api/users/:id', raceway.middleware(), getUserHandler);
+app.post('/api/checkout', raceway.middleware(), checkoutHandler);
+```
+
+**Why per-route is better for production:**
+
+- **No health check noise**: Load balancers polling `/health` every 10 seconds create 8,640 traces per day per instance
+- **Excludes non-business endpoints**: Metrics, static assets, and internal endpoints don't pollute your analysis
+- **Better signal-to-noise ratio**: Only trace what matters for debugging and analysis
+- **Lower database load**: Fewer events = faster ingestion, less storage, better query performance
+- **Cost savings**: Reduced database size and network traffic
+
+**Example: Health check impact**
+
+If you have 5 service instances with load balancers checking health every 10 seconds:
+- Global middleware: **43,200 health check traces per day**
+- Per-route middleware: **0 health check traces**
+
+### Helper Pattern (Recommended for Clean Syntax)
+
+For cleaner per-route middleware, create a helper:
+
+```typescript
+const traced = (...handlers) => [raceway.middleware(), ...handlers];
+
+// Use it on routes
+app.post('/api/transfer', ...traced(transferHandler));
+app.get('/api/users/:id', ...traced(authMiddleware, getUserHandler));
+app.post('/api/checkout', ...traced(authMiddleware, validateCart, checkoutHandler));
+```
+
+This pattern:
+- Keeps route definitions clean and readable
+- Makes it easy to add authentication and other middleware
+- Ensures you never forget to add tracing to business endpoints
+
+### When to Use Each Pattern
+
+| Pattern | Use When | Trade-offs |
+|---------|----------|-----------|
+| **Global** | Development, early prototyping | Simple setup, but creates noise from health checks |
+| **Per-Route** | Production, mature applications | Requires discipline, but much cleaner traces |
+| **Helper** | Production with many routes | Best of both worlds - clean syntax with selective tracing |
+
 ## Which Approach Should I Use?
 
 **Quick Decision Tree:**
@@ -415,7 +483,7 @@ No manual context passing required.
 
 ## Best Practices
 
-1. **Always use middleware**: Set up `raceway.middleware()` to enable automatic trace initialization
+1. **Use per-route middleware in production**: Apply `raceway.middleware()` to business endpoints only, excluding health checks, metrics, and static assets to avoid trace noise
 2. **Use auto-tracking for shared state**: Wrap shared data structures with `track()` for comprehensive coverage
 3. **Propagate headers to downstream services**: Always use `propagationHeaders()` when calling other services
 4. **Graceful shutdown**: Call `raceway.stop()` before process exit:
@@ -426,6 +494,7 @@ No manual context passing required.
    });
    ```
 5. **Use unique instance IDs**: Set `instanceId` to differentiate service instances in distributed environments
+6. **Start with global middleware for development**: Use `app.use(raceway.middleware())` during development, then switch to per-route for production
 
 ## Distributed Example
 
@@ -444,9 +513,14 @@ const raceway = new Raceway({
 
 const app = express();
 app.use(express.json());
-app.use(raceway.middleware());
 
-app.post('/api/order', async (req, res) => {
+// Health check - not traced
+app.get('/health', (req, res) => {
+  res.json({ status: 'ok' });
+});
+
+// Business endpoint - traced
+app.post('/api/order', raceway.middleware(), async (req, res) => {
   const { orderId } = req.body;
 
   raceway.trackFunctionCall('createOrder', { orderId });
@@ -529,6 +603,31 @@ const raceway = new Raceway({
   flushInterval: 100
 });
 ```
+
+### Slow Event Ingestion
+
+If events take a long time to appear in the UI (more than a few seconds), the Raceway server's batch processing may need tuning.
+
+**SDK-side solutions:**
+1. Reduce flush interval for more frequent sends:
+   ```typescript
+   const raceway = new Raceway({
+     serverUrl: 'http://localhost:8080',
+     flushInterval: 100  // Flush every 100ms
+   });
+   ```
+2. Reduce batch size so partial batches flush sooner:
+   ```typescript
+   const raceway = new Raceway({
+     serverUrl: 'http://localhost:8080',
+     batchSize: 10
+   });
+   ```
+
+**Server-side solutions:**
+The Raceway server has its own batch processing configuration that significantly impacts ingestion performance. See the [Event Processing](/guide/configuration#event-processing) configuration guide for tuning server-side batching.
+
+For high-volume applications (1000+ events/sec), increase server batch size to improve throughput by up to 200x.
 
 ## Next Steps
 

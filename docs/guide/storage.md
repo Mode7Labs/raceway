@@ -144,6 +144,10 @@ connection_timeout_seconds = 30
 
 ### Performance Tuning
 
+::: tip Event Processing Configuration
+Raceway's batch processing significantly impacts database performance. See the [Event Processing](/guide/configuration#event-processing) section for tuning `batch_size`, `buffer_size`, and `flush_interval_ms`. Proper batch configuration reduces database operations by 100-200x.
+:::
+
 **PostgreSQL settings:**
 
 ```sql

@@ -41,19 +41,19 @@ impl PostgresBackend {
             tracing::info!("Running PostgreSQL migrations...");
 
             // Migration 001: Initial schema
-            let migration_001 = include_str!("../../../migrations/postgres/001_initial_schema.sql");
+            let migration_001 = include_str!("../../migrations/postgres/001_initial_schema.sql");
             sqlx::raw_sql(migration_001).execute(&pool).await?;
             tracing::info!("✓ Migration 001 (initial schema) completed");
 
             // Migration 002: Performance indexes
             let migration_002 =
-                include_str!("../../../migrations/postgres/002_add_performance_indexes.sql");
+                include_str!("../../migrations/postgres/002_add_performance_indexes.sql");
             sqlx::raw_sql(migration_002).execute(&pool).await?;
             tracing::info!("✓ Migration 002 (performance indexes) completed");
 
             // Migration 003: Distributed tracing
             let migration_003 =
-                include_str!("../../../migrations/postgres/003_distributed_tracing.sql");
+                include_str!("../../migrations/postgres/003_distributed_tracing.sql");
             sqlx::raw_sql(migration_003).execute(&pool).await?;
             tracing::info!("✓ Migration 003 (distributed tracing) completed");
 
