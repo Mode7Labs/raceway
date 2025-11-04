@@ -4,6 +4,37 @@
 
 import type { Event } from '../types';
 
+/**
+ * Truncate a URL for display purposes
+ * Extracts the path and keeps query params short
+ */
+function truncateUrl(url: string, maxLength: number = 50): string {
+  try {
+    const urlObj = new URL(url);
+    const path = urlObj.pathname;
+    const search = urlObj.search;
+
+    // If no query params, just truncate the path
+    if (!search) {
+      return path.length > maxLength ? path.substring(0, maxLength) + '...' : path;
+    }
+
+    // With query params, show path + abbreviated params
+    const pathPart = path.length > 30 ? path.substring(0, 30) + '...' : path;
+    const remainingLength = maxLength - pathPart.length;
+
+    if (search.length <= remainingLength) {
+      return pathPart + search;
+    }
+
+    // Truncate query params
+    return pathPart + search.substring(0, Math.max(10, remainingLength - 3)) + '...';
+  } catch {
+    // If URL parsing fails, just do simple truncation
+    return url.length > maxLength ? url.substring(0, maxLength) + '...' : url;
+  }
+}
+
 export interface ParsedEventKind {
   display: string;
   category: string;
@@ -35,12 +66,13 @@ export function parseEventKind(kind: Event['kind']): ParsedEventKind {
       };
     }
 
-    // HttpRequest - show method and URL
+    // HttpRequest - show method and URL (truncated for readability)
     if (key === 'HttpRequest') {
       const method = value.method || 'GET';
       const url = value.url || value.path || 'unknown';
+      const truncatedUrl = truncateUrl(url);
       return {
-        display: `HttpRequest | ${method} ${url}`,
+        display: `HttpRequest | ${method} ${truncatedUrl}`,
         category: 'HttpRequest'
       };
     }

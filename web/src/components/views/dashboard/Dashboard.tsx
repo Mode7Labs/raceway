@@ -10,7 +10,7 @@ import { VariableLink } from '@/components/shared/VariableLink';
 interface DashboardProps {
   onNavigateToTrace: (traceId: string) => void;
   onNavigateToServices: () => void;
-  onNavigateToRaces?: () => void;
+  onNavigateToRaces?: (variableName?: string) => void;
   onNavigateToHotspots?: () => void;
   onNavigateToDependencyGraph?: () => void;
   onNavigateToTraces?: () => void;
@@ -107,7 +107,8 @@ export function Dashboard({ onNavigateToTrace, onNavigateToServices, onNavigateT
                   {races.slice(0, 3).map((race, idx) => (
                     <div
                       key={idx}
-                      className="flex items-center justify-between p-3 rounded-lg bg-background/50 border border-border/50 hover:border-border transition-colors"
+                      className="flex items-center justify-between p-3 rounded-lg bg-background/50 border border-border/50 hover:border-border hover:bg-background/70 transition-colors cursor-pointer"
+                      onClick={() => onNavigateToRaces && onNavigateToRaces(race.variable)}
                     >
                       <div className="flex items-center gap-3">
                         {race.severity === 'CRITICAL' ? (
@@ -116,12 +117,8 @@ export function Dashboard({ onNavigateToTrace, onNavigateToServices, onNavigateT
                           <AlertTriangle className="w-4 h-4 text-orange-400" />
                         )}
                         <div>
-                          <div className="font-mono text-sm font-medium">
-                            <VariableLink
-                              variableName={race.variable}
-                              onClick={onNavigateToVariable}
-                              className="text-foreground hover:text-primary"
-                            />
+                          <div className="font-mono text-sm font-medium text-foreground">
+                            {race.variable}
                           </div>
                           <div className="text-xs text-muted-foreground">
                             {race.access_count} accesses across {race.thread_count} threads
@@ -140,7 +137,7 @@ export function Dashboard({ onNavigateToTrace, onNavigateToServices, onNavigateT
                 </div>
 
                 <button
-                  onClick={onNavigateToRaces}
+                  onClick={() => onNavigateToRaces && onNavigateToRaces()}
                   className="mt-3 text-sm text-primary hover:underline flex items-center gap-1"
                 >
                   {races.length > 3 ? `View all ${races.length} race conditions` : 'View all races'}

@@ -261,7 +261,7 @@ export default function App() {
   const handleTraceSelect = (traceId: string) => {
     setSelectedTraceId(traceId);
     setSelectedEventId(null);
-    navigateToTrace(traceId);
+    navigateToTrace(traceId); // Will preserve view mode by default
   };
 
   const handleEventSelect = (eventId: string) => {
@@ -282,9 +282,14 @@ export default function App() {
   };
 
   // Navigation helper functions for contextual linking
-  const navigateToTrace = useCallback((traceId: string) => {
-    navigate(`/traces/${traceId}`);
-  }, [navigate]);
+  const navigateToTrace = useCallback((traceId: string, preserveViewMode: boolean = true) => {
+    // By default, preserve the current view mode when navigating to a trace
+    // This allows users to browse through traces while staying on their preferred tab
+    const path = preserveViewMode && viewMode !== 'overview'
+      ? `/traces/${traceId}/${viewMode}`
+      : `/traces/${traceId}`;
+    navigate(path);
+  }, [navigate, viewMode]);
 
   const navigateToService = useCallback((serviceName: string) => {
     navigate(`/services/${encodeURIComponent(serviceName)}`);
@@ -300,10 +305,10 @@ export default function App() {
 
   const navigateToVariable = useCallback((variableName: string, traceId?: string) => {
     if (traceId) {
-      navigate(`/traces/${traceId}/variables`);
+      navigate(`/traces/${traceId}/variables?variable=${encodeURIComponent(variableName)}`);
     } else {
-      // Navigate to hotspots page when clicking on a variable without a trace context
-      navigate('/insights/hotspots');
+      // Navigate to races page when clicking on a global race variable
+      navigate(`/insights/races?variable=${encodeURIComponent(variableName)}`);
     }
   }, [navigate]);
 
@@ -311,8 +316,12 @@ export default function App() {
     navigate('/');
   }, [navigate]);
 
-  const navigateToRaces = useCallback(() => {
-    navigate('/insights/races');
+  const navigateToRaces = useCallback((variableName?: string) => {
+    if (variableName) {
+      navigate(`/insights/races?variable=${encodeURIComponent(variableName)}`);
+    } else {
+      navigate('/insights/races');
+    }
   }, [navigate]);
 
   const navigateToHotspots = useCallback(() => {

@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { type AuditTrailData, type Event, type VariableAccess } from '@/types';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -40,10 +41,13 @@ interface VariableState {
 type AuditViewMode = 'focus' | 'graph' | 'debugger' | 'cross-trace';
 
 export function AuditTrailView({ auditTrails, events, traceId, onTraceSelect }: AuditTrailViewProps) {
+  const [searchParams] = useSearchParams();
+  const highlightVariable = searchParams.get('variable');
   const [selectedVariable, setSelectedVariable] = useState<string | null>(null);
   const [currentStep, setCurrentStep] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
-  const [viewMode, setViewMode] = useState<AuditViewMode>('debugger');
+  // Default to cross-trace view if variable is highlighted (coming from races page)
+  const [viewMode, setViewMode] = useState<AuditViewMode>(highlightVariable ? 'cross-trace' : 'debugger');
 
   // Construct data from auditTrails for the selected variable
   const data: AuditTrailData | null = useMemo(() => {
@@ -173,12 +177,21 @@ export function AuditTrailView({ auditTrails, events, traceId, onTraceSelect }: 
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [data]);
 
-  // Auto-select first variable if available and none selected
+  // Auto-select variable from URL or first variable if available and none selected
   useEffect(() => {
     if (variableSummaries.length > 0 && !selectedVariable) {
+      // If we have a highlighted variable from URL, select that
+      if (highlightVariable) {
+        const matchingVariable = variableSummaries.find(v => v.name === highlightVariable);
+        if (matchingVariable) {
+          setSelectedVariable(matchingVariable.name);
+          return;
+        }
+      }
+      // Otherwise, select first variable
       setSelectedVariable(variableSummaries[0].name);
     }
-  }, [variableSummaries, selectedVariable]);
+  }, [variableSummaries, selectedVariable, highlightVariable]);
 
   const handleVariableSelect = (varName: string) => {
     setSelectedVariable(varName);
@@ -221,7 +234,9 @@ export function AuditTrailView({ auditTrails, events, traceId, onTraceSelect }: 
             Variables ({variableSummaries.length})
           </div>
           <div className="space-y-1 overflow-y-auto flex-1 pr-1">
-            {variableSummaries.map((summary) => (
+            {variableSummaries.map((summary) => {
+              const isHighlighted = highlightVariable === summary.name;
+              return (
               <button
                 key={summary.name}
                 onClick={() => handleVariableSelect(summary.name)}
@@ -229,7 +244,8 @@ export function AuditTrailView({ auditTrails, events, traceId, onTraceSelect }: 
                   "w-full flex items-center justify-between p-2 rounded-md text-xs transition-colors group",
                   selectedVariable === summary.name
                     ? "bg-accent text-accent-foreground"
-                    : "hover:bg-accent/50 text-muted-foreground"
+                    : "hover:bg-accent/50 text-muted-foreground",
+                  isHighlighted && selectedVariable !== summary.name && "ring-1 ring-primary/50"
                 )}
               >
                 <div className="flex items-center gap-2 flex-1 min-w-0">
@@ -245,7 +261,8 @@ export function AuditTrailView({ auditTrails, events, traceId, onTraceSelect }: 
                   )}
                 </div>
               </button>
-            ))}
+              );
+            })}
           </div>
         </div>
 

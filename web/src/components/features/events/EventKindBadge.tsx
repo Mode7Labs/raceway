@@ -1,7 +1,7 @@
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
 import type { Event } from '@/types';
-import { parseEventKind } from '@/lib/event-utils';
+import { parseEventKind, extractEventKindDetails } from '@/lib/event-utils';
 
 interface EventKindBadgeProps {
   eventKind: Event['kind'];
@@ -71,6 +71,17 @@ export function EventKindBadge({ eventKind, className, onClick }: EventKindBadge
   const { display, category } = parseEventKind(eventKind);
   const colorScheme = getEventColorScheme(category);
 
+  // Extract full URL for tooltip if this is an HTTP event
+  let tooltipTitle: string | undefined;
+  if (category === 'HttpRequest') {
+    const details = extractEventKindDetails(eventKind);
+    if (details && (details.url || details.path)) {
+      const fullUrl = details.url || details.path;
+      const method = details.method || 'GET';
+      tooltipTitle = `${method} ${fullUrl}`;
+    }
+  }
+
   return (
     <Badge
       variant="outline"
@@ -81,6 +92,7 @@ export function EventKindBadge({ eventKind, className, onClick }: EventKindBadge
         className
       )}
       onClick={onClick}
+      title={tooltipTitle}
     >
       {display}
     </Badge>

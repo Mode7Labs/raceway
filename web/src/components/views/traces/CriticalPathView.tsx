@@ -115,23 +115,36 @@ export function CriticalPathView({ data, events = [] }: CriticalPathViewProps) {
               <span className="font-medium">{data.percentage_of_total.toFixed(1)}%</span>
             </div>
             <div className="relative h-6 bg-muted rounded-md overflow-hidden">
-              <div
-                className="absolute inset-y-0 left-0 rounded-md transition-all duration-500"
-                style={{
-                  width: `${data.percentage_of_total}%`,
-                  background: data.percentage_of_total > 80
-                    ? 'linear-gradient(90deg, rgba(239, 68, 68, 0.8), rgba(220, 38, 38, 0.9))'
-                    : data.percentage_of_total > 60
-                    ? 'linear-gradient(90deg, rgba(251, 191, 36, 0.8), rgba(245, 158, 11, 0.9))'
-                    : 'linear-gradient(90deg, rgba(34, 197, 94, 0.8), rgba(22, 163, 74, 0.9))'
-                }}
-              >
-                <div className="absolute inset-0 flex items-center justify-center text-xs font-medium text-white">
-                  {data.total_duration_ms.toFixed(2)} ms
+              {/* Colored bar - only show if there's meaningful data */}
+              {data.percentage_of_total > 0 && (
+                <div
+                  className="absolute inset-y-0 left-0 rounded-md transition-all duration-500"
+                  style={{
+                    width: `${Math.max(data.percentage_of_total, 0.5)}%`, // Minimum 0.5% for visibility
+                    background: data.percentage_of_total > 80
+                      ? 'linear-gradient(90deg, rgba(239, 68, 68, 0.8), rgba(220, 38, 38, 0.9))'
+                      : data.percentage_of_total > 60
+                      ? 'linear-gradient(90deg, rgba(251, 191, 36, 0.8), rgba(245, 158, 11, 0.9))'
+                      : 'linear-gradient(90deg, rgba(34, 197, 94, 0.8), rgba(22, 163, 74, 0.9))'
+                  }}
+                >
+                  {/* Only show label inside bar if there's enough space (>15%) */}
+                  {data.percentage_of_total > 15 && (
+                    <div className="absolute inset-0 flex items-center justify-center text-xs font-medium text-white">
+                      {data.total_duration_ms.toFixed(2)} ms
+                    </div>
+                  )}
                 </div>
-              </div>
-              <div className="absolute inset-0 flex items-center justify-end pr-3 text-xs text-muted-foreground pointer-events-none">
-                {data.percentage_of_total < 85 && `${data.trace_total_duration_ms.toFixed(2)} ms total`}
+              )}
+              {/* Total duration - always visible on the right or left depending on bar width */}
+              <div className={cn(
+                "absolute inset-0 flex items-center text-xs pointer-events-none",
+                data.percentage_of_total > 15 ? "justify-end pr-3 text-muted-foreground" : "justify-start pl-3 text-foreground"
+              )}>
+                {data.percentage_of_total > 15
+                  ? `${data.trace_total_duration_ms.toFixed(2)} ms total`
+                  : `${data.total_duration_ms.toFixed(2)} ms / ${data.trace_total_duration_ms.toFixed(2)} ms total`
+                }
               </div>
             </div>
             {data.percentage_of_total > 70 && (

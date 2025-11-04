@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { Card, CardContent } from '@/components/ui/card';
 import { RacewayAPI } from '@/api';
 import type { GlobalRace } from '@/types';
@@ -12,9 +13,12 @@ interface GlobalRacesProps {
 }
 
 export function GlobalRaces({ onNavigateToTrace, onNavigateToVariable }: GlobalRacesProps) {
+  const [searchParams] = useSearchParams();
+  const highlightVariable = searchParams.get('variable');
   const [races, setRaces] = useState<GlobalRace[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const highlightedRaceRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const fetchRaces = async () => {
@@ -34,6 +38,15 @@ export function GlobalRaces({ onNavigateToTrace, onNavigateToVariable }: GlobalR
 
     fetchRaces();
   }, []);
+
+  // Scroll to highlighted race when data loads
+  useEffect(() => {
+    if (!loading && highlightVariable && highlightedRaceRef.current) {
+      setTimeout(() => {
+        highlightedRaceRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }, 100);
+    }
+  }, [loading, highlightVariable]);
 
   if (loading) {
     return (
@@ -139,6 +152,7 @@ export function GlobalRaces({ onNavigateToTrace, onNavigateToVariable }: GlobalR
 
           <div className="space-y-3">
             {races.map((race, index) => {
+              const isHighlighted = highlightVariable === race.variable;
               const severityIcon =
                 race.severity === 'CRITICAL' ? (
                   <AlertCircle className="w-5 h-5 text-red-400" />
@@ -165,7 +179,10 @@ export function GlobalRaces({ onNavigateToTrace, onNavigateToVariable }: GlobalR
               return (
                 <div
                   key={index}
-                  className={`border rounded-lg p-4 ${severityColor}`}
+                  ref={isHighlighted ? highlightedRaceRef : null}
+                  className={`border rounded-lg p-4 transition-all ${severityColor} ${
+                    isHighlighted ? 'ring-2 ring-primary ring-offset-2 ring-offset-background shadow-lg' : ''
+                  }`}
                 >
                   <div className="flex items-start gap-3">
                     {severityIcon}
@@ -220,14 +237,14 @@ export function GlobalRaces({ onNavigateToTrace, onNavigateToVariable }: GlobalR
                       {/* Affected Traces */}
                       <div className="mt-3 pt-3 border-t border-border/30">
                         <div className="text-xs text-muted-foreground mb-2">
-                          Affected Traces ({race.trace_ids.length})
+                          Affected Traces ({race.trace_ids.length}) - Click to view race in trace
                         </div>
                         <div className="flex flex-wrap gap-1.5">
                           {race.trace_ids.slice(0, 5).map((traceId) => (
                             <TraceLink
                               key={traceId}
                               traceId={traceId}
-                              onClick={onNavigateToTrace}
+                              onClick={() => onNavigateToVariable(race.variable, traceId)}
                               className="px-2 py-1 rounded text-[10px] font-mono bg-background/50 hover:bg-background border border-border/50 hover:border-blue-500/50 transition-colors cursor-pointer text-blue-400 hover:text-blue-300"
                               showShortId
                             />
