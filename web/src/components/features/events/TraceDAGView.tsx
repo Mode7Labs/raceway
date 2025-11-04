@@ -30,12 +30,30 @@ interface DAGLink extends d3.SimulationLinkDatum<DAGNode> {
   type: 'parent' | 'causal'; // parent = direct parent_id, causal = happens-before from vector clocks
 }
 
-const SERVICE_COLORS: Record<string, string> = {
-  'typescript-service': '#3b82f6',
-  'python-service': '#10b981',
-  'go-service': '#f59e0b',
-  'rust-service': '#ef4444',
-};
+/**
+ * Generate a consistent color for a service name using improved hash function
+ * Uses HSL color space to ensure maximum color separation
+ */
+function getServiceColor(serviceName: string, allServices: string[]): string {
+  // Find the index of this service in the sorted list
+  const index = allServices.indexOf(serviceName);
+
+  if (index === -1) {
+    // Fallback to hash-based if not in list
+    let hash = 0;
+    for (let i = 0; i < serviceName.length; i++) {
+      hash = serviceName.charCodeAt(i) + ((hash << 5) - hash);
+    }
+    const hue = Math.abs(hash) % 360;
+    return `hsl(${hue}, 70%, 60%)`;
+  }
+
+  // Distribute hues evenly across the color wheel for maximum separation
+  const hue = (index * 360) / Math.max(allServices.length, 1);
+
+  // Use consistent saturation and lightness optimized for dark themes
+  return `hsl(${hue}, 70%, 60%)`;
+}
 
 export function TraceDAGView({
   events,
@@ -48,6 +66,12 @@ export function TraceDAGView({
   const zoomTransformRef = useRef<d3.ZoomTransform | null>(null);
   const isInitialRenderRef = useRef(true);
   const simulationRef = useRef<d3.Simulation<DAGNode, DAGLink> | null>(null);
+
+  // Extract unique services from events for the legend
+  const uniqueServices = useMemo(() => {
+    const serviceSet = new Set(events.map(e => e.metadata.service_name || 'unknown'));
+    return Array.from(serviceSet).sort();
+  }, [events]);
 
   // Memoize the DAG structure - only rebuild when event IDs actually change
   const dagStructure = useMemo(() => {
@@ -352,7 +376,7 @@ export function TraceDAGView({
         if (highlightEventIds.includes(d.id)) return 20;
         return 18;
       })
-      .attr('fill', d => SERVICE_COLORS[d.service] || '#6b7280')
+      .attr('fill', d => getServiceColor(d.service, uniqueServices))
       .attr('stroke', (d) => {
         if (d.id === selectedEventId) return '#1e40af';
         if (highlightEventIds.includes(d.id)) return '#d97706';
@@ -582,15 +606,15 @@ export function TraceDAGView({
       {/* Legend */}
       <Card className="absolute top-4 right-4 bg-card/90 backdrop-blur">
         <CardContent className="p-3">
-          <div className="text-xs font-semibold mb-2">Services</div>
+          <div className="text-xs font-semibold mb-2">Services ({uniqueServices.length})</div>
           <div className="space-y-1 mb-3">
-            {Object.entries(SERVICE_COLORS).map(([service, color]) => (
+            {uniqueServices.map((service) => (
               <div key={service} className="flex items-center gap-2 text-xs">
                 <div
                   className="w-3 h-3 rounded-full"
-                  style={{ backgroundColor: color }}
+                  style={{ backgroundColor: getServiceColor(service, uniqueServices) }}
                 />
-                <span className="text-muted-foreground">{service.replace('-service', '')}</span>
+                <span className="text-muted-foreground font-mono">{service}</span>
               </div>
             ))}
           </div>

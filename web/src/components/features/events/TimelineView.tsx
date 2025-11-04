@@ -333,14 +333,6 @@ export function TimelineView({ events, selectedEventId, onEventSelect }: Timelin
                 <div key={thread} className="space-y-1 mb-4">
                   <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
                     <span className="w-32 truncate font-mono">{thread}</span>
-                    <Badge variant="outline" className="text-[10px]">
-                      {threadEvents.length} events
-                    </Badge>
-                    {rowCount > 1 && (
-                      <Badge variant="outline" className="text-[10px] bg-blue-500/10">
-                        {rowCount} lanes
-                      </Badge>
-                    )}
                   </div>
                   <div
                     className={cn(
@@ -395,8 +387,8 @@ export function TimelineView({ events, selectedEventId, onEventSelect }: Timelin
         </CardContent>
       </Card>
 
-      {mode === 'threads' && (
-        <Card>
+      {/* Legend - shown for both threads and services view */}
+      <Card>
         <CardHeader>
           <CardTitle className="text-sm font-medium">Legend</CardTitle>
         </CardHeader>
@@ -433,7 +425,6 @@ export function TimelineView({ events, selectedEventId, onEventSelect }: Timelin
           </div>
         </CardContent>
       </Card>
-      )}
     </div>
   );
 }

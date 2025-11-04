@@ -51,7 +51,7 @@ export function SystemPerformance({ services, onNavigateToTrace, onNavigateToSer
       setInitialLoading(true);
       try {
         // Use backend-optimized performance metrics endpoint
-        const response = await RacewayAPI.getPerformanceMetrics(50);
+        const response = await RacewayAPI.getPerformanceMetrics(10);
 
         if (!response.data) {
           setMetrics(null);
@@ -277,7 +277,7 @@ export function SystemPerformance({ services, onNavigateToTrace, onNavigateToSer
                     </tr>
                   </thead>
                   <tbody>
-                    {metrics.slowestTraces.map((trace, index) => (
+                    {metrics.slowestTraces.slice(0, 10).map((trace, index) => (
                       <tr
                         key={trace.traceId}
                         className={`${index % 2 === 0 ? 'bg-card/30' : 'bg-transparent'} hover:bg-muted/30 cursor-pointer transition-colors`}

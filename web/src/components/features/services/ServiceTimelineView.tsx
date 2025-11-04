@@ -215,15 +215,6 @@ export function ServiceTimelineView({ events, selectedEventId, onEventSelect, zo
   //   return count;
   // }, [events]);
 
-  // Identify bottlenecks (events with longest duration)
-  const bottleneckThreshold = useMemo(() => {
-    if (timelineData.length === 0) return 0;
-    const durations = timelineData.map(te => te.duration).sort((a, b) => b - a);
-    // Top 10% longest events are considered bottlenecks
-    const thresholdIndex = Math.floor(durations.length * 0.1);
-    return durations[thresholdIndex] || durations[0] || 0;
-  }, [timelineData]);
-
   if (events.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center h-64 text-center space-y-2">
@@ -265,14 +256,6 @@ export function ServiceTimelineView({ events, selectedEventId, onEventSelect, zo
                   serviceName={service}
                   tags={firstServiceEvent?.metadata?.tags}
                 />
-                <Badge variant="outline" className="text-[10px]">
-                  {serviceEvents.length} events
-                </Badge>
-                {rowCount > 1 && (
-                  <Badge variant="outline" className="text-[10px] bg-blue-500/10">
-                    {rowCount} lanes
-                  </Badge>
-                )}
               </div>
               <div
                 className="relative rounded-md bg-muted"
@@ -282,7 +265,6 @@ export function ServiceTimelineView({ events, selectedEventId, onEventSelect, zo
                   const isSelected = te.event.id === selectedEventId;
                   const eventKind = getEventKind(te.event.kind);
                   const bgColor = getEventColor(te.event);
-                  const isBottleneck = te.duration >= bottleneckThreshold && bottleneckThreshold > 0;
                   const effectiveWidth = te.width * zoomLevel;
 
                   // Calculate vertical position based on row
@@ -296,8 +278,7 @@ export function ServiceTimelineView({ events, selectedEventId, onEventSelect, zo
                       onClick={() => onEventSelect(te.event.id)}
                       className={cn(
                         "absolute rounded-sm border-2 transition-all hover:z-10 hover:scale-110 cursor-pointer overflow-hidden",
-                        isSelected ? "border-primary ring-2 ring-primary" : "border-transparent",
-                        isBottleneck && !isSelected && "ring-1 ring-yellow-500/50 shadow-lg shadow-yellow-500/20"
+                        isSelected ? "border-primary ring-2 ring-primary" : "border-transparent"
                       )}
                       style={{
                         left: `${te.left}%`,
@@ -307,7 +288,7 @@ export function ServiceTimelineView({ events, selectedEventId, onEventSelect, zo
                         minWidth: '4px',
                         backgroundColor: bgColor,
                       }}
-                      title={`${eventKind} @ ${formatTimestamp(te.startTime)} | Duration: ${te.duration.toFixed(2)}ms${isBottleneck ? ' ⚠️ BOTTLENECK' : ''}`}
+                      title={`${eventKind} @ ${formatTimestamp(te.startTime)} | Duration: ${te.duration.toFixed(2)}ms`}
                     >
                       <span className="text-[9px] text-white truncate px-0.5 block">
                         {effectiveWidth > 2 && eventKind}

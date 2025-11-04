@@ -227,13 +227,13 @@ export function AuditTrailView({ auditTrails, events, traceId, onTraceSelect }: 
   return (
     <div className="grid grid-cols-4 gap-0 h-[calc(100dvh-5.5rem)]">
       {/* Left Sidebar - Variable List + Player */}
-      <div className="col-span-1 border-r border-border flex flex-col">
+      <div className="col-span-1 border-r border-border flex flex-col min-h-0">
         {/* Variable List - Scrollable */}
-        <div className="flex-1 overflow-hidden flex flex-col px-3 pt-3">
-          <div className="text-[10px] text-muted-foreground mb-2 px-2 uppercase tracking-wide">
+        <div className="flex-1 overflow-hidden flex flex-col px-3 pt-3 min-h-0">
+          <div className="text-[10px] text-muted-foreground mb-2 px-2 uppercase tracking-wide flex-shrink-0">
             Variables ({variableSummaries.length})
           </div>
-          <div className="space-y-1 overflow-y-auto flex-1 pr-1">
+          <div className="space-y-1 overflow-y-auto flex-1 pr-1 min-h-0">
             {variableSummaries.map((summary) => {
               const isHighlighted = highlightVariable === summary.name;
               return (

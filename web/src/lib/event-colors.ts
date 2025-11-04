@@ -145,51 +145,56 @@ export function getServiceColor(serviceName: string): string {
 export function getEventKindBackgroundColor(kind: string): string {
   const lowerKind = kind.toLowerCase();
 
-  // Memory operations - Read: Muted gray, Write: Red
-  if (lowerKind.includes('read') && lowerKind.includes('atomic')) {
-    return 'rgba(107, 114, 128, 0.6)'; // gray-500
-  }
+  // Read operations - Blue (matches legend)
   if (lowerKind.includes('read')) {
-    return 'rgba(107, 114, 128, 0.5)'; // gray-500
+    return 'rgba(59, 130, 246, 0.8)'; // blue-500
   }
-  if (lowerKind.includes('write') && lowerKind.includes('atomic')) {
-    return 'rgba(239, 68, 68, 0.8)'; // red-500
-  }
+
+  // Write operations - Orange (matches legend)
   if (lowerKind.includes('write')) {
-    return 'rgba(239, 68, 68, 0.6)'; // red-500
+    return 'rgba(249, 115, 22, 0.8)'; // orange-500
   }
 
-  // Thread operations - Muted gray
+  // Thread spawn - Green (matches legend)
   if (lowerKind.includes('spawn') || lowerKind.includes('fork')) {
-    return 'rgba(107, 114, 128, 0.6)'; // gray-500
-  }
-  if (lowerKind.includes('join') || lowerKind.includes('wait')) {
-    return 'rgba(107, 114, 128, 0.5)'; // gray-500
+    return 'rgba(34, 197, 94, 0.8)'; // green-500
   }
 
-  // Lock operations - Red (critical)
-  if (lowerKind.includes('acquire') || (lowerKind.includes('lock') && !lowerKind.includes('unlock'))) {
+  // Thread join/wait - Purple (matches legend)
+  if (lowerKind.includes('join') || lowerKind.includes('wait')) {
+    return 'rgba(168, 85, 247, 0.8)'; // purple-500
+  }
+
+  // Lock acquire - Red (matches legend)
+  if (lowerKind.includes('acquire') || (lowerKind.includes('lock') && !lowerKind.includes('unlock') && !lowerKind.includes('release'))) {
     return 'rgba(239, 68, 68, 0.8)'; // red-500
   }
+
+  // Lock release - Pink (matches legend)
   if (lowerKind.includes('release') || lowerKind.includes('unlock')) {
-    return 'rgba(239, 68, 68, 0.6)'; // red-500
+    return 'rgba(236, 72, 153, 0.8)'; // pink-500
   }
 
-  // State operations - Muted gray
-  if (lowerKind.includes('state')) {
-    return 'rgba(107, 114, 128, 0.6)'; // gray-500
+  // State operations - Gray for StateChange events
+  if (lowerKind.includes('statechange')) {
+    return 'rgba(107, 114, 128, 0.7)'; // gray-500
   }
 
-  // Network/HTTP operations - Muted gray
+  // HTTP operations - Gray
   if (lowerKind.includes('http') || lowerKind.includes('request') || lowerKind.includes('response')) {
-    return 'rgba(107, 114, 128, 0.6)'; // gray-500
+    return 'rgba(107, 114, 128, 0.7)'; // gray-500
   }
 
-  // Database operations - Muted gray
+  // Function calls - Gray
+  if (lowerKind.includes('function')) {
+    return 'rgba(107, 114, 128, 0.7)'; // gray-500
+  }
+
+  // Database operations - Gray
   if (lowerKind.includes('database') || lowerKind.includes('query') || lowerKind.includes('db')) {
-    return 'rgba(107, 114, 128, 0.6)'; // gray-500
+    return 'rgba(107, 114, 128, 0.7)'; // gray-500
   }
 
-  // Default - Gray
-  return 'rgba(107, 114, 128, 0.5)'; // gray-500
+  // Default - Gray (matches "Other Events" in legend)
+  return 'rgba(107, 114, 128, 0.7)'; // gray-500
 }

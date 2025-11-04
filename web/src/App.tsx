@@ -23,6 +23,7 @@ import { ServiceOverview } from './components/features/services/ServiceOverview'
 import { ServiceDependencies } from './components/features/services/ServiceDependencies';
 import { ServiceTraces } from './components/features/services/ServiceTraces';
 import { ServiceDependencyGraph } from './components/features/services/ServiceDependencyGraph';
+import { ServicePerformance } from './components/features/services/ServicePerformance';
 import { SystemPerformance } from './components/features/system/SystemPerformance';
 import { SystemHealth } from './components/features/system/SystemHealth';
 import { GlobalRaces } from './components/features/system/GlobalRaces';
@@ -792,9 +793,9 @@ export default function App() {
                     </TabsContent>
                     <TabsContent value="performance" className="h-full m-0 p-0">
                       <div className="h-[calc(100dvh-5.5rem)] overflow-y-auto p-6">
-                        <div className="text-muted-foreground text-center py-12">
-                          Service-level performance metrics coming soon
-                        </div>
+                        {selectedServiceName && (
+                          <ServicePerformance serviceName={selectedServiceName} />
+                        )}
                       </div>
                     </TabsContent>
                   </div>

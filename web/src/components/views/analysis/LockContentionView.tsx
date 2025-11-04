@@ -5,6 +5,7 @@ import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Lock, AlertTriangle, CheckCircle, Users, TrendingUp } from 'lucide-react';
+import { ServiceBadge } from '@/components/features/services/ServiceBadge';
 
 interface LockContentionViewProps {
   events: Event[];
@@ -396,11 +397,19 @@ export function LockContentionView({ events, selectedEventId, onEventSelect }: L
                     const threadHolds = selectedHolds.filter(h => h.thread_id === thread);
                     const threadContentions = selectedContentions.filter(c => c.blocked_thread === thread);
 
+                    // Get service name from the first lock event for this thread
+                    const threadLockEvent = lockEvents.find(e => e.thread_id === thread);
+                    const serviceName = threadLockEvent?.service_name || 'unknown';
+
                     return (
                       <div key={thread} className="space-y-1">
                         <div className="flex items-center gap-2">
                           <Users className="h-3 w-3 text-muted-foreground" />
                           <span className="text-xs font-mono text-muted-foreground">{thread}</span>
+                          <ServiceBadge
+                            serviceName={serviceName}
+                            tags={threadLockEvent?.event?.metadata?.tags}
+                          />
                           <Badge variant="outline" className="text-[10px]">
                             {threadHolds.length} holds
                           </Badge>
@@ -488,35 +497,51 @@ export function LockContentionView({ events, selectedEventId, onEventSelect }: L
               </CardHeader>
               <CardContent>
                 <div className="space-y-2">
-                  {selectedContentions.map((contention, idx) => (
-                    <button
-                      key={idx}
-                      onClick={() => onEventSelect(contention.blocked_event.id)}
-                      className={cn(
-                        "w-full text-left p-3 rounded-md border transition-all hover:bg-accent/50",
-                        contention.blocked_event.id === selectedEventId
-                          ? "border-primary bg-primary/5"
-                          : "border-border"
-                      )}
-                    >
-                      <div className="flex items-start justify-between gap-2">
-                        <div className="flex-1 space-y-1">
-                          <div className="flex items-center gap-2">
-                            <AlertTriangle className="h-3 w-3 text-orange-500" />
-                            <span className="text-xs font-medium">
-                              Thread <code className="font-mono text-cyan-400">{contention.blocked_thread}</code> blocked
-                            </span>
+                  {selectedContentions.map((contention, idx) => {
+                    // Get service names for blocked and blocking threads
+                    const blockedThreadEvent = lockEvents.find(e => e.thread_id === contention.blocked_thread);
+                    const blockingThreadEvent = lockEvents.find(e => e.thread_id === contention.blocking_thread);
+                    const blockedService = blockedThreadEvent?.service_name || 'unknown';
+                    const blockingService = blockingThreadEvent?.service_name || 'unknown';
+
+                    return (
+                      <button
+                        key={idx}
+                        onClick={() => onEventSelect(contention.blocked_event.id)}
+                        className={cn(
+                          "w-full text-left p-3 rounded-md border transition-all hover:bg-accent/50",
+                          contention.blocked_event.id === selectedEventId
+                            ? "border-primary bg-primary/5"
+                            : "border-border"
+                        )}
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="flex-1 space-y-1">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <AlertTriangle className="h-3 w-3 text-orange-500" />
+                              <span className="text-xs font-medium">
+                                Thread <code className="font-mono text-cyan-400">{contention.blocked_thread}</code> blocked
+                              </span>
+                              <ServiceBadge
+                                serviceName={blockedService}
+                                tags={blockedThreadEvent?.event?.metadata?.tags}
+                              />
+                            </div>
+                            <div className="text-xs text-muted-foreground pl-5 flex items-center gap-2 flex-wrap">
+                              <span>Waiting for thread <code className="font-mono">{contention.blocking_thread}</code> to release lock</span>
+                              <ServiceBadge
+                                serviceName={blockingService}
+                                tags={blockingThreadEvent?.event?.metadata?.tags}
+                              />
+                            </div>
                           </div>
-                          <div className="text-xs text-muted-foreground pl-5">
-                            Waiting for thread <code className="font-mono">{contention.blocking_thread}</code> to release lock
+                          <div className="text-xs font-mono text-orange-500 font-semibold">
+                            {formatDuration(contention.wait_duration)}
                           </div>
                         </div>
-                        <div className="text-xs font-mono text-orange-500 font-semibold">
-                          {formatDuration(contention.wait_duration)}
-                        </div>
-                      </div>
-                    </button>
-                  ))}
+                      </button>
+                    );
+                  })}
                 </div>
               </CardContent>
             </Card>
